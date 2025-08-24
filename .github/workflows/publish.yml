@@ -144,9 +144,9 @@ ${upgradeCmd}
 ---
 🤖 *此訊息由 GitHub Actions 自動生成*`;
 
-          github.rest.repos.createReleaseComment({
+          github.rest.issues.createComment({
             owner: context.repo.owner,
             repo: context.repo.repo,
-            release_id: context.payload.release.id,
+            issue_number: context.payload.release.discussion_number,
             body: body
           });
