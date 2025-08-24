@@ -5,11 +5,12 @@ from .connection import create_redshift_config
 from .redshift_tools import RedshiftTools
 
 # 設定基礎日誌
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
+
 logger = logging.getLogger(__name__)
 
 def main():
     """主程式進入點，負責解析命令列參數並啟動伺服器。"""
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(name)s - %(message)s')
     parser = argparse.ArgumentParser(description="Redshift MCP Server")
     parser.add_argument("--host", required=True, help="Redshift 主機位址")
     parser.add_argument("--port", type=int, default=5439, help="Redshift 連接埠")
