@@ -14,7 +14,7 @@
 ### 從 PyPI 安裝 (推薦)
 
 ```bash
-pip install my-redshift-mcp
+pip install redshift-comment-mcp
 ```
 
 ### 本地開發安裝
@@ -32,7 +32,7 @@ pip install -e ".[dev]"
 ### 命令列執行
 
 ```bash
-my-redshift-mcp --host your-cluster.region.redshift.amazonaws.com \
+redshift-comment-mcp --host your-cluster.region.redshift.amazonaws.com \
                 --port 5439 \
                 --user your_username \
                 --password your_password \
@@ -45,7 +45,7 @@ my-redshift-mcp --host your-cluster.region.redshift.amazonaws.com \
 
 ```bash
 export REDSHIFT_PASSWORD=your_password
-my-redshift-mcp --host your-cluster.region.redshift.amazonaws.com \
+redshift-comment-mcp --host your-cluster.region.redshift.amazonaws.com \
                 --port 5439 \
                 --user your_username \
                 --dbname your_database
@@ -58,10 +58,10 @@ my-redshift-mcp --host your-cluster.region.redshift.amazonaws.com \
 ```json
 {
   "mcpServers": {
-    "my-redshift-mcp": {
+    "redshift-comment-mcp": {
       "command": "uvx",
       "args": [
-        "my-redshift-mcp@latest",
+        "redshift-comment-mcp@latest",
         "--host", "your-cluster.region.redshift.amazonaws.com",
         "--port", "5439",
         "--user", "your_username",
@@ -80,10 +80,10 @@ my-redshift-mcp --host your-cluster.region.redshift.amazonaws.com \
 ```json
 {
   "mcpServers": {
-    "my-redshift-mcp-local": {
+    "redshift-comment-mcp-local": {
       "command": "python",
       "args": [
-        "-m", "my_redshift_mcp.server",
+        "-m", "redshift_comment_mcp.server",
         "--host", "your-local-db-host",
         "--port", "5439",
         "--user", "your_username",

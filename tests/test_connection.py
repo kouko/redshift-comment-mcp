@@ -1,6 +1,6 @@
 import pytest
 from unittest.mock import patch, MagicMock
-from my_redshift_mcp.connection import RedshiftConnectionConfig, create_redshift_config
+from redshift_comment_mcp.connection import RedshiftConnectionConfig, create_redshift_config
 
 def test_redshift_connection_config_initialization():
     """
@@ -20,7 +20,7 @@ def test_redshift_connection_config_initialization():
     assert config.password == "test-password"
     assert config.dbname == "test-db"
 
-@patch('awswrangler.redshift.connect')
+@patch('redshift_connector.connect')
 def test_create_connection_success(mock_connect):
     """
     測試成功建立連線。
@@ -44,7 +44,6 @@ def test_create_connection_success(mock_connect):
     # 驗證
     assert connection == mock_connection
     mock_connect.assert_called_once_with(
-        cluster_identifier=None,
         host="test-host",
         port=5439,
         user="test-user",
@@ -52,7 +51,7 @@ def test_create_connection_success(mock_connect):
         database="test-db"
     )
 
-@patch('awswrangler.redshift.connect')
+@patch('redshift_connector.connect')
 def test_create_connection_failure(mock_connect):
     """
     測試連線建立失敗的情況。
@@ -73,7 +72,7 @@ def test_create_connection_failure(mock_connect):
     with pytest.raises(Exception, match="連線失敗"):
         config.create_connection()
 
-@patch('awswrangler.redshift.connect')
+@patch('redshift_connector.connect')
 def test_get_connection_context_manager(mock_connect):
     """
     測試連線的 context manager 功能。
@@ -98,7 +97,7 @@ def test_get_connection_context_manager(mock_connect):
     # 驗證連線被關閉
     mock_connection.close.assert_called_once()
 
-@patch('awswrangler.redshift.connect')
+@patch('redshift_connector.connect')
 def test_get_connection_context_manager_with_exception(mock_connect):
     """
     測試 context manager 在發生異常時也會正確關閉連線。
@@ -126,7 +125,7 @@ def test_get_connection_context_manager_with_exception(mock_connect):
     mock_connection.close.assert_called_once()
 
 @patch('awswrangler.redshift.read_sql_query')
-@patch('awswrangler.redshift.connect')
+@patch('redshift_connector.connect')
 def test_create_redshift_config_with_validation(mock_connect, mock_read_sql):
     """
     測試 create_redshift_config 函數的連線驗證功能。
@@ -155,7 +154,7 @@ def test_create_redshift_config_with_validation(mock_connect, mock_read_sql):
     mock_read_sql.assert_called_once()
     mock_connection.close.assert_called()
 
-@patch('awswrangler.redshift.connect')
+@patch('redshift_connector.connect')
 def test_create_redshift_config_validation_failure(mock_connect):
     """
     測試 create_redshift_config 函數在連線驗證失敗時的行為。

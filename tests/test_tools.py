@@ -1,8 +1,8 @@
 import pytest
 from unittest.mock import MagicMock, patch, Mock
 from contextlib import contextmanager
-from my_redshift_mcp.redshift_tools import RedshiftTools
-from my_redshift_mcp.connection import RedshiftConnectionConfig
+from redshift_comment_mcp.redshift_tools import RedshiftTools
+from redshift_comment_mcp.connection import RedshiftConnectionConfig
 
 @pytest.fixture
 def mock_config():

@@ -1,8 +1,0 @@
-awswrangler[redshift]
-redshift-connector
-pandas
-fastmcp
-
-[dev]
-pytest
-pytest-mock

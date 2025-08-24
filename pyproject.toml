@@ -3,7 +3,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "my-redshift-mcp"
+name = "redshift-comment-mcp"
 version = "0.1.0"
 authors = [
   { name="Your Name", email="you@example.com" },
@@ -30,9 +30,9 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/your-username/my_redshift_mcp_server"
-"Bug Tracker" = "https://github.com/your-username/my_redshift_mcp_server/issues"
+"Homepage" = "https://github.com/your-username/redshift_comment_mcp_server"
+"Bug Tracker" = "https://github.com/your-username/redshift_comment_mcp_server/issues"
 
 # 這是讓 `uvx` 能夠執行的關鍵
 [project.scripts]
-my-redshift-mcp = "my_redshift_mcp.server:main"
+redshift-comment-mcp = "redshift_comment_mcp.server:main"

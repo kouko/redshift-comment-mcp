@@ -64,14 +64,14 @@ MCP 是一種標準化的溝通協定，其核心目的是讓大型語言模型 
 為了支援打包與發佈，我們採用標準的 Python 套件結構，並新增 `pyproject.toml` 檔案來管理專案設定。
 
 ```
-my_redshift_mcp_server/
+redshift_comment_mcp_server/
 ├── README.md               # 專案說明、安裝與啟動指南
 ├── pyproject.toml          # 專案打包與依賴設定檔
 ├── tests/                  # 測試程式碼目錄
 │   ├── __init__.py
 │   └── test_tools.py
 └── src/
-    └── my_redshift_mcp/    # Python 套件的根目錄
+    └── redshift_comment_mcp/    # Python 套件的根目錄
         ├── __init__.py
         ├── connection.py
         ├── redshift_tools.py
@@ -92,7 +92,7 @@ my_redshift_mcp_server/
         
 *   **預期輸入**：此檔案由 Python 的建置工具（如 `pip`, `build`）讀取，不接收執行時期的輸入。
     
-*   **預期輸出**：它指導建置工具生成可發佈的套件（`.whl`, `.tar.gz`），並讓 `uvx` 等執行器知道當套件被呼叫時，應該執行 `my_redshift_mcp.server` 模組中的 `main` 函式。
+*   **預期輸出**：它指導建置工具生成可發佈的套件（`.whl`, `.tar.gz`），並讓 `uvx` 等執行器知道當套件被呼叫時，應該執行 `redshift_comment_mcp.server` 模組中的 `main` 函式。
     
 
 ```
@@ -101,7 +101,7 @@ requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "my-redshift-mcp"
+name = "redshift-comment-mcp"
 version = "0.1.0"
 authors = [
   { name="Your Name", email="you@example.com" },
@@ -127,15 +127,15 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/your-username/my_redshift_mcp_server"
-"Bug Tracker" = "https://github.com/your-username/my_redshift_mcp_server/issues"
+"Homepage" = "https://github.com/your-username/redshift_comment_mcp_server"
+"Bug Tracker" = "https://github.com/your-username/redshift_comment_mcp_server/issues"
 
 # 這是讓 `uvx` 能夠執行的關鍵
 [project.scripts]
-my-redshift-mcp = "my_redshift_mcp.server:main"
+redshift-comment-mcp = "redshift_comment_mcp.server:main"
 ```
 
-#### `src/my_redshift_mcp/connection.py`
+#### `src/redshift_comment_mcp/connection.py`
 
 *   **實作內容**：此模組專門負責管理 Redshift 資料庫連線配置。它定義了 `RedshiftConnectionConfig` 類別來封裝連線參數，並提供 context manager 來自動管理連線的建立與清理。
     
@@ -234,7 +234,7 @@ def create_redshift_config(host: str, port: int, user: str, password: str, dbnam
     return config
 ```
 
-#### `src/my_redshift_mcp/redshift_tools.py`
+#### `src/redshift_comment_mcp/redshift_tools.py`
 
 *   **實作內容**：此模組是 MCP 服務的核心商業邏輯。它定義了一個 `RedshiftTools` 類別，其中包含了所有提供給 LLM 使用的工具函式（`list_schemas`, `execute_sql` 等）。每個工具在執行時都會使用 `with self.config.get_connection() as conn:` 模式來確保連線的自動管理。
     
@@ -391,7 +391,7 @@ class RedshiftTools:
         return self.mcp
 ```
 
-#### `src/my_redshift_mcp/server.py`
+#### `src/redshift_comment_mcp/server.py`
 
 *   **實作內容**：此模組是整個 MCP 服務的**啟動進入點**。它使用 Python 內建的 `argparse` 函式庫來解析來自命令列的連線參數，並支援從環境變數讀取密碼。接著，它呼叫 `connection` 模組來建立連線配置並進行連線驗證，然後將連線配置傳遞給 `redshift_tools` 模組來實例化工具提供者。最後，它啟動 FastMCP 伺服器並處理優雅關閉。
     
@@ -497,17 +497,17 @@ if __name__ == "__main__":
 ```
 {
   "mcpServers": {
-    "my-redshift-mcp-local": {
+    "redshift-comment-mcp-local": {
       "command": "python",
       "args": [
-        "-m", "my_redshift_mcp.server",
+        "-m", "redshift_comment_mcp.server",
         "--host", "your-local-db-host",
         "--port", "5439",
         "--user", "your_db_user",
         "--password", "YourSecretPassword123",
         "--dbname", "dev"
       ],
-      "cwd": "/path/to/your/my_redshift_mcp_server"
+      "cwd": "/path/to/your/redshift_comment_mcp_server"
     }
   }
 }
@@ -517,9 +517,9 @@ if __name__ == "__main__":
 
 *   `"command": "python"`: 直接使用您系統中的 `python` 指令。請確保執行 Client 的環境能找到這個指令。
     
-*   `"args": ["-m", "my_redshift_mcp.server", ...]` : 使用 `-m` 旗標來執行 `my_redshift_mcp.server` 模組，這是 Python 建議的執行套件內模組的方式。後面跟著所有連線參數。
+*   `"args": ["-m", "redshift_comment_mcp.server", ...]` : 使用 `-m` 旗標來執行 `redshift_comment_mcp.server` 模組，這是 Python 建議的執行套件內模組的方式。後面跟著所有連線參數。
     
-*   `"cwd": "/path/to/your/my_redshift_mcp_server"`: **(關鍵)** `cwd` (Current Working Directory) 參數告訴 MCP Client 在哪個目錄下執行指令。您必須將此路徑修改為您專案在電腦上的**絕對路徑**。
+*   `"cwd": "/path/to/your/redshift_comment_mcp_server"`: **(關鍵)** `cwd` (Current Working Directory) 參數告訴 MCP Client 在哪個目錄下執行指令。您必須將此路徑修改為您專案在電腦上的**絕對路徑**。
     
 
 ## 5\. 部署至 PyPI 以實現「零設定」存取
@@ -533,10 +533,10 @@ if __name__ == "__main__":
 ```
 {
   "mcpServers": {
-    "my-redshift-mcp": {
+    "redshift-comment-mcp": {
       "command": "uvx",
       "args": [
-        "my-redshift-mcp@latest",
+        "redshift-comment-mcp@latest",
         "--host", "your-cluster.region.redshift.amazonaws.com",
         "--port", "5439",
         "--user", "your_db_user",
@@ -606,8 +606,8 @@ if __name__ == "__main__":
 import pytest
 from unittest.mock import MagicMock, patch, Mock
 from contextlib import contextmanager
-from my_redshift_mcp.redshift_tools import RedshiftTools
-from my_redshift_mcp.connection import RedshiftConnectionConfig
+from redshift_comment_mcp.redshift_tools import RedshiftTools
+from redshift_comment_mcp.connection import RedshiftConnectionConfig
 
 @pytest.fixture
 def mock_config():
