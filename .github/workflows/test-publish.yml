@@ -114,21 +114,21 @@ jobs:
     - name: Create Test Report
       if: always()
       run: |
-        echo "## 📊 TestPyPI 發布報告" >> $GITHUB_STEP_SUMMARY
+        echo "## 📊 TestPyPI Publish Report" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "- **套件名稱**: redshift-comment-mcp" >> $GITHUB_STEP_SUMMARY
-        echo "- **版本**: ${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Package Name**: redshift-comment-mcp" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version**: ${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo "- **TestPyPI URL**: https://test.pypi.org/project/redshift-comment-mcp/${{ steps.get_version.outputs.version }}/" >> $GITHUB_STEP_SUMMARY
-        echo "- **狀態**: ${{ job.status == 'success' && '✅ 成功' || '❌ 失敗' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📥 測試安裝指令" >> $GITHUB_STEP_SUMMARY
+        echo "### 📥 Test Installation Command" >> $GITHUB_STEP_SUMMARY
         echo '```bash' >> $GITHUB_STEP_SUMMARY
         echo "pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ redshift-comment-mcp==${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### ⚠️ 注意事項" >> $GITHUB_STEP_SUMMARY
-        echo "- 測試成功後，請將 Pre-release 轉為正式 Release 以觸發 PyPI 發布" >> $GITHUB_STEP_SUMMARY
-        echo "- TestPyPI 上的套件僅供測試，請使用正式 PyPI 進行生產環境安裝" >> $GITHUB_STEP_SUMMARY
+        echo "### ⚠️ Notes" >> $GITHUB_STEP_SUMMARY
+        echo "- After successful testing, please convert the Pre-release to a formal Release to trigger PyPI publishing." >> $GITHUB_STEP_SUMMARY
+        echo "- Packages on TestPyPI are for testing only. Please use the official PyPI for production installations." >> $GITHUB_STEP_SUMMARY
     
     - name: Add comment to release
       if: github.event_name == 'release' && success()
