@@ -1,0 +1,6 @@
+/.claude
+/.pytest_cache
+/README.md
+/pyproject.toml
+/src
+/tests
