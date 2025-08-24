@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "redshift-comment-mcp"
 dynamic = ["version"]
 authors = [
-  { name="Your Name", email="you@example.com" },
+  { name="kouko", email="kouko@users.noreply.github.com" },
 ]
 description = "A Model-Context Protocol server for Amazon Redshift."
 readme = "README.md"
