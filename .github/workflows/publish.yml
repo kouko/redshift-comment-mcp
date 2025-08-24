@@ -76,9 +76,11 @@ jobs:
         sleep 30
         
         # 檢查套件是否存在於 PyPI
-        for i in {1..5}; do
+        for i in {1..5};
+        do
           echo "⏳ Attempt $i/5: Checking PyPI availability..."
-          if curl -f -s "https://pypi.org/pypi/$PACKAGE_NAME/$VERSION/json" > /dev/null; then
+          if curl -f -s "https://pypi.org/pypi/$PACKAGE_NAME/$VERSION/json" > /dev/null;
+          then
             echo "✅ Package $PACKAGE_NAME version $VERSION is available on PyPI!"
             echo "🔗 PyPI URL: https://pypi.org/project/$PACKAGE_NAME/$VERSION/"
             break
@@ -87,7 +89,8 @@ jobs:
             sleep 30
           fi
           
-          if [ $i -eq 5 ]; then
+          if [ $i -eq 5 ];
+          then
             echo "❌ Package not found on PyPI after 5 attempts"
             exit 1
           fi
@@ -111,7 +114,7 @@ jobs:
         echo "### 🔄 Upgrade Command" >> $GITHUB_STEP_SUMMARY
         echo '```bash' >> $GITHUB_STEP_SUMMARY
         echo "pip install --upgrade redshift-comment-mcp" >> $GITHUB_STEP_SUMMARY
-        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo '```'
 
     - name: Add comment to release
       if: github.event_name == 'release' && success()
@@ -123,30 +126,29 @@ jobs:
           const installCmd = `pip install redshift-comment-mcp==${version}`;
           const upgradeCmd = `pip install --upgrade redshift-comment-mcp`;
           
-          const body = `## 🚀 PyPI 發布成功！
+          const body = '## 🚀 PyPI 發布成功！\n\n' +
+            '**版本**: ' + version + '\n' +
+            '**PyPI 頁面**: ' + pypiUrl + '\n\n' +
+            '### 📥 安裝指令\n' +
+            '```bash\n' +
+            installCmd + '\n' +
+            '```\n\n' +
+            '### 🔄 升級指令\n' +
+            '```bash\n' +
+            upgradeCmd + '\n' +
+            '```\n\n' +
+            '### 📚 使用指南\n' +
+            '查看 [README.md](https://github.com/' + context.repo.owner + '/' + context.repo.repo + '#readme) 了解詳細的使用方式。\n\n' +
+            '---\n' +
+            '🤖 *此訊息由 GitHub Actions 自動生成*';
 
-**版本**: ${version}
-**PyPI 頁面**: ${pypiUrl}
-
-### 📥 安裝指令
-\`\`\`bash
-${installCmd}
-\`\`\`
-
-### 🔄 升級指令
-\`\`\`bash
-${upgradeCmd}
-\`\`\`
-
-### 📚 使用指南
-查看 [README.md](https://github.com/${context.repo.owner}/${context.repo.repo}#readme) 了解詳細的使用方式。
-
----
-🤖 *此訊息由 GitHub Actions 自動生成*`;
-
-          github.rest.issues.createComment({
-            owner: context.repo.owner,
-            repo: context.repo.repo,
-            issue_number: context.payload.release.discussion_number,
-            body: body
-          });
+          if (context.payload.release.discussion) {
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.release.discussion.number,
+              body: body
+            });
+          } else {
+            console.log("No associated discussion found for this release. Skipping comment.");
+          }
