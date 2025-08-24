@@ -20,7 +20,7 @@ pip install redshift-comment-mcp
 ### 本地開發安裝
 
 ```bash
-git clone <repository-url>
+git clone https://github.com/kouko/redshift-comment-mcp.git
 cd redshift-comment-mcp
 pip install -e ".[dev]"
 ```
@@ -126,6 +126,16 @@ python -m build
 
 ### 發佈到 PyPI
 
+#### 自動化發佈（推薦）
+本專案使用 GitHub Actions 自動化發佈流程：
+
+1. 更新 `pyproject.toml` 中的版本號
+2. 建立 GitHub Release
+3. GitHub Actions 自動執行測試、建置並發佈到 PyPI
+
+詳細設定請參考 [.github/DEPLOYMENT.md](.github/DEPLOYMENT.md)
+
+#### 手動發佈
 ```bash
 python -m twine upload dist/*
 ```

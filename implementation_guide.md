@@ -64,7 +64,7 @@ MCP 是一種標準化的溝通協定，其核心目的是讓大型語言模型 
 為了支援打包與發佈，我們採用標準的 Python 套件結構，並新增 `pyproject.toml` 檔案來管理專案設定。
 
 ```
-redshift_comment_mcp_server/
+redshift-comment-mcp/
 ├── README.md               # 專案說明、安裝與啟動指南
 ├── pyproject.toml          # 專案打包與依賴設定檔
 ├── tests/                  # 測試程式碼目錄
@@ -127,8 +127,8 @@ dev = [
 ]
 
 [project.urls]
-"Homepage" = "https://github.com/your-username/redshift_comment_mcp_server"
-"Bug Tracker" = "https://github.com/your-username/redshift_comment_mcp_server/issues"
+"Homepage" = "https://github.com/kouko/redshift-comment-mcp"
+"Bug Tracker" = "https://github.com/kouko/redshift-comment-mcp/issues"
 
 # 這是讓 `uvx` 能夠執行的關鍵
 [project.scripts]
@@ -507,7 +507,7 @@ if __name__ == "__main__":
         "--password", "YourSecretPassword123",
         "--dbname", "dev"
       ],
-      "cwd": "/path/to/your/redshift_comment_mcp_server"
+      "cwd": "/path/to/your/redshift-comment-mcp"
     }
   }
 }
@@ -519,7 +519,7 @@ if __name__ == "__main__":
     
 *   `"args": ["-m", "redshift_comment_mcp.server", ...]` : 使用 `-m` 旗標來執行 `redshift_comment_mcp.server` 模組，這是 Python 建議的執行套件內模組的方式。後面跟著所有連線參數。
     
-*   `"cwd": "/path/to/your/redshift_comment_mcp_server"`: **(關鍵)** `cwd` (Current Working Directory) 參數告訴 MCP Client 在哪個目錄下執行指令。您必須將此路徑修改為您專案在電腦上的**絕對路徑**。
+*   `"cwd": "/path/to/your/redshift-comment-mcp"`: **(關鍵)** `cwd` (Current Working Directory) 參數告訴 MCP Client 在哪個目錄下執行指令。您必須將此路徑修改為您專案在電腦上的**絕對路徑**。
     
 
 ## 5\. 部署至 PyPI 以實現「零設定」存取

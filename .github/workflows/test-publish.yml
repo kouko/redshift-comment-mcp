@@ -1,0 +1,163 @@
+name: Test Publish to TestPyPI
+
+on:
+  release:
+    types: [prereleased]
+  workflow_dispatch:  # 允許手動觸發
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.10", "3.11", "3.12"]
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v4
+      with:
+        python-version: ${{ matrix.python-version }}
+    
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -e ".[dev]"
+    
+    - name: Run tests
+      run: |
+        pytest tests/ -v
+
+  test-publish:
+    needs: test
+    runs-on: ubuntu-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.10"
+    
+    - name: Install build tools
+      run: |
+        python -m pip install --upgrade pip
+        pip install build twine requests
+    
+    - name: Build package
+      run: python -m build
+    
+    - name: Get package version
+      id: get_version
+      run: |
+        pip install setuptools-scm
+        VERSION=$(python -c "from setuptools_scm import get_version; print(get_version())")
+        echo "version=$VERSION" >> $GITHUB_OUTPUT
+        echo "📋 Package version: $VERSION"
+    
+    - name: Publish to TestPyPI
+      env:
+        TWINE_USERNAME: __token__
+        TWINE_PASSWORD: ${{ secrets.TEST_PYPI_API_TOKEN }}
+      run: |
+        echo "📦 Publishing to TestPyPI..."
+        twine upload --repository testpypi dist/* --verbose
+        echo "✅ Published to TestPyPI successfully!"
+    
+    - name: Verify TestPyPI publication
+      run: |
+        echo "🔍 Verifying publication on TestPyPI..."
+        PACKAGE_NAME="redshift-comment-mcp"
+        VERSION="${{ steps.get_version.outputs.version }}"
+        
+        # 等待 TestPyPI 更新（通常需要幾分鐘）
+        sleep 30
+        
+        # 檢查套件是否存在於 TestPyPI
+        for i in {1..5}; do
+          echo "⏳ Attempt $i/5: Checking TestPyPI availability..."
+          if curl -f -s "https://test.pypi.org/pypi/$PACKAGE_NAME/$VERSION/json" > /dev/null; then
+            echo "✅ Package $PACKAGE_NAME version $VERSION is available on TestPyPI!"
+            echo "🔗 TestPyPI URL: https://test.pypi.org/project/$PACKAGE_NAME/$VERSION/"
+            break
+          else
+            echo "⏳ Not yet available, waiting 30 seconds..."
+            sleep 30
+          fi
+          
+          if [ $i -eq 5 ]; then
+            echo "❌ Package not found on TestPyPI after 5 attempts"
+            exit 1
+          fi
+        done
+    
+    - name: Test installation from TestPyPI
+      run: |
+        echo "🧪 Testing installation from TestPyPI..."
+        PACKAGE_NAME="redshift-comment-mcp"
+        VERSION="${{ steps.get_version.outputs.version }}"
+        
+        # 建立新的虛擬環境進行測試
+        python -m venv test_env
+        source test_env/bin/activate
+        
+        # 從 TestPyPI 安裝
+        pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ "$PACKAGE_NAME==$VERSION"
+        
+        # 測試命令是否可用
+        redshift-comment-mcp --help
+        
+        echo "✅ Installation test passed!"
+    
+    - name: Create Test Report
+      if: always()
+      run: |
+        echo "## 📊 TestPyPI 發布報告" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "- **套件名稱**: redshift-comment-mcp" >> $GITHUB_STEP_SUMMARY
+        echo "- **版本**: ${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **TestPyPI URL**: https://test.pypi.org/project/redshift-comment-mcp/${{ steps.get_version.outputs.version }}/" >> $GITHUB_STEP_SUMMARY
+        echo "- **狀態**: ${{ job.status == 'success' && '✅ 成功' || '❌ 失敗' }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📥 測試安裝指令" >> $GITHUB_STEP_SUMMARY
+        echo '```bash' >> $GITHUB_STEP_SUMMARY
+        echo "pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ redshift-comment-mcp==${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo '```' >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### ⚠️ 注意事項" >> $GITHUB_STEP_SUMMARY
+        echo "- 測試成功後，請將 Pre-release 轉為正式 Release 以觸發 PyPI 發布" >> $GITHUB_STEP_SUMMARY
+        echo "- TestPyPI 上的套件僅供測試，請使用正式 PyPI 進行生產環境安裝" >> $GITHUB_STEP_SUMMARY
+    
+    - name: Add comment to release
+      if: github.event_name == 'release' && success()
+      uses: actions/github-script@v6
+      with:
+        script: |
+          const version = '${{ steps.get_version.outputs.version }}';
+          const testPypiUrl = `https://test.pypi.org/project/redshift-comment-mcp/${version}/`;
+          const installCmd = `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ redshift-comment-mcp==${version}`;
+          
+          const body = `## 🎉 TestPyPI 發布成功！
+
+**版本**: ${version}
+**TestPyPI 頁面**: ${testPypiUrl}
+
+### 📥 測試安裝
+\`\`\`bash
+${installCmd}
+\`\`\`
+
+### 🔄 下一步
+如果測試無誤，請將此 Pre-release 轉為正式 Release 以觸發 PyPI 發布。
+
+---
+🤖 *此訊息由 GitHub Actions 自動生成*`;
+
+          github.rest.repos.createReleaseComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            release_id: context.payload.release.id,
+            body: body
+          });
