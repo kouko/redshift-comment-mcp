@@ -4,8 +4,6 @@ import logging
 from .connection import create_redshift_config
 from .redshift_tools import RedshiftTools
 
-# 設定基礎日誌
-
 logger = logging.getLogger(__name__)
 
 def main():
