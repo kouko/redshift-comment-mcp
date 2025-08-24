@@ -9,8 +9,8 @@ logger = logging.getLogger(__name__)
 # --- Redshift Tools Implementation ---
 class RedshiftTools:
     """
-    提供與 Redshift 資料庫互動的工具集，以支援引導式資料探索。
-    採用每次使用時建立/切斷連線的模式，確保最高穩健性。
+    Provides a set of tools for interacting with Redshift databases to support guided data exploration.
+    Uses a connect/disconnect pattern for each operation to ensure maximum robustness.
     """
     def __init__(self, connection_config: RedshiftConnectionConfig):
         self.config = connection_config
