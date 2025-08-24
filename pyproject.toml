@@ -1,0 +1,43 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools-scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "redshift-comment-mcp"
+dynamic = ["version"]
+authors = [
+  { name="kouko", email="kouko@users.noreply.github.com" },
+]
+description = "A Model-Context Protocol server for Amazon Redshift."
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "awswrangler[redshift]",
+    "redshift-connector",
+    "pandas",
+    "fastmcp",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-mock",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/kouko/redshift-comment-mcp"
+"Bug Tracker" = "https://github.com/kouko/redshift-comment-mcp/issues"
+
+# 這是讓 `uvx` 能夠執行的關鍵
+[project.scripts]
+redshift-comment-mcp = "redshift_comment_mcp.server:main"
+
+# setuptools-scm 自動版本管理
+[tool.setuptools_scm]
+write_to = "src/redshift_comment_mcp/_version.py"

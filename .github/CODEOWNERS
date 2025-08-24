@@ -1,0 +1,16 @@
+# 代碼擁有者設定
+# 確保重要檔案的變更需要特定人員的審查
+
+# 全域設定 - 所有檔案都需要 kouko 的審查
+* @kouko
+
+# GitHub Actions workflows - 需要額外謹慎
+.github/workflows/* @kouko
+
+# 專案核心配置檔案
+pyproject.toml @kouko
+LICENSE @kouko
+
+# 重要文檔
+README.md @kouko
+.github/DEPLOYMENT.md @kouko
