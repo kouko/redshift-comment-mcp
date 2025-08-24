@@ -76,9 +76,11 @@ jobs:
         sleep 30
         
         # 檢查套件是否存在於 TestPyPI
-        for i in {1..5}; do
+        for i in {1..5};
+        do
           echo "⏳ Attempt $i/5: Checking TestPyPI availability..."
-          if curl -f -s "https://test.pypi.org/pypi/$PACKAGE_NAME/$VERSION/json" > /dev/null; then
+          if curl -f -s "https://test.pypi.org/pypi/$PACKAGE_NAME/$VERSION/json" > /dev/null;
+          then
             echo "✅ Package $PACKAGE_NAME version $VERSION is available on TestPyPI!"
             echo "🔗 TestPyPI URL: https://test.pypi.org/project/$PACKAGE_NAME/$VERSION/"
             break
@@ -87,7 +89,8 @@ jobs:
             sleep 30
           fi
           
-          if [ $i -eq 5 ]; then
+          if [ $i -eq 5 ];
+          then
             echo "❌ Package not found on TestPyPI after 5 attempts"
             exit 1
           fi
@@ -139,21 +142,17 @@ jobs:
           const testPypiUrl = `https://test.pypi.org/project/redshift-comment-mcp/${version}/`;
           const installCmd = `pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ redshift-comment-mcp==${version}`;
           
-          const body = `## 🎉 TestPyPI 發布成功！
-
-**版本**: ${version}
-**TestPyPI 頁面**: ${testPypiUrl}
-
-### 📥 測試安裝
-\`\`\`bash
-${installCmd}
-\`\`\`
-
-### 🔄 下一步
-如果測試無誤，請將此 Pre-release 轉為正式 Release 以觸發 PyPI 發布。
-
----
-🤖 *此訊息由 GitHub Actions 自動生成*`;
+          const body = '## 🎉 TestPyPI 發布成功！\n\n' +
+            '**版本**: ' + version + '\n' +
+            '**TestPyPI 頁面**: ' + testPypiUrl + '\n\n' +
+            '### 📥 測試安裝\n' +
+            '```bash\n' +
+            installCmd + '\n' +
+            '```\n\n' +
+            '### 🔄 下一步\n' +
+            '如果測試無誤，請將此 Pre-release 轉為正式 Release 以觸發 PyPI 發布。\n\n' +
+            '---' +
+            '🤖 *此訊息由 GitHub Actions 自動生成*';
 
           if (context.payload.release.discussion) {
             await github.rest.issues.createComment({
