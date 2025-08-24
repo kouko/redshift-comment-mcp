@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "my-redshift-mcp"
+version = "0.1.0"
+authors = [
+  { name="Your Name", email="you@example.com" },
+]
+description = "A Model-Context Protocol server for Amazon Redshift."
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+]
+dependencies = [
+    "awswrangler[redshift]",
+    "redshift-connector",
+    "pandas",
+    "fastmcp",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-mock",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/your-username/my_redshift_mcp_server"
+"Bug Tracker" = "https://github.com/your-username/my_redshift_mcp_server/issues"
+
+# 這是讓 `uvx` 能夠執行的關鍵
+[project.scripts]
+my-redshift-mcp = "my_redshift_mcp.server:main"
