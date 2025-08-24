@@ -96,19 +96,19 @@ jobs:
     - name: Create Release Report
       if: always()
       run: |
-        echo "## 🎉 PyPI 正式發布報告" >> $GITHUB_STEP_SUMMARY
+        echo "## 🎉 PyPI Release Report" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "- **套件名稱**: redshift-comment-mcp" >> $GITHUB_STEP_SUMMARY
-        echo "- **版本**: ${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Package Name**: redshift-comment-mcp" >> $GITHUB_STEP_SUMMARY
+        echo "- **Version**: ${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo "- **PyPI URL**: https://pypi.org/project/redshift-comment-mcp/${{ steps.get_version.outputs.version }}/" >> $GITHUB_STEP_SUMMARY
-        echo "- **狀態**: ${{ job.status == 'success' && '✅ 成功' || '❌ 失敗' }}" >> $GITHUB_STEP_SUMMARY
+        echo "- **Status**: ${{ job.status == 'success' && '✅ Success' || '❌ Failed' }}" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 📥 安裝指令" >> $GITHUB_STEP_SUMMARY
+        echo "### 📥 Installation Command" >> $GITHUB_STEP_SUMMARY
         echo '```bash' >> $GITHUB_STEP_SUMMARY
         echo "pip install redshift-comment-mcp==${{ steps.get_version.outputs.version }}" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        echo "### 🔄 升級指令" >> $GITHUB_STEP_SUMMARY
+        echo "### 🔄 Upgrade Command" >> $GITHUB_STEP_SUMMARY
         echo '```bash' >> $GITHUB_STEP_SUMMARY
         echo "pip install --upgrade redshift-comment-mcp" >> $GITHUB_STEP_SUMMARY
         echo '```' >> $GITHUB_STEP_SUMMARY
