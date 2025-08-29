@@ -124,18 +124,11 @@ def test_get_connection_context_manager_with_exception(mock_connect):
     # 驗證連線仍然被關閉
     mock_connection.close.assert_called_once()
 
-@patch('awswrangler.redshift.read_sql_query')
 @patch('redshift_connector.connect')
-def test_create_redshift_config_with_validation(mock_connect, mock_read_sql):
+def test_create_redshift_config_without_validation(mock_connect):
     """
-    測試 create_redshift_config 函數的連線驗證功能。
+    測試 create_redshift_config 函數不會立即進行連線驗證。
     """
-    # 設定模擬
-    mock_connection = MagicMock()
-    mock_connect.return_value = mock_connection
-    mock_df = MagicMock()
-    mock_read_sql.return_value = mock_df
-    
     # 測試成功建立配置
     config = create_redshift_config(
         host="test-host",
@@ -144,30 +137,10 @@ def test_create_redshift_config_with_validation(mock_connect, mock_read_sql):
         password="test-password",
         dbname="test-db"
     )
-    
+
     # 驗證配置被正確建立
     assert isinstance(config, RedshiftConnectionConfig)
     assert config.host == "test-host"
-    
-    # 驗證連線測試被執行
-    mock_connect.assert_called()
-    mock_read_sql.assert_called_once()
-    mock_connection.close.assert_called()
 
-@patch('redshift_connector.connect')
-def test_create_redshift_config_validation_failure(mock_connect):
-    """
-    測試 create_redshift_config 函數在連線驗證失敗時的行為。
-    """
-    # 設定模擬連線失敗
-    mock_connect.side_effect = Exception("連線驗證失敗")
-    
-    # 測試建立配置應該拋出異常
-    with pytest.raises(ValueError, match="無法建立 Redshift 連線"):
-        create_redshift_config(
-            host="invalid-host",
-            port=5439,
-            user="test-user",
-            password="test-password",
-            dbname="test-db"
-        )
+    # 驗證連線測試沒有被執行
+    mock_connect.assert_not_called()

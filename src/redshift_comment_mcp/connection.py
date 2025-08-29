@@ -64,18 +64,8 @@ def create_redshift_config(host: str, port: int, user: str, password: str, dbnam
     """
     logger.info(f"建立 Redshift 連線配置: {host}:{port}/{dbname}")
     
-    # 驗證連線配置
+    # 立即返回配置，延遲連線驗證
     config = RedshiftConnectionConfig(host, port, user, password, dbname)
-    
-    # 測試連線以確保配置正確
-    try:
-        with config.get_connection() as conn:
-            # 簡單測試查詢
-            test_query = "SELECT 1 AS test"
-            wr.redshift.read_sql_query(test_query, con=conn)
-            logger.info("Redshift 連線配置驗證成功")
-    except Exception as e:
-        logger.error(f"Redshift 連線配置驗證失敗: {e}", exc_info=True)
-        raise ValueError(f"無法建立 Redshift 連線，請檢查連線參數。錯誤: {e}")
+    logger.info("Redshift 連線配置已建立，連線將在首次使用工具時進行驗證。")
     
     return config
