@@ -51,7 +51,9 @@ redshift-comment-mcp --host your-cluster.region.redshift.amazonaws.com \
                 --dbname your_database
 ```
 
-### MCP Client 設定
+## MCP Client 設定
+
+### 方式一：使用 uvx（從 PyPI 安裝，推薦正式使用）
 
 在 MCP Client 的設定檔中加入以下設定：
 
@@ -73,28 +75,77 @@ redshift-comment-mcp --host your-cluster.region.redshift.amazonaws.com \
 }
 ```
 
-### 本地開發設定
+### 方式二：本地開發設定（推薦開發使用）
 
-對於本地開發，可以使用以下設定：
+對於本地開發，需要使用 **Python 的完整路徑**，否則 MCP Client 可能會找不到 Python 執行檔。
+
+#### 步驟 1：找到 Python 完整路徑
+
+```bash
+# 如果使用 conda 環境
+which python
+# 例如輸出：/Users/username/opt/miniconda3/envs/redshift-comment-mcp/bin/python
+
+# 如果使用 venv
+# 例如：/path/to/project/.venv/bin/python
+```
+
+#### 步驟 2：確認套件已用 editable 模式安裝
+
+```bash
+cd /path/to/redshift-comment-mcp
+pip install -e ".[dev]"
+```
+
+#### 步驟 3：設定 MCP Client
+
+在 `~/.claude.json`（Claude Code）或 `claude_desktop_config.json`（Claude Desktop）中加入：
 
 ```json
 {
   "mcpServers": {
-    "redshift-comment-mcp-local": {
-      "command": "python",
+    "redshift-local": {
+      "command": "/Users/username/opt/miniconda3/envs/redshift-comment-mcp/bin/python",
       "args": [
         "-m", "redshift_comment_mcp.server",
-        "--host", "your-local-db-host",
+        "--host", "your-cluster.region.redshift.amazonaws.com",
         "--port", "5439",
         "--user", "your_username",
         "--password", "your_password",
-        "--dbname", "dev"
-      ],
-      "cwd": "/path/to/your/project"
+        "--dbname", "your_database"
+      ]
     }
   }
 }
 ```
+
+> ⚠️ **重要**：`command` 必須使用 Python 的**完整絕對路徑**（如 `/Users/username/opt/miniconda3/envs/xxx/bin/python`），不能只寫 `python`，否則會出現 `executable file not found in $PATH` 錯誤。
+
+#### 使用環境變數隱藏密碼（可選）
+
+```json
+{
+  "mcpServers": {
+    "redshift-local": {
+      "command": "/Users/username/opt/miniconda3/envs/redshift-comment-mcp/bin/python",
+      "args": [
+        "-m", "redshift_comment_mcp.server",
+        "--host", "your-cluster.region.redshift.amazonaws.com",
+        "--port", "5439",
+        "--user", "your_username",
+        "--dbname", "your_database"
+      ],
+      "env": {
+        "REDSHIFT_PASSWORD": "your_password"
+      }
+    }
+  }
+}
+```
+
+### 更新原始碼後
+
+如果套件是用 editable 模式安裝（`pip install -e .`），更新原始碼後**不需要重新安裝**，只需要**重啟 MCP Server**（重啟 Claude Code / Claude Desktop）即可載入最新程式碼。
 
 ## 可用工具
 
