@@ -6,6 +6,9 @@ __pycache__/
 # C extensions
 *.so
 
+# setuptools-scm generated version file
+_version.py
+
 # Distribution / packaging
 .Python
 build/

@@ -1,4 +1,5 @@
 import logging
+import re
 import awswrangler as wr
 from fastmcp import FastMCP
 from typing import List, Dict
@@ -117,7 +118,8 @@ class RedshiftTools:
             # 檢查危險的 SQL 關鍵字
             dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE']
             for keyword in dangerous_keywords:
-                if keyword in sql_upper:
+                # 使用 Regex 檢查是否為獨立單字，避免誤殺像 "last_update" 這樣的欄位名稱
+                if re.search(r'\b' + keyword + r'\b', sql_upper):
                     raise ValueError(f"不允許使用 {keyword} 語句。")
             
             try:
