@@ -206,7 +206,7 @@ class TestListToolsExecution:
 
     @patch('awswrangler.redshift.read_sql_query')
     def test_list_schemas_execution(self, mock_read_sql, mock_config):
-        """測試 list_schemas 工具執行"""
+        """測試 list_schemas 工具執行（不含註解）"""
         config, mock_conn = mock_config
 
         # 模擬回傳資料
@@ -221,15 +221,66 @@ class TestListToolsExecution:
                 list_schemas = tool.fn
                 break
 
-        result = list_schemas()
+        result = list_schemas(include_comments=False)
 
         assert result["total_count"] == 3
         assert result["schemas"] == ['public', 'sales', 'analytics']
         assert "warning" in result
 
     @patch('awswrangler.redshift.read_sql_query')
+    def test_list_schemas_with_include_comments(self, mock_read_sql, mock_config):
+        """測試 list_schemas 工具啟用 include_comments"""
+        config, mock_conn = mock_config
+
+        # 模擬回傳資料（包含註解）
+        mock_df = pd.DataFrame({
+            'schema_name': ['public', 'sales'],
+            'schema_comment': ['Default schema', 'Sales data schema']
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        list_schemas = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'list_schemas':
+                list_schemas = tool.fn
+                break
+
+        result = list_schemas(include_comments=True)
+
+        assert result["total_count"] == 2
+        # 使用 include_comments=True 時，回傳格式為 [{"name": "...", "comment": "..."}, ...]
+        assert len(result["schemas"]) == 2
+        assert result["schemas"][0] == {"name": "public", "comment": "Default schema"}
+        assert result["schemas"][1] == {"name": "sales", "comment": "Sales data schema"}
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_list_schemas_with_include_comments_no_comment(self, mock_read_sql, mock_config):
+        """測試 list_schemas 工具啟用 include_comments 但 schema 無註解"""
+        config, mock_conn = mock_config
+
+        # 模擬回傳資料（無註解）
+        mock_df = pd.DataFrame({
+            'schema_name': ['public'],
+            'schema_comment': [None]
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        list_schemas = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'list_schemas':
+                list_schemas = tool.fn
+                break
+
+        result = list_schemas(include_comments=True)
+
+        assert result["total_count"] == 1
+        assert result["schemas"][0] == {"name": "public", "comment": "(No comment available)"}
+
+    @patch('awswrangler.redshift.read_sql_query')
     def test_list_tables_execution(self, mock_read_sql, mock_config):
-        """測試 list_tables 工具執行"""
+        """測試 list_tables 工具執行（不含註解）"""
         config, mock_conn = mock_config
 
         # 模擬 schema comment 查詢和 tables 查詢
@@ -247,7 +298,7 @@ class TestListToolsExecution:
                 list_tables = tool.fn
                 break
 
-        result = list_tables(schema_name='sales')
+        result = list_tables(schema_name='sales', include_comments=False)
 
         assert result["schema_name"] == 'sales'
         assert result["schema_comment"] == 'Sales data schema'
@@ -255,8 +306,61 @@ class TestListToolsExecution:
         assert len(result["tables"]) == 2
 
     @patch('awswrangler.redshift.read_sql_query')
+    def test_list_tables_with_include_comments(self, mock_read_sql, mock_config):
+        """測試 list_tables 工具啟用 include_comments"""
+        config, mock_conn = mock_config
+
+        # 模擬 schema comment 查詢和 tables 查詢（包含 table 註解）
+        schema_df = pd.DataFrame({'schema_comment': ['Sales data schema']})
+        tables_df = pd.DataFrame({
+            'table_name': ['orders', 'customers'],
+            'table_type': ['BASE TABLE', 'BASE TABLE'],
+            'table_comment': ['Order records', 'Customer master data']
+        })
+        mock_read_sql.side_effect = [schema_df, tables_df]
+
+        tools = RedshiftTools(config)
+        list_tables = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'list_tables':
+                list_tables = tool.fn
+                break
+
+        result = list_tables(schema_name='sales', include_comments=True)
+
+        assert result["schema_name"] == 'sales'
+        assert result["total_count"] == 2
+        # 使用 include_comments=True 時，回傳格式包含 comment 欄位
+        assert result["tables"][0] == {"name": "orders", "type": "BASE TABLE", "comment": "Order records"}
+        assert result["tables"][1] == {"name": "customers", "type": "BASE TABLE", "comment": "Customer master data"}
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_list_tables_with_include_comments_no_comment(self, mock_read_sql, mock_config):
+        """測試 list_tables 工具啟用 include_comments 但 table 無註解"""
+        config, mock_conn = mock_config
+
+        schema_df = pd.DataFrame({'schema_comment': ['Sales data schema']})
+        tables_df = pd.DataFrame({
+            'table_name': ['orders'],
+            'table_type': ['BASE TABLE'],
+            'table_comment': [None]
+        })
+        mock_read_sql.side_effect = [schema_df, tables_df]
+
+        tools = RedshiftTools(config)
+        list_tables = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'list_tables':
+                list_tables = tool.fn
+                break
+
+        result = list_tables(schema_name='sales', include_comments=True)
+
+        assert result["tables"][0] == {"name": "orders", "type": "BASE TABLE", "comment": "(No comment available)"}
+
+    @patch('awswrangler.redshift.read_sql_query')
     def test_list_columns_execution(self, mock_read_sql, mock_config):
-        """測試 list_columns 工具執行"""
+        """測試 list_columns 工具執行（不含註解）"""
         config, mock_conn = mock_config
 
         # 模擬 table comment 查詢和 columns 查詢
@@ -275,12 +379,68 @@ class TestListToolsExecution:
                 list_columns = tool.fn
                 break
 
-        result = list_columns(schema_name='sales', table_name='orders')
+        result = list_columns(schema_name='sales', table_name='orders', include_comments=False)
 
         assert result["schema_name"] == 'sales'
         assert result["table_name"] == 'orders'
         assert result["table_comment"] == 'Order records'
         assert result["total_count"] == 3
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_list_columns_with_include_comments(self, mock_read_sql, mock_config):
+        """測試 list_columns 工具啟用 include_comments"""
+        config, mock_conn = mock_config
+
+        # 模擬 table comment 查詢和 columns 查詢（包含 column 註解）
+        table_df = pd.DataFrame({'table_comment': ['Order records']})
+        columns_df = pd.DataFrame({
+            'column_name': ['id', 'amount'],
+            'data_type': ['integer', 'numeric'],
+            'is_nullable': ['NO', 'YES'],
+            'column_comment': ['Primary key', 'Order total amount']
+        })
+        mock_read_sql.side_effect = [table_df, columns_df]
+
+        tools = RedshiftTools(config)
+        list_columns = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'list_columns':
+                list_columns = tool.fn
+                break
+
+        result = list_columns(schema_name='sales', table_name='orders', include_comments=True)
+
+        assert result["schema_name"] == 'sales'
+        assert result["table_name"] == 'orders'
+        assert result["total_count"] == 2
+        # 使用 include_comments=True 時，回傳格式包含 comment 欄位
+        assert result["columns"][0] == {"name": "id", "type": "integer", "nullable": "NO", "comment": "Primary key"}
+        assert result["columns"][1] == {"name": "amount", "type": "numeric", "nullable": "YES", "comment": "Order total amount"}
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_list_columns_with_include_comments_no_comment(self, mock_read_sql, mock_config):
+        """測試 list_columns 工具啟用 include_comments 但 column 無註解"""
+        config, mock_conn = mock_config
+
+        table_df = pd.DataFrame({'table_comment': ['Order records']})
+        columns_df = pd.DataFrame({
+            'column_name': ['id'],
+            'data_type': ['integer'],
+            'is_nullable': ['NO'],
+            'column_comment': [None]
+        })
+        mock_read_sql.side_effect = [table_df, columns_df]
+
+        tools = RedshiftTools(config)
+        list_columns = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'list_columns':
+                list_columns = tool.fn
+                break
+
+        result = list_columns(schema_name='sales', table_name='orders', include_comments=True)
+
+        assert result["columns"][0] == {"name": "id", "type": "integer", "nullable": "NO", "comment": "(No comment available)"}
 
 
 # ========== 搜尋工具測試 ==========
