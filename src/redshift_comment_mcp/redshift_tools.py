@@ -53,6 +53,19 @@ def paginate_results(items: list, limit: Optional[int], offset: int, default_max
     }
 
 
+def calculate_hit_count(name: str, comment: str, keywords: list) -> int:
+    """
+    計算關鍵字在 name 和 comment 中的命中次數。
+    每個關鍵字最多計為 1 次（不論出現幾次）。
+    """
+    hit_count = 0
+    search_text = f"{name.lower()} {comment.lower()}"
+    for kw in keywords:
+        if kw.lower() in search_text:
+            hit_count += 1
+    return hit_count
+
+
 # --- Redshift Tools Implementation ---
 class RedshiftTools:
     """
@@ -380,10 +393,19 @@ When generating SQL:
             with self.config.get_connection() as conn:
                 df = wr.redshift.read_sql_query(base_sql, con=conn, params=params)
                 records = df.to_dict(orient='records')
-                schemas = [{
-                    "name": r['schema_name'],
-                    "comment": r['schema_comment'] if r['schema_comment'] else "(No comment available)"
-                } for r in records]
+                schemas = []
+                for r in records:
+                    name = r['schema_name']
+                    comment = r['schema_comment'] if r['schema_comment'] else "(No comment available)"
+                    hit_count = calculate_hit_count(name, comment, keyword_list)
+                    schemas.append({
+                        "name": name,
+                        "comment": comment,
+                        "hit_count": hit_count
+                    })
+
+            # 依 hit_count DESC, name ASC 排序
+            schemas.sort(key=lambda x: (-x["hit_count"], x["name"]))
 
             # 分頁處理
             page = paginate_results(schemas, limit, offset, DEFAULT_MAX_ITEMS)
@@ -454,12 +476,21 @@ When generating SQL:
             with self.config.get_connection() as conn:
                 df = wr.redshift.read_sql_query(base_sql, con=conn, params=params)
                 records = df.to_dict(orient='records')
-                tables = [{
-                    "schema_name": r['schema_name'],
-                    "table_name": r['table_name'],
-                    "table_type": r['table_type'],
-                    "table_comment": r['table_comment'] if r['table_comment'] else "(No comment available)"
-                } for r in records]
+                tables = []
+                for r in records:
+                    name = r['table_name']
+                    comment = r['table_comment'] if r['table_comment'] else "(No comment available)"
+                    hit_count = calculate_hit_count(name, comment, keyword_list)
+                    tables.append({
+                        "schema_name": r['schema_name'],
+                        "table_name": name,
+                        "table_type": r['table_type'],
+                        "table_comment": comment,
+                        "hit_count": hit_count
+                    })
+
+            # 依 hit_count DESC, table_name ASC 排序
+            tables.sort(key=lambda x: (-x["hit_count"], x["table_name"]))
 
             # 分頁處理
             page = paginate_results(tables, limit, offset, DEFAULT_MAX_ITEMS)
@@ -531,12 +562,21 @@ When generating SQL:
             with self.config.get_connection() as conn:
                 df = wr.redshift.read_sql_query(base_sql, con=conn, params=params)
                 records = df.to_dict(orient='records')
-                columns = [{
-                    "column_name": r['column_name'],
-                    "data_type": r['data_type'],
-                    "is_nullable": r['is_nullable'],
-                    "column_comment": r['column_comment'] if r['column_comment'] else "(No comment available)"
-                } for r in records]
+                columns = []
+                for r in records:
+                    name = r['column_name']
+                    comment = r['column_comment'] if r['column_comment'] else "(No comment available)"
+                    hit_count = calculate_hit_count(name, comment, keyword_list)
+                    columns.append({
+                        "column_name": name,
+                        "data_type": r['data_type'],
+                        "is_nullable": r['is_nullable'],
+                        "column_comment": comment,
+                        "hit_count": hit_count
+                    })
+
+            # 依 hit_count DESC, column_name ASC 排序
+            columns.sort(key=lambda x: (-x["hit_count"], x["column_name"]))
 
             # 分頁處理
             page = paginate_results(columns, limit, offset, DEFAULT_MAX_ITEMS)

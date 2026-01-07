@@ -527,7 +527,10 @@ class TestSearchTools:
         assert result["keywords"] == ['sales', '銷售']
         assert result["total_count"] == 2
         assert len(result["schemas"]) == 2
-        assert result["schemas"][0] == {"name": "sales", "comment": "Sales data schema"}
+        # 第一個結果應有最高 hit_count（或相同 hit_count 時按名稱排序）
+        assert "hit_count" in result["schemas"][0]
+        assert result["schemas"][0]["name"] == "sales"
+        assert result["schemas"][0]["comment"] == "Sales data schema"
 
     def test_search_schemas_empty_keywords(self, mock_config):
         """測試 search_schemas 空關鍵字驗證"""
@@ -563,7 +566,94 @@ class TestSearchTools:
 
         result = search_schemas(keywords='public')
 
-        assert result["schemas"][0] == {"name": "public", "comment": "(No comment available)"}
+        assert result["schemas"][0]["name"] == "public"
+        assert result["schemas"][0]["comment"] == "(No comment available)"
+        assert "hit_count" in result["schemas"][0]
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_search_schemas_hit_count_sorting(self, mock_read_sql, mock_config):
+        """測試 search_schemas 結果依 hit_count 降序排列"""
+        config, mock_conn = mock_config
+
+        # 設定測試資料：sales_data 應該命中 2 個關鍵字，其他只命中 1 個
+        mock_df = pd.DataFrame({
+            'schema_name': ['analytics', 'sales_data', 'archive'],
+            'schema_comment': ['Analytics reports', 'Sales and data warehouse', 'Old data']
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        search_schemas = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'search_schemas':
+                search_schemas = tool.fn
+                break
+
+        # 搜尋 "sales data" - sales_data 應該命中兩個關鍵字
+        result = search_schemas(keywords='sales data')
+
+        # 驗證 hit_count 排序
+        assert result["schemas"][0]["name"] == "sales_data"
+        assert result["schemas"][0]["hit_count"] == 2  # 命中 'sales' 和 'data'
+        # 其他結果 hit_count 應該較低
+        for schema in result["schemas"][1:]:
+            assert schema["hit_count"] <= result["schemas"][0]["hit_count"]
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_search_tables_hit_count_sorting(self, mock_read_sql, mock_config):
+        """測試 search_tables 結果依 hit_count 降序排列"""
+        config, mock_conn = mock_config
+
+        mock_df = pd.DataFrame({
+            'schema_name': ['sales', 'sales', 'sales'],
+            'table_name': ['order_items', 'orders', 'customers'],
+            'table_type': ['BASE TABLE', 'BASE TABLE', 'BASE TABLE'],
+            'table_comment': ['Order line items with order details', 'Order records', 'Customer info']
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        search_tables = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'search_tables':
+                search_tables = tool.fn
+                break
+
+        # 搜尋 "order items" - order_items 應該命中兩個關鍵字
+        result = search_tables(keywords='order items', schema_name='sales')
+
+        # 驗證 hit_count 排序
+        assert result["tables"][0]["table_name"] == "order_items"
+        assert result["tables"][0]["hit_count"] == 2  # 命中 'order' 和 'items'
+        assert "hit_count" in result["tables"][1]
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_search_columns_hit_count_sorting(self, mock_read_sql, mock_config):
+        """測試 search_columns 結果依 hit_count 降序排列"""
+        config, mock_conn = mock_config
+
+        mock_df = pd.DataFrame({
+            'column_name': ['total_amount', 'order_id', 'amount'],
+            'data_type': ['numeric', 'integer', 'numeric'],
+            'is_nullable': ['YES', 'NO', 'YES'],
+            'column_comment': ['Total order amount', 'Order identifier', 'Transaction amount']
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        search_columns = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'search_columns':
+                search_columns = tool.fn
+                break
+
+        # 搜尋 "total amount" - total_amount 應該命中兩個關鍵字
+        result = search_columns(keywords='total amount', schema_name='sales', table_name='orders')
+
+        # 驗證 hit_count 排序
+        assert result["columns"][0]["column_name"] == "total_amount"
+        assert result["columns"][0]["hit_count"] == 2  # 命中 'total' 和 'amount'
+        assert "hit_count" in result["columns"][1]
 
     @patch('awswrangler.redshift.read_sql_query')
     def test_search_tables_execution(self, mock_read_sql, mock_config):
