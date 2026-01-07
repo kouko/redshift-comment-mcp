@@ -359,6 +359,33 @@ class TestListToolsExecution:
         assert result["tables"][0] == {"name": "orders", "type": "BASE TABLE", "comment": "(No comment available)"}
 
     @patch('awswrangler.redshift.read_sql_query')
+    def test_list_tables_without_parent_comments(self, mock_read_sql, mock_config):
+        """測試 list_tables 工具停用 include_parent_comments"""
+        config, mock_conn = mock_config
+
+        # 只模擬 tables 查詢（不查詢 schema comment）
+        tables_df = pd.DataFrame({
+            'table_name': ['orders', 'customers'],
+            'table_type': ['BASE TABLE', 'BASE TABLE']
+        })
+        mock_read_sql.return_value = tables_df
+
+        tools = RedshiftTools(config)
+        list_tables = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'list_tables':
+                list_tables = tool.fn
+                break
+
+        result = list_tables(schema_name='sales', include_parent_comments=False)
+
+        assert result["schema_name"] == 'sales'
+        assert "schema_comment" not in result  # 不應包含 schema_comment
+        assert result["total_count"] == 2
+        # 只有一次 SQL 查詢（不包含 schema comment 查詢）
+        assert mock_read_sql.call_count == 1
+
+    @patch('awswrangler.redshift.read_sql_query')
     def test_list_columns_execution(self, mock_read_sql, mock_config):
         """測試 list_columns 工具執行（不含註解）"""
         config, mock_conn = mock_config
@@ -442,11 +469,101 @@ class TestListToolsExecution:
 
         assert result["columns"][0] == {"name": "id", "type": "integer", "nullable": "NO", "comment": "(No comment available)"}
 
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_list_columns_without_parent_comments(self, mock_read_sql, mock_config):
+        """測試 list_columns 工具停用 include_parent_comments"""
+        config, mock_conn = mock_config
+
+        # 只模擬 columns 查詢（不查詢 table comment）
+        columns_df = pd.DataFrame({
+            'column_name': ['id', 'amount'],
+            'data_type': ['integer', 'numeric'],
+            'is_nullable': ['NO', 'YES']
+        })
+        mock_read_sql.return_value = columns_df
+
+        tools = RedshiftTools(config)
+        list_columns = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'list_columns':
+                list_columns = tool.fn
+                break
+
+        result = list_columns(schema_name='sales', table_name='orders', include_parent_comments=False)
+
+        assert result["schema_name"] == 'sales'
+        assert result["table_name"] == 'orders'
+        assert "table_comment" not in result  # 不應包含 table_comment
+        assert result["total_count"] == 2
+        # 只有一次 SQL 查詢（不包含 table comment 查詢）
+        assert mock_read_sql.call_count == 1
+
 
 # ========== 搜尋工具測試 ==========
 
 class TestSearchTools:
     """測試搜尋工具"""
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_search_schemas_execution(self, mock_read_sql, mock_config):
+        """測試 search_schemas 工具執行"""
+        config, mock_conn = mock_config
+
+        mock_df = pd.DataFrame({
+            'schema_name': ['sales', 'sales_archive'],
+            'schema_comment': ['Sales data schema', 'Archived sales data']
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        search_schemas = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'search_schemas':
+                search_schemas = tool.fn
+                break
+
+        result = search_schemas(keywords='sales 銷售')
+
+        assert result["keywords"] == ['sales', '銷售']
+        assert result["total_count"] == 2
+        assert len(result["schemas"]) == 2
+        assert result["schemas"][0] == {"name": "sales", "comment": "Sales data schema"}
+
+    def test_search_schemas_empty_keywords(self, mock_config):
+        """測試 search_schemas 空關鍵字驗證"""
+        config, mock_conn = mock_config
+        tools = RedshiftTools(config)
+
+        search_schemas = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'search_schemas':
+                search_schemas = tool.fn
+                break
+
+        with pytest.raises(ValueError, match="At least one keyword is required"):
+            search_schemas(keywords='   ')
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_search_schemas_no_comment(self, mock_read_sql, mock_config):
+        """測試 search_schemas 無註解時回傳預設訊息"""
+        config, mock_conn = mock_config
+
+        mock_df = pd.DataFrame({
+            'schema_name': ['public'],
+            'schema_comment': ['']
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        search_schemas = None
+        for tool in tools.mcp._tool_manager._tools.values():
+            if tool.name == 'search_schemas':
+                search_schemas = tool.fn
+                break
+
+        result = search_schemas(keywords='public')
+
+        assert result["schemas"][0] == {"name": "public", "comment": "(No comment available)"}
 
     @patch('awswrangler.redshift.read_sql_query')
     def test_search_tables_execution(self, mock_read_sql, mock_config):

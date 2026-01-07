@@ -85,7 +85,9 @@ OPTIMIZATION - include_comments parameter:
 - Reduces API calls by eliminating separate get_*_comment calls
 
 Recommended exploration flow:
-1. list_schemas(include_comments=True) - get schemas with comments directly
+1. Find schemas:
+   a. list_schemas(include_comments=True) - browse all schemas with comments
+   b. search_schemas - search schemas by keywords (no prerequisite)
 2. Find tables:
    a. list_tables(include_comments=True) - browse tables with comments
    b. search_tables (requires schema_name) - search by keywords
@@ -96,10 +98,14 @@ Recommended exploration flow:
 
 Alternative: Use get_schema_comment, get_table_comment, get_column_comment for targeted single-item queries.
 
-When using search_tables or search_columns:
+When using search_schemas, search_tables or search_columns:
+- search_schemas has no prerequisite - can be used directly
 - search_tables requires schema_name (complete step 1 first)
-- search_columns requires schema_name AND table_name (complete steps 1-3 first)
-- Include keywords in BOTH languages: names language AND comments language
+- search_columns requires schema_name AND table_name (complete steps 1-2 first)
+- IMPORTANT: Design keywords based on the user's conversation language
+  - Database comments are typically written in the same language as the user
+  - For example: if user speaks Chinese, use Chinese keywords for searching comments
+  - English table/column names can still be searched alongside native language keywords
 - Search results still require verification via get_table_comment or get_column_comment
 
 When generating SQL:
@@ -165,29 +171,33 @@ When generating SQL:
             return result
 
         @self.mcp.tool
-        def list_tables(schema_name: str, limit: Optional[int] = None, offset: int = 0, include_comments: bool = True) -> Dict[str, Any]:
+        def list_tables(schema_name: str, limit: Optional[int] = None, offset: int = 0, include_comments: bool = False, include_parent_comments: bool = True) -> Dict[str, Any]:
             """
-            List all table names in a schema with the schema's comment. Supports pagination via limit/offset.
+            List all table names in a schema. Supports pagination via limit/offset.
             Set include_comments=True to include table comments in the response.
+            Set include_parent_comments=True to include schema comment in the response.
             WARNING: Table names can be misleading. Use get_table_comment before using any table.
             """
             if not schema_name or not schema_name.isidentifier():
                 raise ValueError("Invalid schema name.")
 
-            # 取得 schema comment
-            schema_sql = """
-            SELECT d.description AS schema_comment
-            FROM pg_namespace n
-            LEFT JOIN pg_description d ON n.oid = d.objoid
-            WHERE n.nspname = %s;
-            """
+            # 取得 schema comment (only if include_parent_comments=True)
+            schema_comment = None
+            if include_parent_comments:
+                schema_sql = """
+                SELECT d.description AS schema_comment
+                FROM pg_namespace n
+                LEFT JOIN pg_description d ON n.oid = d.objoid
+                WHERE n.nspname = %s;
+                """
 
             with self.config.get_connection() as conn:
                 # 取得 schema comment
-                schema_df = wr.redshift.read_sql_query(schema_sql, con=conn, params=[schema_name])
-                schema_comment = "(No comment available)"
-                if not schema_df.empty and schema_df['schema_comment'].iloc[0]:
-                    schema_comment = schema_df['schema_comment'].iloc[0]
+                if include_parent_comments:
+                    schema_df = wr.redshift.read_sql_query(schema_sql, con=conn, params=[schema_name])
+                    schema_comment = "(No comment available)"
+                    if not schema_df.empty and schema_df['schema_comment'].iloc[0]:
+                        schema_comment = schema_df['schema_comment'].iloc[0]
 
                 # 取得 tables
                 if include_comments:
@@ -226,7 +236,6 @@ When generating SQL:
 
             result = {
                 "schema_name": schema_name,
-                "schema_comment": schema_comment,
                 "total_count": page["total_count"],
                 "returned_count": page["returned_count"],
                 "offset": page["offset"],
@@ -235,36 +244,43 @@ When generating SQL:
                 "warning": "Table names may be misleading. Use get_table_comment for each table before selection."
             }
 
+            if include_parent_comments:
+                result["schema_comment"] = schema_comment
+
             if page["auto_truncated"]:
                 result["pagination_hint"] = f"Results auto-truncated to {DEFAULT_MAX_ITEMS}. Use limit/offset to retrieve more."
 
             return result
 
         @self.mcp.tool
-        def list_columns(schema_name: str, table_name: str, limit: Optional[int] = None, offset: int = 0, include_comments: bool = True) -> Dict[str, Any]:
+        def list_columns(schema_name: str, table_name: str, limit: Optional[int] = None, offset: int = 0, include_comments: bool = False, include_parent_comments: bool = True) -> Dict[str, Any]:
             """
-            List all column names and types in a table with the table's comment. Supports pagination via limit/offset.
+            List all column names and types in a table. Supports pagination via limit/offset.
             Set include_comments=True to include column comments in the response.
+            Set include_parent_comments=True to include table comment in the response.
             WARNING: Column names can be misleading. Use get_all_column_comments before writing SQL.
             """
             if not schema_name.isidentifier() or not table_name.isidentifier():
                 raise ValueError("Invalid schema or table name.")
 
-            # 取得 table comment
-            table_sql = """
-            SELECT d.description AS table_comment
-            FROM pg_class c
-            JOIN pg_namespace n ON c.relnamespace = n.oid
-            LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0
-            WHERE n.nspname = %s AND c.relname = %s;
-            """
+            # 取得 table comment (only if include_parent_comments=True)
+            table_comment = None
+            if include_parent_comments:
+                table_sql = """
+                SELECT d.description AS table_comment
+                FROM pg_class c
+                JOIN pg_namespace n ON c.relnamespace = n.oid
+                LEFT JOIN pg_description d ON d.objoid = c.oid AND d.objsubid = 0
+                WHERE n.nspname = %s AND c.relname = %s;
+                """
 
             with self.config.get_connection() as conn:
                 # 取得 table comment
-                table_df = wr.redshift.read_sql_query(table_sql, con=conn, params=[schema_name, table_name])
-                table_comment = "(No comment available)"
-                if not table_df.empty and table_df['table_comment'].iloc[0]:
-                    table_comment = table_df['table_comment'].iloc[0]
+                if include_parent_comments:
+                    table_df = wr.redshift.read_sql_query(table_sql, con=conn, params=[schema_name, table_name])
+                    table_comment = "(No comment available)"
+                    if not table_df.empty and table_df['table_comment'].iloc[0]:
+                        table_comment = table_df['table_comment'].iloc[0]
 
                 # 取得 columns
                 if include_comments:
@@ -308,13 +324,78 @@ When generating SQL:
             result = {
                 "schema_name": schema_name,
                 "table_name": table_name,
-                "table_comment": table_comment,
                 "total_count": page["total_count"],
                 "returned_count": page["returned_count"],
                 "offset": page["offset"],
                 "has_more": page["has_more"],
                 "columns": page["items"],
                 "warning": "Column names may be misleading. Use get_all_column_comments before writing SQL."
+            }
+
+            if include_parent_comments:
+                result["table_comment"] = table_comment
+
+            if page["auto_truncated"]:
+                result["pagination_hint"] = f"Results auto-truncated to {DEFAULT_MAX_ITEMS}. Use limit/offset to retrieve more."
+
+            return result
+
+        # ========== 搜尋工具 ==========
+
+        @self.mcp.tool
+        def search_schemas(keywords: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
+            """
+            Search for schemas by keywords in schema name OR schema comment. Supports multiple space-separated keywords (OR logic).
+            IMPORTANT: Design keywords based on the user's conversation language, as database comments are typically in the same language.
+            This is a discovery tool - you MUST still call get_schema_comment to verify the schema's purpose before using it.
+            """
+            # 解析關鍵字
+            keyword_list = [k.strip() for k in keywords.split() if k.strip()]
+            if not keyword_list:
+                raise ValueError("At least one keyword is required.")
+
+            # 建構 SQL - 使用參數化查詢防止 SQL injection
+            base_sql = """
+            SELECT
+                n.nspname AS schema_name,
+                COALESCE(d.description, '') AS schema_comment
+            FROM pg_namespace n
+            LEFT JOIN pg_description d ON n.oid = d.objoid
+            WHERE n.nspowner > 1
+              AND n.nspname NOT LIKE 'pg_%%'
+              AND n.nspname <> 'information_schema'
+            """
+
+            # 加入關鍵字搜尋條件（OR 邏輯）
+            params = []
+            keyword_conditions = []
+            for kw in keyword_list:
+                keyword_conditions.append("(n.nspname ILIKE %s OR COALESCE(d.description, '') ILIKE %s)")
+                params.append(f"%{kw}%")
+                params.append(f"%{kw}%")
+
+            base_sql += " AND (" + " OR ".join(keyword_conditions) + ")"
+            base_sql += " ORDER BY n.nspname;"
+
+            with self.config.get_connection() as conn:
+                df = wr.redshift.read_sql_query(base_sql, con=conn, params=params)
+                records = df.to_dict(orient='records')
+                schemas = [{
+                    "name": r['schema_name'],
+                    "comment": r['schema_comment'] if r['schema_comment'] else "(No comment available)"
+                } for r in records]
+
+            # 分頁處理
+            page = paginate_results(schemas, limit, offset, DEFAULT_MAX_ITEMS)
+
+            result = {
+                "keywords": keyword_list,
+                "total_count": page["total_count"],
+                "returned_count": page["returned_count"],
+                "offset": page["offset"],
+                "has_more": page["has_more"],
+                "schemas": page["items"],
+                "warning": "Schema names may be misleading. Use get_schema_comment to verify the schema's purpose."
             }
 
             if page["auto_truncated"]:
