@@ -35,12 +35,27 @@ claude plugin marketplace add kouko/redshift-comment-mcp
 
 # 2. 安裝 plugin（cloned 到 ~/.claude/plugins/cache/...）
 claude plugin install redshift-comment-mcp
+```
 
-# 3. 在你自己的 terminal 跑互動式 setup（直接從 GitHub 拉 source，不需要 PyPI 已發版）
+接著用 **2 種方式**之一設定連線 — 結果完全相同（同一個 config.toml + keychain 條目）：
+
+#### 路徑 a：對話式設定（最方便，含 password handoff）
+
+在 Claude Code 對話中：
+
+```
+/redshift-setup
+```
+
+Claude 會用對話一個一個問你 host / port / user / dbname / profile name，然後印出一條 password 指令給你貼進**自己 terminal** 跑（密碼不入對話歷史），最後自動測連線。
+
+#### 路徑 b：純 terminal 設定
+
+```bash
 uvx --from "git+https://github.com/kouko/redshift-comment-mcp.git" redshift-comment-mcp setup
 ```
 
-setup 會問你 4 個欄位（host / port / user / dbname），密碼用 `getpass` 隱藏輸入後存進 OS keychain，最後自動測連線。完成。
+互動 Q&A 包含 password（用 `getpass` 隱藏輸入），全部一氣呵成。適合你在 terminal 裡操作而非 Claude Code 對話的場合。
 
 > 💡 **plugin 不從 PyPI 拉 source code**。Plugin 啟動 MCP server 時走 `uv run --project ${CLAUDE_PLUGIN_ROOT}` — 直接用 cloned repo 內的 `pyproject.toml` 建 venv，所以 PR 合併到 main 後**不需要等 PyPI 發版**就立即可用。
 >
@@ -145,6 +160,7 @@ python -m redshift_comment_mcp.server setup
 | 子指令 | 用途 |
 |---|---|
 | `redshift-comment-mcp setup [--profile NAME]` | 互動式建立或更新 profile（5 個欄位 + 自動測連線）|
+| `redshift-comment-mcp set-fields --profile NAME --host ... --port ... --user ... --dbname ...` | **非互動式**寫入 4 個非密碼欄位（給 `/redshift-setup` skill 用，不直接給人用）|
 | `redshift-comment-mcp set-password [--profile NAME]` | 只更新密碼（getpass 隱藏輸入）|
 | `redshift-comment-mcp test-connection [--profile NAME]` | 驗證 profile 能成功連線 |
 | `redshift-comment-mcp list-profiles` | 列出所有 profile + 是否有密碼 |

@@ -131,6 +131,27 @@ def cmd_list_profiles(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_set_fields(args: argparse.Namespace) -> int:
+    """Non-interactive: write the 4 non-secret fields for a profile.
+
+    Used by the `/redshift-setup` slash command's underlying skill so a
+    chat-driven flow can persist host/port/user/dbname collected via
+    Claude Q&A without going through the interactive ``setup`` prompts.
+    Password is intentionally NOT a flag here — see set-password (which
+    uses getpass) for that.
+    """
+    name = args.profile
+    config.write_profile(
+        name,
+        host=args.host,
+        port=args.port,
+        user=args.user,
+        dbname=args.dbname,
+    )
+    print(f"✓ Wrote non-secret fields for profile '{name}' to {config.config_path()}")
+    return 0
+
+
 def cmd_delete_profile(args: argparse.Namespace) -> int:
     name = args.profile
     if not _yes_no(
@@ -194,6 +215,17 @@ def main(argv: list[str] | None = None) -> int:
     sdp = sub.add_parser("delete-profile", help="Remove a profile + its keyring password.")
     sdp.add_argument("--profile", required=True)
     sdp.set_defaults(func=cmd_delete_profile)
+
+    ssf = sub.add_parser(
+        "set-fields",
+        help="Non-interactive: write the 4 non-secret fields (used by /redshift-setup skill).",
+    )
+    ssf.add_argument("--profile", default="default")
+    ssf.add_argument("--host", required=True)
+    ssf.add_argument("--port", type=int, default=5439)
+    ssf.add_argument("--user", required=True)
+    ssf.add_argument("--dbname", required=True)
+    ssf.set_defaults(func=cmd_set_fields)
 
     args = p.parse_args(argv)
     return args.func(args)

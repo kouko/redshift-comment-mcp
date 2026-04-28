@@ -14,6 +14,7 @@ SETUP_SUBCOMMANDS = {
     "test-connection",
     "list-profiles",
     "delete-profile",
+    "set-fields",
 }
 
 
