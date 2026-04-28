@@ -1,0 +1,10 @@
+{
+  "name": "redshift-comment-mcp",
+  "description": "Single-plugin marketplace for the Redshift Comment MCP server (comment-first DB exploration with 11 tools).",
+  "owner": {
+    "name": "kouko"
+  },
+  "plugins": [
+    { "name": "redshift-comment-mcp", "source": "./" }
+  ]
+}

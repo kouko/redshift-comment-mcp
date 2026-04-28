@@ -1,0 +1,39 @@
+{
+  "name": "redshift-comment-mcp",
+  "version": "0.2.0",
+  "description": "Redshift MCP server with comment-first exploration. 11 tools for schema/table/column listing, hit-count keyword search, and SELECT-only SQL. Comments are authoritative — names are unreliable. Multi-cluster via named profiles (run `uvx redshift-comment-mcp setup` after install).",
+  "author": {
+    "name": "kouko",
+    "url": "https://github.com/kouko"
+  },
+  "homepage": "https://github.com/kouko/redshift-comment-mcp",
+  "repository": "https://github.com/kouko/redshift-comment-mcp",
+  "license": "MIT",
+  "keywords": [
+    "redshift",
+    "mcp",
+    "aws",
+    "sql",
+    "data-exploration",
+    "comment-first"
+  ],
+  "userConfig": {
+    "profile": {
+      "type": "string",
+      "title": "Profile name",
+      "description": "Connection profile name. Run `uvx redshift-comment-mcp setup --profile <name>` once in your terminal to create it (host/port/user/dbname stored in ~/.config/redshift-comment-mcp/config.toml; password stored in OS keychain). Leave as 'default' for the single-cluster case.",
+      "default": "default",
+      "required": true
+    }
+  },
+  "mcpServers": {
+    "redshift-comment": {
+      "command": "uvx",
+      "args": [
+        "redshift-comment-mcp",
+        "--profile",
+        "${user_config.profile}"
+      ]
+    }
+  }
+}
