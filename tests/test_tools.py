@@ -5,6 +5,21 @@ from contextlib import contextmanager
 from redshift_comment_mcp.redshift_tools import RedshiftTools, paginate_results, DEFAULT_MAX_ITEMS
 from redshift_comment_mcp.connection import RedshiftConnectionConfig
 
+def _get_tool_fn(tools, name):
+    """Pull a registered tool's callable via FastMCP's public list_tools() API.
+
+    The pre-3.0 path (`tools.mcp._tool_manager._tools.values()`) was a private
+    attribute that FastMCP 3.x removed. We use the public ``list_tools()``
+    method instead; ``tool.fn`` is a public attribute on the ``FunctionTool``
+    object FastMCP returns.
+    """
+    import asyncio
+    for t in asyncio.run(tools.mcp.list_tools()):
+        if t.name == name:
+            return t.fn
+    raise KeyError(f"tool {name!r} not registered")
+
+
 @pytest.fixture
 def mock_config():
     """建立模擬的連線配置"""
@@ -215,11 +230,7 @@ class TestListToolsExecution:
 
         tools = RedshiftTools(config)
         # 取得註冊的工具函數
-        list_schemas = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_schemas':
-                list_schemas = tool.fn
-                break
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
 
         result = list_schemas(include_comments=False)
 
@@ -240,11 +251,7 @@ class TestListToolsExecution:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        list_schemas = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_schemas':
-                list_schemas = tool.fn
-                break
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
 
         result = list_schemas(include_comments=True)
 
@@ -267,11 +274,7 @@ class TestListToolsExecution:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        list_schemas = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_schemas':
-                list_schemas = tool.fn
-                break
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
 
         result = list_schemas(include_comments=True)
 
@@ -292,11 +295,7 @@ class TestListToolsExecution:
         mock_read_sql.side_effect = [schema_df, tables_df]
 
         tools = RedshiftTools(config)
-        list_tables = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_tables':
-                list_tables = tool.fn
-                break
+        list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_comments=False)
 
@@ -320,11 +319,7 @@ class TestListToolsExecution:
         mock_read_sql.side_effect = [schema_df, tables_df]
 
         tools = RedshiftTools(config)
-        list_tables = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_tables':
-                list_tables = tool.fn
-                break
+        list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_comments=True)
 
@@ -348,11 +343,7 @@ class TestListToolsExecution:
         mock_read_sql.side_effect = [schema_df, tables_df]
 
         tools = RedshiftTools(config)
-        list_tables = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_tables':
-                list_tables = tool.fn
-                break
+        list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_comments=True)
 
@@ -371,11 +362,7 @@ class TestListToolsExecution:
         mock_read_sql.return_value = tables_df
 
         tools = RedshiftTools(config)
-        list_tables = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_tables':
-                list_tables = tool.fn
-                break
+        list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_parent_comments=False)
 
@@ -400,11 +387,7 @@ class TestListToolsExecution:
         mock_read_sql.side_effect = [table_df, columns_df]
 
         tools = RedshiftTools(config)
-        list_columns = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_columns':
-                list_columns = tool.fn
-                break
+        list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_comments=False)
 
@@ -429,11 +412,7 @@ class TestListToolsExecution:
         mock_read_sql.side_effect = [table_df, columns_df]
 
         tools = RedshiftTools(config)
-        list_columns = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_columns':
-                list_columns = tool.fn
-                break
+        list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_comments=True)
 
@@ -459,11 +438,7 @@ class TestListToolsExecution:
         mock_read_sql.side_effect = [table_df, columns_df]
 
         tools = RedshiftTools(config)
-        list_columns = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_columns':
-                list_columns = tool.fn
-                break
+        list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_comments=True)
 
@@ -483,11 +458,7 @@ class TestListToolsExecution:
         mock_read_sql.return_value = columns_df
 
         tools = RedshiftTools(config)
-        list_columns = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_columns':
-                list_columns = tool.fn
-                break
+        list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_parent_comments=False)
 
@@ -516,11 +487,7 @@ class TestSearchTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        search_schemas = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_schemas':
-                search_schemas = tool.fn
-                break
+        search_schemas = _get_tool_fn(tools, 'search_schemas')
 
         result = search_schemas(keywords='sales 銷售')
 
@@ -537,11 +504,7 @@ class TestSearchTools:
         config, mock_conn = mock_config
         tools = RedshiftTools(config)
 
-        search_schemas = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_schemas':
-                search_schemas = tool.fn
-                break
+        search_schemas = _get_tool_fn(tools, 'search_schemas')
 
         with pytest.raises(ValueError, match="At least one keyword is required"):
             search_schemas(keywords='   ')
@@ -558,11 +521,7 @@ class TestSearchTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        search_schemas = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_schemas':
-                search_schemas = tool.fn
-                break
+        search_schemas = _get_tool_fn(tools, 'search_schemas')
 
         result = search_schemas(keywords='public')
 
@@ -583,11 +542,7 @@ class TestSearchTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        search_schemas = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_schemas':
-                search_schemas = tool.fn
-                break
+        search_schemas = _get_tool_fn(tools, 'search_schemas')
 
         # 搜尋 "sales data" - sales_data 應該命中兩個關鍵字
         result = search_schemas(keywords='sales data')
@@ -613,11 +568,7 @@ class TestSearchTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        search_tables = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_tables':
-                search_tables = tool.fn
-                break
+        search_tables = _get_tool_fn(tools, 'search_tables')
 
         # 搜尋 "order items" - order_items 應該命中兩個關鍵字
         result = search_tables(keywords='order items', schema_name='sales')
@@ -641,11 +592,7 @@ class TestSearchTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        search_columns = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_columns':
-                search_columns = tool.fn
-                break
+        search_columns = _get_tool_fn(tools, 'search_columns')
 
         # 搜尋 "total amount" - total_amount 應該命中兩個關鍵字
         result = search_columns(keywords='total amount', schema_name='sales', table_name='orders')
@@ -669,11 +616,7 @@ class TestSearchTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        search_tables = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_tables':
-                search_tables = tool.fn
-                break
+        search_tables = _get_tool_fn(tools, 'search_tables')
 
         result = search_tables(keywords='order 訂單', schema_name='sales')
 
@@ -686,11 +629,7 @@ class TestSearchTools:
         config, mock_conn = mock_config
         tools = RedshiftTools(config)
 
-        search_tables = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_tables':
-                search_tables = tool.fn
-                break
+        search_tables = _get_tool_fn(tools, 'search_tables')
 
         with pytest.raises(ValueError, match="At least one keyword is required"):
             search_tables(keywords='   ', schema_name='sales')
@@ -700,11 +639,7 @@ class TestSearchTools:
         config, mock_conn = mock_config
         tools = RedshiftTools(config)
 
-        search_tables = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_tables':
-                search_tables = tool.fn
-                break
+        search_tables = _get_tool_fn(tools, 'search_tables')
 
         with pytest.raises(ValueError, match="Invalid schema name"):
             search_tables(keywords='order', schema_name='invalid-schema')
@@ -723,11 +658,7 @@ class TestSearchTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        search_columns = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_columns':
-                search_columns = tool.fn
-                break
+        search_columns = _get_tool_fn(tools, 'search_columns')
 
         result = search_columns(keywords='customer', schema_name='sales', table_name='orders')
 
@@ -741,11 +672,7 @@ class TestSearchTools:
         config, mock_conn = mock_config
         tools = RedshiftTools(config)
 
-        search_columns = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'search_columns':
-                search_columns = tool.fn
-                break
+        search_columns = _get_tool_fn(tools, 'search_columns')
 
         with pytest.raises(ValueError, match="Invalid table name"):
             search_columns(keywords='id', schema_name='sales', table_name='invalid-table')
@@ -765,11 +692,7 @@ class TestCommentQueryTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        get_schema_comment = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'get_schema_comment':
-                get_schema_comment = tool.fn
-                break
+        get_schema_comment = _get_tool_fn(tools, 'get_schema_comment')
 
         result = get_schema_comment(schema_name='sales')
 
@@ -785,11 +708,7 @@ class TestCommentQueryTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        get_schema_comment = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'get_schema_comment':
-                get_schema_comment = tool.fn
-                break
+        get_schema_comment = _get_tool_fn(tools, 'get_schema_comment')
 
         with pytest.raises(ValueError, match="not found"):
             get_schema_comment(schema_name='nonexistent')
@@ -803,11 +722,7 @@ class TestCommentQueryTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        get_table_comment = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'get_table_comment':
-                get_table_comment = tool.fn
-                break
+        get_table_comment = _get_tool_fn(tools, 'get_table_comment')
 
         result = get_table_comment(schema_name='sales', table_name='orders')
 
@@ -827,11 +742,7 @@ class TestCommentQueryTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        get_column_comment = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'get_column_comment':
-                get_column_comment = tool.fn
-                break
+        get_column_comment = _get_tool_fn(tools, 'get_column_comment')
 
         result = get_column_comment(schema_name='sales', table_name='orders', column_name='id')
 
@@ -855,11 +766,7 @@ class TestCommentQueryTools:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        get_all_column_comments = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'get_all_column_comments':
-                get_all_column_comments = tool.fn
-                break
+        get_all_column_comments = _get_tool_fn(tools, 'get_all_column_comments')
 
         result = get_all_column_comments(schema_name='sales', table_name='orders')
 
@@ -885,11 +792,7 @@ class TestExecuteSQL:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        execute_sql = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'execute_sql':
-                execute_sql = tool.fn
-                break
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
 
         result = execute_sql(sql_statement='SELECT * FROM users')
 
@@ -906,11 +809,7 @@ class TestExecuteSQL:
         mock_read_sql.return_value = mock_df
 
         tools = RedshiftTools(config)
-        execute_sql = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'execute_sql':
-                execute_sql = tool.fn
-                break
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
 
         result = execute_sql(sql_statement='WITH cte AS (SELECT * FROM users) SELECT count(*) FROM cte')
 
@@ -921,11 +820,7 @@ class TestExecuteSQL:
         config, mock_conn = mock_config
         tools = RedshiftTools(config)
 
-        execute_sql = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'execute_sql':
-                execute_sql = tool.fn
-                break
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
 
         with pytest.raises(ValueError, match="DROP"):
             execute_sql(sql_statement='SELECT * FROM users; DROP TABLE users')
@@ -935,11 +830,7 @@ class TestExecuteSQL:
         config, mock_conn = mock_config
         tools = RedshiftTools(config)
 
-        execute_sql = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'execute_sql':
-                execute_sql = tool.fn
-                break
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
 
         # 使用 SELECT 開頭但包含 DELETE 的語句
         with pytest.raises(ValueError, match="DELETE"):
@@ -950,11 +841,7 @@ class TestExecuteSQL:
         config, mock_conn = mock_config
         tools = RedshiftTools(config)
 
-        execute_sql = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'execute_sql':
-                execute_sql = tool.fn
-                break
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
 
         with pytest.raises(ValueError, match="Only SELECT and WITH"):
             execute_sql(sql_statement='SHOW TABLES')
@@ -970,11 +857,7 @@ class TestErrorHandling:
         config, mock_conn = mock_config
         tools = RedshiftTools(config)
 
-        list_tables = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_tables':
-                list_tables = tool.fn
-                break
+        list_tables = _get_tool_fn(tools, 'list_tables')
 
         with pytest.raises(ValueError, match="Invalid schema name"):
             list_tables(schema_name='123invalid')
@@ -984,11 +867,7 @@ class TestErrorHandling:
         config, mock_conn = mock_config
         tools = RedshiftTools(config)
 
-        list_columns = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'list_columns':
-                list_columns = tool.fn
-                break
+        list_columns = _get_tool_fn(tools, 'list_columns')
 
         with pytest.raises(ValueError, match="Invalid schema or table name"):
             list_columns(schema_name='sales', table_name='invalid-table')
@@ -998,11 +877,7 @@ class TestErrorHandling:
         config, mock_conn = mock_config
         tools = RedshiftTools(config)
 
-        get_column_comment = None
-        for tool in tools.mcp._tool_manager._tools.values():
-            if tool.name == 'get_column_comment':
-                get_column_comment = tool.fn
-                break
+        get_column_comment = _get_tool_fn(tools, 'get_column_comment')
 
         with pytest.raises(ValueError, match="Invalid schema or table name"):
             get_column_comment(schema_name='valid', table_name='also-invalid', column_name='col')
