@@ -105,4 +105,4 @@ Desktop.ini
 *.pyo
 *.pyd
 *.db
-*.sqlite3
+*.sqlite3uv.lock
