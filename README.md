@@ -33,20 +33,26 @@ Python 3.10+。macOS / Linux / Windows 支援（Linux 無 D-Bus 環境的 keycha
 # 1. 註冊 marketplace（一次性）
 claude plugin marketplace add kouko/redshift-comment-mcp
 
-# 2. 安裝 plugin
+# 2. 安裝 plugin（cloned 到 ~/.claude/plugins/cache/...）
 claude plugin install redshift-comment-mcp
 
-# 3. 在你自己的 terminal 跑互動式 setup（PyPI 套件會被 uvx 自動拉下來）
-uvx redshift-comment-mcp setup
+# 3. 在你自己的 terminal 跑互動式 setup（直接從 GitHub 拉 source，不需要 PyPI 已發版）
+uvx --from "git+https://github.com/kouko/redshift-comment-mcp.git" redshift-comment-mcp setup
 ```
 
 setup 會問你 4 個欄位（host / port / user / dbname），密碼用 `getpass` 隱藏輸入後存進 OS keychain，最後自動測連線。完成。
 
+> 💡 **plugin 不從 PyPI 拉 source code**。Plugin 啟動 MCP server 時走 `uv run --project ${CLAUDE_PLUGIN_ROOT}` — 直接用 cloned repo 內的 `pyproject.toml` 建 venv，所以 PR 合併到 main 後**不需要等 PyPI 發版**就立即可用。
+>
+> 第一次啟動會花 ~10-15s 建 venv（uv 會 cache 下來，後續 <2s）。
+>
+> 一旦 v0.2.0+ 發到 PyPI，setup CLI 那條也可以簡化成 `uvx redshift-comment-mcp setup`（uvx 拉 PyPI），但兩種寫法都一樣有效。
+
 要連多個 cluster？每個 cluster 用一個 profile 名稱：
 
 ```bash
-uvx redshift-comment-mcp setup --profile dev
-uvx redshift-comment-mcp setup --profile prod
+uvx --from "git+https://github.com/kouko/redshift-comment-mcp.git" redshift-comment-mcp setup --profile dev
+uvx --from "git+https://github.com/kouko/redshift-comment-mcp.git" redshift-comment-mcp setup --profile prod
 ```
 
 然後 plugin 透過 `userConfig` 的 profile 欄位選用哪個 — 安裝時 prompt（或於 `~/.claude/settings.json` 編輯 `pluginConfigs[<id>].options.profile`）。

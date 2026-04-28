@@ -1,7 +1,7 @@
 {
   "name": "redshift-comment-mcp",
   "version": "0.2.0",
-  "description": "Redshift MCP server with comment-first exploration. 11 tools for schema/table/column listing, hit-count keyword search, and SELECT-only SQL. Comments are authoritative — names are unreliable. Multi-cluster via named profiles (run `uvx redshift-comment-mcp setup` after install).",
+  "description": "Redshift MCP server with comment-first exploration. 11 tools for schema/table/column listing, hit-count keyword search, and SELECT-only SQL. Comments are authoritative — names are unreliable. Multi-cluster via named profiles. Plugin uses the cloned repo source directly (no PyPI release prerequisite); run `uvx --from \"git+https://github.com/kouko/redshift-comment-mcp.git\" redshift-comment-mcp setup` once after install to configure your profile.",
   "author": {
     "name": "kouko",
     "url": "https://github.com/kouko"
@@ -21,15 +21,18 @@
     "profile": {
       "type": "string",
       "title": "Profile name",
-      "description": "Connection profile name. Run `uvx redshift-comment-mcp setup --profile <name>` once in your terminal to create it (host/port/user/dbname stored in ~/.config/redshift-comment-mcp/config.toml; password stored in OS keychain). Leave as 'default' for the single-cluster case.",
+      "description": "Connection profile name. Before MCP server starts you need to create the profile by running `uvx --from \"git+https://github.com/kouko/redshift-comment-mcp.git\" redshift-comment-mcp setup --profile <name>` (or once v0.2.0+ is on PyPI: `uvx redshift-comment-mcp setup --profile <name>`). The setup CLI walks through host/port/user/dbname/password Q&A; non-secret fields land in ~/.config/redshift-comment-mcp/config.toml, password in OS keychain. Leave 'default' for single-cluster.",
       "default": "default",
       "required": true
     }
   },
   "mcpServers": {
     "redshift-comment": {
-      "command": "uvx",
+      "command": "uv",
       "args": [
+        "run",
+        "--project",
+        "${CLAUDE_PLUGIN_ROOT}",
         "redshift-comment-mcp",
         "--profile",
         "${user_config.profile}"
