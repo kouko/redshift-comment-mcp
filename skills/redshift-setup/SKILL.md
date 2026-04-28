@@ -96,13 +96,67 @@ subcommand is non-interactive and exits with code 0 + a confirmation
 line on success. If exit code != 0, surface the error to the user and
 ask whether to retry.
 
-### Step 4 — Hand off password collection to user's terminal
+### Step 4 — Collect password (OS-aware, never enters chat transcript)
 
-⚠️ **Do NOT ask the user for the password in chat.** Per the repo's
-`user-terminal-handoff` convention, type-in-chat means the password
-lands in conversation history (and any persisted transcript / log).
+⚠️ **Hard rule**: the password value MUST NEVER appear in chat, in Bash
+tool stdout, or in any tool result that gets added back to the
+conversation transcript. Empirically verified during dry-run:
+`osascript ... text returned of result` echoed to stdout WILL surface
+the typed value into the Bash tool's response → into the JSONL
+transcript → durable on disk. Choose the right path below to avoid
+that leak.
+
+**Three paths**, picked by OS detection at runtime:
+
+#### Path 4a — macOS desktop: native password dialog (preferred)
+
+Run this Bash one-liner. The dialog appears outside the Claude UI;
+the password lives only in a shell variable inside the subshell
+(never echoed); only `✓ Password stored` reaches Bash stdout.
+
+```bash
+PW=$(osascript \
+       -e 'tell application "System Events" to display dialog "Redshift password for profile <NAME>:" default answer "" with hidden answer with title "Redshift MCP Setup" buttons {"Cancel", "Save"} default button "Save"' \
+       -e 'text returned of result' 2>/dev/null) \
+  || { echo "Cancelled by user" >&2; exit 1; }
+uv run --project "$PLUGIN_ROOT" python -c "
+import sys, keyring
+keyring.set_password('redshift-comment-mcp', '<NAME>', sys.stdin.read().rstrip('\n'))
+" <<< "$PW"
+unset PW
+echo "✓ Password stored in OS keychain"
+```
+
+Replace `<NAME>` with the profile name from Step 2. Substitute
+`$PLUGIN_ROOT` with the path resolved in Step 1 (or expand it in
+the same shell session if you exported it).
+
+DO NOT add `set -x` / verbose flags — they would echo the expanded
+`$PW` to stderr.
+
+#### Path 4b — Linux desktop with `zenity` available
+
+```bash
+if command -v zenity >/dev/null 2>&1; then
+  PW=$(zenity --password --title="Redshift MCP Setup" \
+              --text="Redshift password for profile <NAME>:" 2>/dev/null) \
+    || { echo "Cancelled by user" >&2; exit 1; }
+  uv run --project "$PLUGIN_ROOT" python -c "
+import sys, keyring
+keyring.set_password('redshift-comment-mcp', '<NAME>', sys.stdin.read().rstrip('\n'))
+" <<< "$PW"
+  unset PW
+  echo "✓ Password stored in OS keychain"
+fi
+```
+
+#### Path 4c — fallback (headless server, no GUI, Cowork uncertainty, Windows): user-terminal handoff
+
+If neither dialog path is available, fall back to the
+user-terminal-handoff pattern (per
+`domain-teams:skill-team / standards/user-terminal-handoff.md`).
 Print this block verbatim to the user — substitute `<NAME>` with the
-profile name from Step 2:
+profile name:
 
 ```
 請在你自己的 terminal（不是 Claude 對話）跑這條指令來設定密碼：
@@ -114,11 +168,29 @@ profile name from Step 2:
 完成後回我「done」。
 ```
 
-(If the user's chat language is English / 日本語, translate the message
-accordingly. Keep the command itself verbatim.)
+(If user's chat language is English / 日本語, translate prose
+accordingly. Keep the command verbatim.)
 
-Then **stop and wait** for the user's "done" reply. Do NOT background-poll.
-Do NOT call `set-password` via Bash — that would defeat the entire point.
+Then **stop and wait** for the user's "done" reply. Do NOT
+background-poll. Do NOT call `set-password` via Bash — that would
+defeat the entire point.
+
+#### Decision tree
+
+```bash
+# At runtime, decide which path to take:
+if [[ "$OSTYPE" == darwin* ]]; then
+    # → Path 4a (osascript)
+elif command -v zenity >/dev/null 2>&1; then
+    # → Path 4b (zenity)
+else
+    # → Path 4c (terminal handoff)
+fi
+```
+
+Always announce the chosen path to the user in chat ("我會跳一個系統
+對話框收密碼" / "I'll show a system dialog for the password" / etc.)
+so they know to look for the OS dialog and don't switch contexts.
 
 ### Step 5 — Verify
 

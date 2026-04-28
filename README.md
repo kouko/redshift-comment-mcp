@@ -39,7 +39,7 @@ claude plugin install redshift-comment-mcp
 
 接著用 **2 種方式**之一設定連線 — 結果完全相同（同一個 config.toml + keychain 條目）：
 
-#### 路徑 a：對話式設定（最方便，含 password handoff）
+#### 路徑 a：對話式設定（最方便）
 
 在 Claude Code 對話中：
 
@@ -47,7 +47,15 @@ claude plugin install redshift-comment-mcp
 /redshift-setup
 ```
 
-Claude 會用對話一個一個問你 host / port / user / dbname / profile name，然後印出一條 password 指令給你貼進**自己 terminal** 跑（密碼不入對話歷史），最後自動測連線。
+Claude 會用對話一個一個問你 host / port / user / dbname / profile name。**密碼步驟自動偵測 OS**：
+
+| OS / 環境 | 密碼怎麼收 |
+|---|---|
+| macOS 桌面 | 跳出系統原生密碼對話框（hidden answer，跟 sudo 提示同層級）|
+| Linux 桌面（有 zenity）| 跳出 zenity 密碼對話框 |
+| Headless / 無 GUI / Cowork | fallback：印一條指令給你貼進自己 terminal 跑 |
+
+無論哪條路徑，**密碼絕對不進對話 transcript** — dialog 路徑下密碼只存在於 shell 變數，直接寫進 OS keychain 後 unset，Bash tool 只看得到 `✓ stored` 確認字串。最後自動測連線。
 
 #### 路徑 b：純 terminal 設定
 
