@@ -92,7 +92,7 @@ def main():
 
     logger.info(f"正在啟動 Redshift MCP 伺服器... (host={host}, db={dbname}, user={user})")
 
-    # 1. 建立 Redshift 連線配置（會進行連線測試）
+    # 1. 建立 Redshift 連線配置（不連線；per-use pattern，首次工具呼叫時才開連線）
     try:
         connection_config = create_redshift_config(
             host=host,
