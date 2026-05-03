@@ -132,6 +132,32 @@ The two READMEs to read next:
 | OS keychain (`redshift-comment-mcp` / `<profile>`) | Passwords | OS-managed |
 | `~/.cache/redshift-comment-mcp/<profile>/` | Optional offline structure cache (written by `/redshift-cache-schema`) | `0700` |
 
+## Recommended DB GRANTs (defense-in-depth)
+
+`execute_sql` blocks DDL / DML / admin keywords at the parser layer
+(`DROP` / `DELETE` / `UPDATE` / `INSERT` / `ALTER` / `CREATE` /
+`TRUNCATE` / `MERGE` / `GRANT` / `REVOKE` / `COPY` / `UNLOAD`), but
+that's a layer-1 defense. The defense-in-depth move is to give the
+plugin's connecting Redshift user **read-only privileges only**, so
+even if a parser bypass is found, the database itself rejects writes:
+
+```sql
+-- Create a dedicated read-only user for the plugin
+CREATE USER redshift_mcp_reader WITH PASSWORD '...';
+
+-- Grant only what the plugin actually needs
+GRANT USAGE ON SCHEMA public, dbt_marts, dbt_staging TO redshift_mcp_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA public, dbt_marts, dbt_staging TO redshift_mcp_reader;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public, dbt_marts, dbt_staging
+  GRANT SELECT ON TABLES TO redshift_mcp_reader;
+
+-- Do NOT grant: INSERT / UPDATE / DELETE / TRUNCATE / DROP / CREATE / GRANT / superuser
+```
+
+For `/redshift-lineage-from-stl`, the user additionally needs
+`SYSLOG ACCESS UNRESTRICTED` (or admin) to read `STL_QUERY` /
+`SYS_QUERY_HISTORY`. If you're not running that skill, skip this grant.
+
 ## Comment-writing tips for your DB
 
 The plugin shines brightest on tables whose owners invest in comments.

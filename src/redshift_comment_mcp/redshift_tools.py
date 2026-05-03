@@ -747,7 +747,14 @@ When generating SQL:
             if not sql_upper.startswith('SELECT') and not sql_upper.startswith('WITH'):
                 raise ValueError("Only SELECT and WITH queries are allowed.")
 
-            dangerous_keywords = ['DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE']
+            # MERGE: Redshift upsert; banned in case future syntax allows WITH ... MERGE
+            # GRANT/REVOKE: privilege mutation; would let SQL change ACLs without DDL
+            # COPY: bulk import (Redshift writes new rows from S3/etc.)
+            # UNLOAD: bulk export to S3 (data exfiltration vector even though not "writing to DB")
+            dangerous_keywords = [
+                'DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE',
+                'MERGE', 'GRANT', 'REVOKE', 'COPY', 'UNLOAD',
+            ]
             for keyword in dangerous_keywords:
                 if re.search(r'\b' + keyword + r'\b', sql_upper):
                     raise ValueError(f"{keyword} statements are not allowed.")
