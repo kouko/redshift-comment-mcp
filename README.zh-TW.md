@@ -125,6 +125,31 @@ Plugin 透過 `uv run --project ${CLAUDE_PLUGIN_ROOT}` 直接從 cloned source
 | OS keychain（`redshift-comment-mcp` / `<profile>`） | 密碼 | OS 管理 |
 | `~/.cache/redshift-comment-mcp/<profile>/` | `/redshift-cache-schema` 寫入的可選離線結構快取 | `0700` |
 
+## 建議的 DB GRANT 設定（縱深防禦）
+
+`execute_sql` 在 parser 層擋掉 DDL / DML / admin 關鍵字（`DROP` /
+`DELETE` / `UPDATE` / `INSERT` / `ALTER` / `CREATE` / `TRUNCATE` /
+`MERGE` / `GRANT` / `REVOKE` / `COPY` / `UNLOAD`），但那只是第 1 層
+防禦。縱深防禦的標準作法是**讓 plugin 連線用的 Redshift user 只有
+read-only 權限**，這樣就算 parser 被繞過，資料庫本身會拒絕寫入：
+
+```sql
+-- 為 plugin 建立專用的 read-only user
+CREATE USER redshift_mcp_reader WITH PASSWORD '...';
+
+-- 只給 plugin 真的需要的權限
+GRANT USAGE ON SCHEMA public, dbt_marts, dbt_staging TO redshift_mcp_reader;
+GRANT SELECT ON ALL TABLES IN SCHEMA public, dbt_marts, dbt_staging TO redshift_mcp_reader;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public, dbt_marts, dbt_staging
+  GRANT SELECT ON TABLES TO redshift_mcp_reader;
+
+-- 不要給：INSERT / UPDATE / DELETE / TRUNCATE / DROP / CREATE / GRANT / superuser
+```
+
+要跑 `/redshift-lineage-from-stl` 才額外需要 `SYSLOG ACCESS UNRESTRICTED`
+（或 admin）來讀 `STL_QUERY` / `SYS_QUERY_HISTORY`。不跑這支 skill 就
+不用給。
+
 ## 寫好註解的小提醒
 
 這個 plugin 在「table owner 願意寫註解」的資料庫上效果最好。具體建議：
