@@ -11,6 +11,148 @@ logger = logging.getLogger(__name__)
 DEFAULT_MAX_ITEMS = 50  # 預設最大回傳筆數（超過時自動截斷）
 
 
+# ===== SQL 安全驗證 =====
+
+# str.strip() 預設只去 ASCII whitespace；MCP 傳輸／編輯器複製常會在 SQL 前面塞
+# 不可見字元（BOM / ZWSP / NBSP 等），導致 startswith('SELECT'|'WITH') 誤判。
+# 把這些一併剝掉。
+_TRIM_CHARS = (
+    " \t\n\r\f\v"
+    "﻿"  # BOM
+    "​"  # ZERO WIDTH SPACE
+    "‌"  # ZERO WIDTH NON-JOINER
+    "‍"  # ZERO WIDTH JOINER
+    "⁠"  # WORD JOINER
+    " "  # NO-BREAK SPACE
+)
+
+# 禁止的 mutating / privilege / IO 命令。注意這些是「禁止關鍵字」，不是
+# 「禁止語句」——任何位置出現皆拒，因此包含 multi-statement piggyback。
+_FORBIDDEN_KEYWORDS = (
+    'DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE',
+    'MERGE', 'GRANT', 'REVOKE', 'COPY', 'UNLOAD',
+)
+_FORBIDDEN_RE = re.compile(r'\b(' + '|'.join(_FORBIDDEN_KEYWORDS) + r')\b')
+
+
+def _strip_strings_and_comments(sql: str) -> str:
+    """
+    把 SQL 裡的字串字面量、quoted identifier、行註解、塊註解、dollar-quote
+    全部置換成等長空白，讓後續的 keyword 掃描只看到「真實的 SQL token」。
+    保持長度一致是為了之後若想回報行/列號不會偏移。
+
+    未終結的字串或註解視為語法錯誤，直接 raise — 否則攻擊者可用 unterminated
+    literal 把後續惡意關鍵字偽裝成「字串內文」。
+    """
+    out: list[str] = []
+    i, n = 0, len(sql)
+    while i < n:
+        c = sql[i]
+
+        # 行註解 -- ... \n
+        if c == '-' and i + 1 < n and sql[i + 1] == '-':
+            while i < n and sql[i] != '\n':
+                out.append(' ')
+                i += 1
+            continue
+
+        # 塊註解 /* ... */（Redshift 不支援巢狀，不處理）
+        if c == '/' and i + 1 < n and sql[i + 1] == '*':
+            out.append('  ')
+            i += 2
+            while i + 1 < n and not (sql[i] == '*' and sql[i + 1] == '/'):
+                out.append(' ')
+                i += 1
+            if i + 1 >= n:
+                raise ValueError("Unterminated block comment in SQL.")
+            out.append('  ')
+            i += 2
+            continue
+
+        # 單引號字串 '...'，'' 為跳脫
+        if c == "'":
+            out.append(' ')
+            i += 1
+            while i < n:
+                if sql[i] == "'":
+                    if i + 1 < n and sql[i + 1] == "'":
+                        out.append('  ')
+                        i += 2
+                        continue
+                    out.append(' ')
+                    i += 1
+                    break
+                out.append(' ')
+                i += 1
+            else:
+                raise ValueError("Unterminated string literal in SQL.")
+            continue
+
+        # 雙引號 quoted identifier "..."，"" 為跳脫
+        if c == '"':
+            out.append(' ')
+            i += 1
+            while i < n:
+                if sql[i] == '"':
+                    if i + 1 < n and sql[i + 1] == '"':
+                        out.append('  ')
+                        i += 2
+                        continue
+                    out.append(' ')
+                    i += 1
+                    break
+                out.append(' ')
+                i += 1
+            else:
+                raise ValueError("Unterminated quoted identifier in SQL.")
+            continue
+
+        # Dollar-quoted $$...$$（PostgreSQL 擴充，Redshift SP 內可見）
+        if c == '$' and i + 1 < n and sql[i + 1] == '$':
+            out.append('  ')
+            i += 2
+            while i + 1 < n and not (sql[i] == '$' and sql[i + 1] == '$'):
+                out.append(' ')
+                i += 1
+            if i + 1 >= n:
+                raise ValueError("Unterminated dollar-quoted string in SQL.")
+            out.append('  ')
+            i += 2
+            continue
+
+        out.append(c)
+        i += 1
+
+    return ''.join(out)
+
+
+def validate_read_only_sql(sql_statement: str) -> None:
+    """
+    驗證 sql_statement 為 read-only（SELECT / WITH 開頭，且不含禁用關鍵字）。
+    不通過則 raise ValueError。
+
+    防護重點：
+    1. 剝除 BOM / ZWSP / NBSP 等不可見字元，避免 startswith 誤判
+    2. 字串字面量、quoted identifier、行/塊/$$ 註解內的內容不參與關鍵字判定
+       （消除 `WHERE col = 'INSERT'` / `-- DROP TABLE old` 之類誤殺）
+    3. 禁用關鍵字以 `\\b` word boundary 比對，且套用在「sanitized 後」的 SQL 上
+       （未終結的字串/註解會被 reject，不會被當成擋牆繞過）
+    """
+    raw = sql_statement.strip(_TRIM_CHARS) if sql_statement else ""
+    if not raw:
+        raise ValueError("Empty query.")
+
+    head = raw.upper()
+    if not (head.startswith('SELECT') or head.startswith('WITH')):
+        raise ValueError("Only SELECT and WITH queries are allowed.")
+
+    sanitized = _strip_strings_and_comments(raw).upper()
+
+    m = _FORBIDDEN_RE.search(sanitized)
+    if m:
+        raise ValueError(f"{m.group(1)} statements are not allowed.")
+
+
 def paginate_results(items: list, limit: Optional[int], offset: int, default_max: int) -> Dict[str, Any]:
     """
     處理分頁邏輯。
@@ -743,21 +885,7 @@ When generating SQL:
             Execute a read-only SQL query (SELECT/WITH only). Supports pagination via limit/offset for results.
             PREREQUISITE: Before calling this, you must have verified all column meanings using get_all_column_comments.
             """
-            sql_upper = sql_statement.strip().upper()
-            if not sql_upper.startswith('SELECT') and not sql_upper.startswith('WITH'):
-                raise ValueError("Only SELECT and WITH queries are allowed.")
-
-            # MERGE: Redshift upsert; banned in case future syntax allows WITH ... MERGE
-            # GRANT/REVOKE: privilege mutation; would let SQL change ACLs without DDL
-            # COPY: bulk import (Redshift writes new rows from S3/etc.)
-            # UNLOAD: bulk export to S3 (data exfiltration vector even though not "writing to DB")
-            dangerous_keywords = [
-                'DROP', 'DELETE', 'UPDATE', 'INSERT', 'ALTER', 'CREATE', 'TRUNCATE',
-                'MERGE', 'GRANT', 'REVOKE', 'COPY', 'UNLOAD',
-            ]
-            for keyword in dangerous_keywords:
-                if re.search(r'\b' + keyword + r'\b', sql_upper):
-                    raise ValueError(f"{keyword} statements are not allowed.")
+            validate_read_only_sql(sql_statement)
 
             try:
                 with self.config.get_connection() as conn:

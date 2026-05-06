@@ -27,8 +27,15 @@ jobs:
         pip install -e ".[dev]"
 
     - name: Run tests
+      # 對 redshift_tools.py（含 SQL validator）做覆蓋率 gate。
+      # 目前實測 ~90%，門檻設 85% 留 5pp 緩衝給日常變動，
+      # 同時擋住「靜默刪除 validator branch 也沒人發現」這類退化。
+      # 其他模組（server / setup_cli / _version）不在 gate 範圍。
       run: |
-        pytest tests/ -v --tb=short
+        pytest tests/ -v --tb=short \
+          --cov=redshift_comment_mcp.redshift_tools \
+          --cov-report=term-missing \
+          --cov-fail-under=85
 
     - name: Run linting (if available)
       run: |
