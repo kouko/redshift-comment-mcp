@@ -2,12 +2,16 @@
 name: redshift-setup
 description: >-
   Conversational walkthrough for configuring a Redshift connection profile
-  for the redshift-comment-mcp plugin. Asks user host / port / user /
-  dbname / profile-name in chat one question at a time, then hands off
-  password collection to the user's own terminal (so password never
-  enters Claude conversation history), then verifies via test-connection.
-  Use when user invokes /redshift-setup or asks to configure / set up a
-  Redshift connection. Redshift 連線設定対話フロー。
+  for the redshift-comment-mcp plugin. Default form `/redshift-setup`
+  asks host / port / user / dbname (4 questions) and stores under the
+  built-in profile name `default`; named form `/redshift-setup <name>`
+  is the multi-cluster path and additionally auto-writes the
+  pluginConfigs profile selection in ~/.claude/settings.json so the
+  user does not have to hand-edit JSON. Password collection is handed
+  off to the user's own terminal (so password never enters Claude
+  conversation history); connection is verified via test-connection.
+  Use when user invokes /redshift-setup or asks to configure / set up
+  a Redshift connection. Redshift 連線設定対話フロー。
 ---
 
 # Redshift Setup
@@ -20,15 +24,24 @@ history forever (per `domain-teams:skill-team / standards/user-terminal-handoff.
 
 ## When to Use
 
-- User invokes `/redshift-setup`
+- User invokes `/redshift-setup` (default form — single cluster, profile name `default`)
+- User invokes `/redshift-setup <name>` (named form — multi-cluster, picks a custom profile name)
 - User says "set up Redshift" / "configure my Redshift connection" / "幫我設定 Redshift" / "Redshift の接続を設定して" or similar
-- User wants to add a new connection profile alongside existing ones (multi-cluster)
+- User wants to add a second / third connection profile alongside existing ones
 
 ## When NOT to Use
 
 - User wants to change ONLY the password of an existing profile → use the
   one-liner `uvx --from "git+https://github.com/kouko/redshift-comment-mcp.git" redshift-comment-mcp set-password --profile <name>` instead; this skill is overkill.
 - User wants to delete a profile → use `delete-profile` subcommand directly.
+
+## Inputs
+
+| Invocation | Profile name resolved to | Settings.json edit |
+|---|---|---|
+| `/redshift-setup` (no `default` profile yet) | `default` (silent — no Q1) | none (manifest already defaults to `default`) |
+| `/redshift-setup` (`default` already exists) | ask user: (a) overwrite `default` OR (b) pick a new name | (a) none / (b) auto-write pluginConfigs |
+| `/redshift-setup <name>` | `<name>` (validated `^[A-Za-z0-9_-]+$`) | auto-write pluginConfigs (with confirm) |
 
 ## Storage Model
 
@@ -53,31 +66,66 @@ echo "$PLUGIN_ROOT"
 
 Save the resolved path; you'll reuse it in Step 3 and Step 5.
 
-### Step 2 — Collect non-secret fields via Q&A
+### Step 2 — Resolve profile name + collect connection fields
+
+#### Step 2a — Resolve profile name (do NOT ask the user up front)
+
+The profile name is an internal handle, not a connection detail. Most
+users have one cluster and never need to think about it. So we resolve
+it WITHOUT asking by default; we only ask in the rare conflict case.
+
+1. **Args path** — if the user invoked the skill with an argument (e.g.,
+   `/redshift-setup ichef-prod`), use the argument as the profile name.
+   Validate it matches `^[A-Za-z0-9_-]+$`; if not, reject and re-ask once.
+   Skip to Step 2b.
+
+2. **No-args path** — list existing profiles to detect collisions:
+
+   ```bash
+   uv run --project "$PLUGIN_ROOT" redshift-comment-mcp list-profiles
+   ```
+
+   Branch on what's already there:
+
+   - **No `default` profile exists** → use `"default"` silently. Do
+     NOT ask the user a name question. Skip to Step 2b.
+
+   - **`default` already exists** → ask the user **one** question
+     (translate prose to chat language, keep the CLI verbatim):
+
+     ```
+     你已經有一個 default profile（host=<H> user=<U> db=<D>）。
+       (a) 覆蓋它（用新值替換現有 default 設定，password 保留）
+       (b) 建立第二個 profile，保留現有 default — 請取個名字
+           （例如 ichef-prod / dev / staging）
+     ```
+
+     - Reply (a) → use `"default"`. Continue to Step 2b.
+     - Reply (b) + name → validate `^[A-Za-z0-9_-]+$`; on success use
+       that name. On failure re-ask once.
+
+#### Step 2b — Collect connection fields via Q&A
 
 Ask the user **one question at a time**. Wait for their reply before the
-next question. Use the user's chat language (zh-TW / zh-CN / ja / en — match what they used).
+next question. Use the user's chat language (zh-TW / zh-CN / ja / en —
+match what they used).
 
-1. **Profile name**:
-   "What profile name? Press Enter for `default`. Use a custom name like `dev` / `prod` if you'll connect to multiple Redshift clusters."
-
-2. **Host**:
+1. **Host**:
    "Redshift host? (the full hostname like `my-cluster.abc123.ap-northeast-1.redshift.amazonaws.com`)"
 
-3. **Port**:
+2. **Port**:
    "Port? (default: 5439 — press Enter)"
 
-4. **DB user**:
+3. **DB user**:
    "DB user?"
 
-5. **Database name**:
+4. **Database name**:
    "Database name?"
 
-If user already had a profile with the same name, recall its current values from the file and offer them as defaults (`current value [shown]`). Run this Bash to inspect:
-
-```bash
-uv run --project "$PLUGIN_ROOT" redshift-comment-mcp list-profiles
-```
+If the resolved profile name already has a stored row in `config.toml`
+(case 2a-(a) overwrite, or user explicitly re-ran setup on an existing
+named profile), recall its current values and offer them as defaults
+in each prompt: `current value [shown]`.
 
 ### Step 3 — Write non-secret fields (Bash, one call)
 
@@ -206,9 +254,9 @@ Expected exit codes:
 - `1` → connection failed (bad password, network, DB-side issue). Print the stderr to the user and ask whether to retry password setup or check the host / network.
 - `2` → profile or password missing in config.toml / keychain. Means user said "done" prematurely. Ask them to actually run the `set-password` command.
 
-### Step 6 — Report success + next steps
+### Step 6 — Report success + activate (only auto-write settings.json for non-default)
 
-After Step 5 returns 0, summarize for the user:
+After Step 5 returns 0, print the success block:
 
 ```
 ✓ Profile <NAME> configured.
@@ -216,27 +264,127 @@ After Step 5 returns 0, summarize for the user:
   Database: <DBNAME>
   User: <USER>
   Password: stored in OS keychain ✓
-
-下一步：
-  1. 重啟 Claude Code（讓 MCP server 載入這個 profile）。
-  2. 若這是你第一次設定，profile 預設用 'default'；
-     若你用了自訂名稱（例如 'prod'），請編輯 ~/.claude/settings.json
-     讓 pluginConfigs["redshift-comment-mcp@redshift-comment-mcp"].options.profile = "<NAME>"
-     再重啟。
 ```
 
-(Translate the prose to match user's chat language; keep the JSON path verbatim.)
+Then branch on the profile name:
+
+#### Branch A — profile == "default"
+
+The plugin manifest's `userConfig.profile` already defaults to `default`,
+so there is nothing to activate. Print:
+
+```
+下一步：重啟 Claude Code，MCP server 會用 default profile 連線。
+
+之後若要連第二個 cluster，跑 /redshift-comment-mcp:redshift-setup <名字>，
+我會幫你寫好 ~/.claude/settings.json（不用你手挖 JSON）。
+```
+
+Stop. Do NOT touch settings.json.
+
+#### Branch B — profile != "default"
+
+The MCP server won't pick up the new profile until
+`pluginConfigs["redshift-comment-mcp@redshift-comment-mcp"].options.profile`
+is set to `<NAME>` in `~/.claude/settings.json`. Offer to do it.
+
+**1. Read current settings (and bail out if it has comments).**
+
+```bash
+uv run --project "$PLUGIN_ROOT" python <<'PYEOF'
+import json, pathlib, sys
+p = pathlib.Path.home() / ".claude" / "settings.json"
+if not p.exists():
+    print("MISSING")
+    sys.exit(0)
+raw = p.read_text()
+try:
+    json.loads(raw)
+    print("PARSEABLE")
+except json.JSONDecodeError as e:
+    print(f"COMMENTS_OR_INVALID: {e}")
+PYEOF
+```
+
+If output starts with `COMMENTS_OR_INVALID`, skip to step 4 (manual
+fallback) — we will not silently strip comments from the user's config.
+
+**2. Compute & show the proposed diff.**
+
+```bash
+uv run --project "$PLUGIN_ROOT" python <<'PYEOF'
+import json, pathlib
+p = pathlib.Path.home() / ".claude" / "settings.json"
+data = json.loads(p.read_text()) if p.exists() else {}
+pc = data.setdefault("pluginConfigs", {})
+existing = pc.get("redshift-comment-mcp@redshift-comment-mcp", {}) \
+             .get("options", {}).get("profile")
+print(f"BEFORE: pluginConfigs[...].options.profile = {existing!r}")
+print(f"AFTER : pluginConfigs[...].options.profile = '<NAME>'")
+PYEOF
+```
+
+Show that two-line BEFORE/AFTER to the user. Ask one question
+(translate prose to chat language):
+
+> 我幫你把 `~/.claude/settings.json` 的 `pluginConfigs["redshift-comment-mcp@redshift-comment-mcp"].options.profile` 寫成 `<NAME>` 好嗎？(yes/no)
+
+**3. On "yes", write the file.**
+
+```bash
+uv run --project "$PLUGIN_ROOT" python <<'PYEOF'
+import json, pathlib
+p = pathlib.Path.home() / ".claude" / "settings.json"
+data = json.loads(p.read_text()) if p.exists() else {}
+data.setdefault("pluginConfigs", {}) \
+    .setdefault("redshift-comment-mcp@redshift-comment-mcp", {}) \
+    .setdefault("options", {})["profile"] = "<NAME>"
+p.parent.mkdir(parents=True, exist_ok=True)
+p.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n")
+print("✓ settings.json updated")
+PYEOF
+```
+
+Then print:
+
+```
+下一步：重啟 Claude Code，MCP server 會用 <NAME> profile 連線。
+```
+
+**4. On "no" (or the comments fallback), print manual instructions:**
+
+```
+請手動編輯 ~/.claude/settings.json，加上或修改：
+
+  "pluginConfigs": {
+    "redshift-comment-mcp@redshift-comment-mcp": {
+      "options": { "profile": "<NAME>" }
+    }
+  }
+
+完成後重啟 Claude Code。
+```
+
+(Translate prose. Keep the JSON snippet, CLI commands, and the
+`pluginConfigs[...]` key verbatim.)
 
 ## Multi-cluster Pattern
 
-If the user wants to set up a second cluster, they invoke `/redshift-setup`
-again and pick a different profile name. Each profile is independent:
-separate `[profile.<name>]` block in config.toml, separate keychain entry.
+To add a second cluster, the user invokes the skill with a name argument:
 
-To switch which profile the MCP server uses, they edit the
-`pluginConfigs[…].options.profile` value in `~/.claude/settings.json`
-and restart Claude Code. Or install the plugin in different scopes
-(user / project / local) with different profiles.
+```
+/redshift-comment-mcp:redshift-setup ichef-prod
+```
+
+Each profile is independent: separate `[profile.<name>]` block in
+config.toml, separate keychain entry. The skill auto-writes
+`pluginConfigs[…].options.profile = "<name>"` in `~/.claude/settings.json`
+in Step 6 — the user does not edit JSON by hand.
+
+To switch BETWEEN already-configured profiles without re-running setup,
+the user edits the `pluginConfigs[…].options.profile` value directly
+and restarts Claude Code. (Or installs the plugin in different scopes —
+user / project / local — with different profiles.)
 
 ## Safety Notes
 
