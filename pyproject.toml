@@ -21,7 +21,9 @@ dependencies = [
     "awswrangler[redshift]",
     "redshift-connector",
     "pandas",
-    "fastmcp",
+    # fastmcp 在 2.x → 3.x 之間搬動了 list_tools API；測試 helper 已雙路 fallback，
+    # 這裡的最低版本只是避開更舊、API 完全不同的版本。
+    "fastmcp>=2.11.0",
     "keyring>=24",
     "tomli>=2; python_version < '3.11'",
     "tomli-w>=1",
@@ -31,6 +33,7 @@ dependencies = [
 dev = [
     "pytest",
     "pytest-mock",
+    "pytest-cov",
 ]
 
 [project.urls]

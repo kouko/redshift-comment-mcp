@@ -2,19 +2,26 @@ import pytest
 import pandas as pd
 from unittest.mock import MagicMock, patch, Mock
 from contextlib import contextmanager
-from redshift_comment_mcp.redshift_tools import RedshiftTools, paginate_results, DEFAULT_MAX_ITEMS
+from redshift_comment_mcp.redshift_tools import (
+    RedshiftTools,
+    paginate_results,
+    DEFAULT_MAX_ITEMS,
+    validate_read_only_sql,
+)
 from redshift_comment_mcp.connection import RedshiftConnectionConfig
 
 def _get_tool_fn(tools, name):
-    """Pull a registered tool's callable via FastMCP's public list_tools() API.
+    """Pull a registered tool's callable, surviving FastMCP API churn.
 
-    The pre-3.0 path (`tools.mcp._tool_manager._tools.values()`) was a private
-    attribute that FastMCP 3.x removed. We use the public ``list_tools()``
-    method instead; ``tool.fn`` is a public attribute on the ``FunctionTool``
-    object FastMCP returns.
+    FastMCP renamed / re-scoped the tool listing API across 2.x → 3.x:
+    - 2.x exposes only the private coroutine ``_list_tools``
+    - 3.x exposes a public coroutine ``list_tools``
+    Try the public name first, fall back to the private one. ``tool.fn`` is
+    stable across both lines.
     """
     import asyncio
-    for t in asyncio.run(tools.mcp.list_tools()):
+    lister = getattr(tools.mcp, 'list_tools', None) or tools.mcp._list_tools
+    for t in asyncio.run(lister()):
         if t.name == name:
             return t.fn
     raise KeyError(f"tool {name!r} not registered")
@@ -871,6 +878,67 @@ class TestExecuteSQL:
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         with pytest.raises(ValueError, match=keyword):
             execute_sql(sql_statement=sql)
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_execute_sql_with_bom_prefix_passes(self, mock_read_sql, mock_config):
+        """BOM 等不可見字元在 SQL 前不應誤觸 startswith 檢查。"""
+        config, _ = mock_config
+        mock_read_sql.return_value = pd.DataFrame({'x': [1]})
+        tools = RedshiftTools(config)
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
+        # 各種會出現在傳輸層或編輯器複製的不可見前綴
+        for prefix in ('﻿', '​', ' ', '⁠'):
+            result = execute_sql(sql_statement=prefix + 'WITH cte AS (SELECT 1 x) SELECT * FROM cte')
+            assert result["total_count"] == 1
+
+
+class TestValidateReadOnlySQL:
+    """直接測試 validate_read_only_sql 純函式（不繞 MCP/連線）。"""
+
+    @pytest.mark.parametrize("sql", [
+        "SELECT 1",
+        "  select 1  ",
+        "WITH cte AS (SELECT 1 x) SELECT * FROM cte",
+        "with cte as (select 1) select * from cte",
+        "﻿SELECT 1",
+        "​ WITH cte AS (SELECT 1 x) SELECT * FROM cte",
+        # 字串/註解內含禁字 — 不應誤殺
+        "SELECT * FROM users WHERE name = 'DELETE me'",
+        "SELECT col1 -- DROP TABLE old, kept for archaeology\nFROM t",
+        "SELECT col1 /* could DROP this column later */ FROM t",
+        "SELECT 'INSERT INTO logs VALUES (1)' AS note FROM dual",
+        # quoted identifier 用禁字當欄名
+        'SELECT "DELETE" FROM "DROP"',
+        # 使用者實際失敗的那支結構
+        "WITH dev AS (SELECT 1 a), prod AS (SELECT 1 a), j AS "
+        "(SELECT dev.a FROM dev JOIN prod ON dev.a = prod.a) "
+        "SELECT * FROM j ORDER BY a",
+    ])
+    def test_valid_queries_pass(self, sql):
+        validate_read_only_sql(sql)  # should not raise
+
+    @pytest.mark.parametrize("sql,expected_msg", [
+        ("", "Empty"),
+        ("   \n\t  ", "Empty"),
+        ("﻿​   ", "Empty"),
+        ("SHOW TABLES", "Only SELECT and WITH"),
+        ("EXPLAIN SELECT * FROM t", "Only SELECT and WITH"),
+        ("DROP TABLE t", "Only SELECT and WITH"),
+        ("SELECT * FROM t; DROP TABLE t", "DROP"),
+        ("SELECT 1; DELETE FROM t WHERE 1=1", "DELETE"),
+        ("WITH x AS (SELECT 1) SELECT 1; INSERT INTO t VALUES (1)", "INSERT"),
+        ("SELECT 1; UPDATE t SET a=1", "UPDATE"),
+        ("SELECT 1; ALTER TABLE t ADD COLUMN c int", "ALTER"),
+        ("SELECT 1; CREATE TABLE t (a int)", "CREATE"),
+        ("SELECT 1; TRUNCATE TABLE t", "TRUNCATE"),
+        # 未終結的字串應視為語法錯誤 — 不可被當成繞牆通道
+        ("SELECT 'unterminated; DROP TABLE users", "Unterminated string"),
+        ("SELECT col /* dangling block comment", "Unterminated block comment"),
+        ('SELECT "open identifier', "Unterminated quoted identifier"),
+    ])
+    def test_invalid_queries_raise(self, sql, expected_msg):
+        with pytest.raises(ValueError, match=expected_msg):
+            validate_read_only_sql(sql)
 
 
 # ========== 錯誤處理測試 ==========
