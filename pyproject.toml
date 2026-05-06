@@ -42,5 +42,9 @@ dev = [
 redshift-comment-mcp = "redshift_comment_mcp.server:main"
 
 # setuptools-scm 自動版本管理
+# fallback_version: 給沒有 .git 的安裝路徑（例如 Claude Code plugin cache、
+# sdist tarball、Docker build context）一個確定的版本號。發新版時請與
+# .claude-plugin/plugin.json 的 "version" 欄位一同更新。
 [tool.setuptools_scm]
 write_to = "src/redshift_comment_mcp/_version.py"
+fallback_version = "0.2.1"
