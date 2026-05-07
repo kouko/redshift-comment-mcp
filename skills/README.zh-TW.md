@@ -32,7 +32,7 @@ truth 的東西。每支 skill 不是組合既有的 `list_*` / `search_*` /
 | [redshift-setup](redshift-setup/) | 對話式逐步設定連線 profile（host / port / user / dbname / password）。 | v0.2.0 |
 | [redshift-profile](redshift-profile/) | 一回合內回出欄位的 cardinality / top-N / null 比例 / min-max / 既有註解。 | v0.3.0 |
 | [redshift-suggest-schema-yml](redshift-suggest-schema-yml/) | 草擬可貼上的 dbt v2 `models:` 區塊，附保守的測試建議（not_null / unique / accepted_values）。 | v0.3.0 |
-| [redshift-cache-schema](redshift-cache-schema/) | 把 cluster 結構 dump 成 markdown 到 `~/.cache/redshift-comment-mcp/<profile>/`，方便離線瀏覽。是 cache，不是 wiki。 | v0.3.0 |
+| [redshift-cache-schema](redshift-cache-schema/) | LLM 內部 cache：把 cluster 結構寫到本地檔，讓其他 skill 用 Read 解析 metadata 而不是每次打 MCP。被 `/redshift-explore`、`/redshift-profile`、以及 server 層級的 CACHE PROTOCOL 讀取。 | v0.3.0 |
 | [redshift-erd](redshift-erd/) | 產出三層 FK 推論（pg_constraint → dbt manifest → 命名啟發式）的 Mermaid erDiagram，每條邊都標 confidence。 | v0.3.0 |
 | [redshift-explore](redshift-explore/) | 三步 wizard（schema → table → column）。使用者**讀註解**來挑選，不用記名字。 | v0.3.0 |
 | [redshift-lineage-from-stl](redshift-lineage-from-stl/) | 挖 `STL_QUERY` / `SYS_QUERY_HISTORY` + 用 sqlglot 解析 SQL，從查詢歷史還原**實際**的 table 對 table 資料流。 | v0.3.0 |
