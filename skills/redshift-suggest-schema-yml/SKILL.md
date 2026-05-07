@@ -1,20 +1,14 @@
 ---
 name: redshift-suggest-schema-yml
 description: >-
-  Draft a dbt schema.yml v2 `models:` block for a Redshift table:
-  description from existing comments, data_type, and conservative test
-  suggestions (not_null / unique / accepted_values) inferred from a
-  profile run. Composes /redshift-profile per column. Outputs paste-ready
-  YAML + per-column rationale; never writes to disk. Use when user
-  invokes /redshift-suggest-schema-yml, or says: "draft schema.yml",
-  "generate dbt yml", "suggest dbt tests", "schema.yml for X", "dbt
-  model spec", "accepted_values for", "推薦 dbt 測試", "幫我寫 schema.yml",
-  "產生 dbt yml", "schema.yml 草稿", "dbt 欄位測試建議", "dbt スキーマ
-  提案", "schema.yml の下書き", "受入値テスト". Do NOT use for: writing
-  YAML to disk (chat only — user pastes), merging into existing
-  schema.yml (drafts only), foreign-key relationships (no FK info from
-  MCP), profiling alone (use /redshift-profile), or sources: blocks
-  (out of scope for this skill — only models: blocks supported).
+  Draft a dbt schema.yml v2 `models:` block for a Redshift table with
+  conservative test suggestions (not_null / unique / accepted_values)
+  inferred from a profile run. Read-only. Use when about to write
+  schema.yml from scratch or backfill tests on an existing table. Do
+  NOT use for writing YAML to disk (chat-only by charter), profiling
+  alone (use /redshift-profile), or sources: blocks (models: only).
+  Triggers: /redshift-suggest-schema-yml / draft schema.yml / dbt yml
+  / dbt tests / dbt スキーマ提案 / 受入値テスト.
 ---
 
 # Redshift → dbt schema.yml Draft
@@ -117,6 +111,14 @@ Plus rationale table (chat):
 ```
 End with: "Drafted N columns — M with full tests, K TODO desc, P unsupported. Review before merging."
 
+## Anti-patterns
+
+- NEVER suggest a test current data violates — `not_null` only when `null_count == 0`; use commented-out form for `0 < null_pct < 1%`. False-positive tests erode trust in the whole `schema.yml`.
+- NEVER write to disk — chat-only by charter. The user pastes; in-place merging into existing `schema.yml` is out of scope.
+- NEVER suggest `accepted_values` for high-cardinality strings — `cardinality_class` must be `"low"` AND `distinct ≤ 20`. Otherwise the test churns on every new row.
+- NEVER skip the per-column rationale table — without it the user can't audit why each test landed and which to drop.
+- NEVER infer `relationships:` tests — no FK info from MCP; that's `/redshift-erd` territory.
+
 ## Errors
 | Condition | `_error` |
 |---|---|
@@ -126,3 +128,11 @@ End with: "Drafted N columns — M with full tests, K TODO desc, P unsupported. 
 | Every column failed | `profile_failed_for_all_columns` |
 
 Per-column failures degrade gracefully — partial output beats no output.
+
+## See also
+
+| Need | Use |
+|---|---|
+| Profile a column to feed this skill | `/redshift-profile` |
+| Relationship inference (deliberately excluded here) | `/redshift-erd` |
+| Find tables to draft yml for | `/redshift-explore` |

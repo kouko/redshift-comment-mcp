@@ -1,22 +1,14 @@
 ---
 name: redshift-lineage-from-stl
 description: >-
-  Mine Redshift's STL_QUERY (provisioned) or SYS_QUERY_HISTORY
-  (serverless) + sqlglot SQL parsing to reconstruct ACTUAL table-to-table
-  data flow from query history — catching ad-hoc, BI-tool (Tableau /
-  Looker), and manual-fix usage that dbt manifest cannot see. Outputs
-  adjacency table + optional Mermaid graph with usage frequency, top
-  users, time range. Ships a sqlglot helper script (SQL parsing is
-  LLM-unreliable). Read-only. Use when user invokes
-  /redshift-lineage-from-stl, or says: "actual lineage", "who reads
-  this table", "real query history", "STL lineage", "ad-hoc usage of",
-  "Tableau usage of", "find consumers of", "實際 lineage", "誰在讀這
-  table", "看 query 歷史", "從 STL 查使用情況", "STL_QUERY から",
-  "実際の利用状況", "クエリ履歴から系譜", "誰が読んでいる". Do NOT
-  use for: dbt-internal lineage (use dbt-wiki / dbt docs), declared
-  FKs (use /redshift-erd), questions older than STL retention (~2-5
-  days on provisioned), permission-restricted accounts (STL needs
-  admin or specific GRANTs), real-time monitoring (this is batch).
+  Reconstruct ACTUAL table-to-table data flow from Redshift query
+  history — catches ad-hoc, BI-tool (Tableau / Looker), and manual-fix
+  usage dbt manifest cannot see. Read-only. Use when auditing who
+  reads / writes a table, or before deprecating one. Do NOT use for
+  dbt-internal lineage (use dbt manifest), declared FKs (use
+  /redshift-erd), or real-time monitoring. Triggers:
+  /redshift-lineage-from-stl / actual lineage / who reads / Tableau
+  usage / 實際 lineage / 誰在讀 / クエリ履歴.
 ---
 
 # Redshift Lineage from STL_QUERY
@@ -116,6 +108,14 @@ Footer: "Mined N queries from <since> to <now>. Found M edges across
 K tables. P parse errors. Earliest STL row: <ts> (warn if `--since`
 exceeds retention)."
 
+## Anti-patterns
+
+- NEVER parse SQL with regex — multi-statement SQL, CTEs, comments, and quoted identifiers all break naive matching. Use the bundled `sqlglot` helper script.
+- NEVER trust results past STL retention (~2-5 days provisioned) without warning — older rows silently disappear, biasing edge counts and "last seen" timestamps.
+- NEVER mix `STL_QUERY` (provisioned) and `SYS_QUERY_HISTORY` (serverless) in one report — different schemas; pick one based on `version()` detection.
+- NEVER omit the truncated-SQL warning when `LISTAGG` hits `VARCHAR(65535)` — partial parses produce phantom edges. Surface the truncation visibly.
+- NEVER hide `parse_errors` — list them verbatim so the user can audit what was missed and decide whether the result is trustworthy.
+
 ## Errors
 | Condition | Behavior |
 |---|---|
@@ -126,3 +126,11 @@ exceeds retention)."
 | `uv` not available | `_error: uv_unavailable` |
 | Zero queries in window | not error — render empty + hint widen window |
 | > 50% queries failed parse | warn loudly, proceed with what parsed |
+
+## See also
+
+| Need | Use |
+|---|---|
+| Declared (catalog) lineage — complement, not substitute | `/redshift-erd` |
+| Structure cache only (this skill mines runtime) | `/redshift-cache-schema` |
+| dbt internal model lineage | dbt manifest / dbt docs |
