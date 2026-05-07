@@ -36,7 +36,7 @@
 | [redshift-setup](redshift-setup/) | 接続プロファイル（host / port / user / dbname / password）を対話的に設定するウォークスルー。 | v0.2.0 |
 | [redshift-profile](redshift-profile/) | 1 回のチャットで、カラムの cardinality / top-N / null 率 / min-max / 既存コメントを返すプロファイラ。 | v0.3.0 |
 | [redshift-suggest-schema-yml](redshift-suggest-schema-yml/) | 保守的なテスト提案（not_null / unique / accepted_values）入りの、貼り付けるだけの dbt v2 `models:` ブロックを下書き。 | v0.3.0 |
-| [redshift-cache-schema](redshift-cache-schema/) | クラスタ構造を `~/.cache/redshift-comment-mcp/<profile>/` に markdown でダンプし、オフライン参照可能に。Wiki ではなく Cache。 | v0.3.0 |
+| [redshift-cache-schema](redshift-cache-schema/) | LLM 内部キャッシュ: クラスタ構造をローカルファイルにダンプし、他のスキルが MCP 往復ではなく Read で解決できるように。`/redshift-explore`、`/redshift-profile`、サーバーレベルの CACHE PROTOCOL から読まれる。 | v0.3.0 |
 | [redshift-erd](redshift-erd/) | 三段階の FK 推定（pg_constraint → dbt manifest → 命名ヒューリスティック）と信頼度ラベル付きの Mermaid erDiagram を生成。 | v0.3.0 |
 | [redshift-explore](redshift-explore/) | 三段ウィザード（schema → table → column）。ユーザーは名前を覚えるのではなく、コメントを読んで選びます。 | v0.3.0 |
 | [redshift-lineage-from-stl](redshift-lineage-from-stl/) | `STL_QUERY` / `SYS_QUERY_HISTORY` を採掘 + sqlglot で SQL を解析して、クエリ履歴から **実際の** テーブル間データフローを再構築。 | v0.3.0 |

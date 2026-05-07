@@ -6,24 +6,27 @@
 
 `redshift-cache-schema` walks the Redshift catalog through the read-only
 `redshift-comment-mcp` server and writes the cluster structure — schemas,
-tables, columns, and their comments — as markdown files under
-`~/.cache/redshift-comment-mcp/<profile>/`. The skill is idempotent: rerun
-it and the same inputs produce the same files.
+tables, columns, and their comments — as files under
+`~/.cache/redshift-comment-mcp/<profile>/`. It's idempotent: rerun it and
+the same inputs produce the same files.
 
-**Cache, not wiki.** Every file is 100% rebuildable from the live database.
-Do not hand-edit them; do not add a `# Notes` section; do not treat them as
-a knowledge base. Edits will be silently overwritten on the next run.
-Synthesis, stale tracking, and curated prose belong in a separate plugin.
-If you reach for this skill expecting a wiki, you will misuse it — pick a
-docs tool instead.
+**LLM-internal cache, not user-facing docs.** The files are designed to
+be read by other skills (`/redshift-explore`, `/redshift-profile`) and
+the MCP server's CACHE PROTOCOL — not by humans browsing in an editor.
+Comments are preserved verbatim (including multi-line markdown), but
+the layout is optimized for LLM grep + Read, not for visual reading.
 
 ## When to use
 
-- **Offline browsing** — read schema and column comments on a plane, in a
-  meeting room, or anywhere the cluster is unreachable.
-- **Flaky VPN** — avoid re-issuing MCP queries every time the tunnel drops.
-- **Onboarding handoff** — point a new analyst at a checked-in directory
-  instead of asking them to learn MCP first.
+Run this once before a heavy analysis session on a stable schema. With
+the cache populated, subsequent skill invocations resolve metadata via
+a local Read instead of round-tripping to MCP — saves tokens and shaves
+~100-1000 ms off each metadata lookup.
+
+When the cache goes stale (default TTL is 168 hours = 1 week), consumers
+fall back to live MCP automatically and emit a `[cache]` chat hint
+suggesting `/redshift-cache-schema --refresh`. For fast-mutating
+schemas, use `--ttl 24` to shorten the trust window.
 
 ## Example invocation
 
@@ -31,19 +34,21 @@ docs tool instead.
 /redshift-cache-schema --scope dbt_marts,dbt_staging --dry-run
 ```
 
-`--scope` limits the walk to listed schemas. `--dry-run` enumerates files
-that *would* be written and writes nothing — preview before committing
-disk.
+`--scope` limits the walk to the listed schemas; `--dry-run` enumerates
+files that *would* be written without writing anything. Other flags:
+`--tables <s>.<t>[,...]` for specific tables, `--ttl <hours>` to
+override the freshness window.
 
 ## Cache layout
 
 ```
 ~/.cache/redshift-comment-mcp/<profile>/
-├── index.md
-├── schemas/<schema>.md
-├── tables/<schema>__<table>.md
-└── _orphans/<date>/...
+├── _meta.json                # freshness gate (refreshed_at, ttl_hours, complete)
+├── _tables_index.tsv         # schema\ttable\tsummary (1 row per table; for grep)
+├── _columns_index.tsv        # schema\ttable\tcolumn\ttype\tsummary (for grep)
+└── tables/
+    └── <schema>__<table>.md  # full per-table spec (multi-line markdown comments preserved)
 ```
 
-See [SKILL.md](./SKILL.md) for the full contract, error table, and orphan
-handling rules.
+See [SKILL.md](./SKILL.md) for the file format spec, freshness contract,
+error table, and orphan handling rules.

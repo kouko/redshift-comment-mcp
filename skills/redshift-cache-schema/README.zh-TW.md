@@ -5,22 +5,26 @@
 ## 功能說明
 
 `redshift-cache-schema` 透過唯讀的 `redshift-comment-mcp` server 走訪
-Redshift catalog，把叢集結構（schema／table／column／comment）寫成
-markdown，放在 `~/.cache/redshift-comment-mcp/<profile>/` 之下。
-具備冪等性 — 相同輸入重複執行會產出相同檔案。
+Redshift catalog，把叢集結構（schema／table／column／comment）寫進
+`~/.cache/redshift-comment-mcp/<profile>/` 之下。具備冪等性 — 相同
+輸入重複執行會產出相同檔案。
 
-**這是 cache，不是 wiki。** 所有檔案都能 100% 從 live DB 重建。請勿
-手動修改、請勿新增 `# 備註` 段落、請勿當成知識庫使用。手寫內容會在
-下次執行時被靜默覆蓋。摘要、stale 追蹤、人工撰寫的說明都不在本 skill
-的職責範圍，那是另一個 plugin 該做的事。如果你把它當 wiki 用，就會用
-錯 — 請改選文件工具。
+**這是 LLM 內部 cache，不是給使用者看的文件。** 檔案設計給其他
+skill（`/redshift-explore`、`/redshift-profile`）以及 MCP server 的
+CACHE PROTOCOL 讀取使用，不是給人類用編輯器瀏覽的。註解（含多行
+markdown）會原樣保留，但檔案配置是為了 LLM grep + Read 最佳化，
+不是為了視覺閱讀好看。
 
 ## 使用時機
 
-- **離線瀏覽** — 在飛機上、會議室、或任何連不到叢集的地方，仍能查閱
-  schema 與欄位 comment。
-- **VPN 不穩** — 避免每次 tunnel 斷線就要重新打 MCP query。
-- **新人交接** — 直接交付一份已 commit 的目錄，不必先教 MCP。
+在穩定 schema 上開始繁重分析任務之前先跑一次。Cache 存在後，後續
+skill 呼叫可以用本地 Read 解析 metadata，不必每次都打 MCP — 節省
+tokens、每次 metadata 查詢省 ~100-1000 ms latency。
+
+Cache 過期時（預設 TTL 168 小時 = 一週）消費端 skill 會自動 fallback
+到 live MCP，並印一行 `[cache]` 提示建議跑
+`/redshift-cache-schema --refresh`。schema 變動頻繁的環境可用
+`--ttl 24` 縮短信任窗口。
 
 ## 執行範例
 
@@ -28,17 +32,20 @@ markdown，放在 `~/.cache/redshift-comment-mcp/<profile>/` 之下。
 /redshift-cache-schema --scope dbt_marts,dbt_staging --dry-run
 ```
 
-`--scope` 將走訪範圍限制在指定的 schema。`--dry-run` 只列出將要寫入
-的檔名，不實際寫磁碟 — 正式執行前可先預覽。
+`--scope` 將走訪範圍限制在指定的 schema；`--dry-run` 只列出將要寫入
+的檔名，不實際寫磁碟。其他旗標：`--tables <s>.<t>[,...]` 只快取特定
+表，`--ttl <hours>` 覆寫鮮度窗口。
 
 ## Cache 目錄結構
 
 ```
 ~/.cache/redshift-comment-mcp/<profile>/
-├── index.md
-├── schemas/<schema>.md
-├── tables/<schema>__<table>.md
-└── _orphans/<date>/...
+├── _meta.json                # 鮮度 gate (refreshed_at, ttl_hours, complete)
+├── _tables_index.tsv         # schema\ttable\tsummary（一行一表，給 grep 用）
+├── _columns_index.tsv        # schema\ttable\tcolumn\ttype\tsummary（給 grep 用）
+└── tables/
+    └── <schema>__<table>.md  # 單表完整 spec（多行 markdown 註解原樣保留）
 ```
 
-完整契約、錯誤對照表、孤兒檔處理規則請見 [SKILL.md](./SKILL.md)。
+完整檔案格式規範、鮮度契約、錯誤對照表、孤兒檔處理規則請見
+[SKILL.md](./SKILL.md)。

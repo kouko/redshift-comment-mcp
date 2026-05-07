@@ -237,6 +237,14 @@ conversation language — comments usually match.
 
 For ad-hoc exploration, prefer list_* / search_* tools over execute_sql
 against information_schema — they include comments directly.
+
+CACHE PROTOCOL: Before list_* / search_* / get_*_comment, check
+~/.cache/redshift-comment-mcp/<profile>/_meta.json. If it exists,
+complete=true, and (now - refreshed_at) < ttl_hours, prefer Reading
+cache files: tables/<schema>__<table>.md for column detail, Bash grep
+on _tables_index.tsv / _columns_index.tsv for keyword search. Cache
+miss / stale / complete=false → fall back to MCP and emit one [cache]
+line suggesting /redshift-cache-schema --refresh.
 """
         )
         self._setup_tools()
