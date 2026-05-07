@@ -1,31 +1,30 @@
 ---
 name: redshift-cache-schema
 description: >-
-  Dump Redshift cluster structure to local markdown for offline
-  browsing. Read-only, idempotent. Use when user wants the schema
-  cached locally (flaky VPN, onboarding handoff, offline audit).
-  Do NOT use for hand-edited docs (use a wiki plugin), row-data
-  export, or one-off questions (use list_* directly). Triggers:
-  /redshift-cache-schema / cache schema / dump structure / 結構快取
-  / 離線瀏覽 / オフライン参照.
+  LLM-side metadata cache. Dumps schema / table / column structure
+  with comments to local files for use by /redshift-explore,
+  /redshift-profile, and MCP CACHE PROTOCOL — read on cache hit, live
+  MCP on miss. Read-only, idempotent. Use when user wants to prime /
+  refresh the cache before a heavy analysis session on a stable
+  schema. Do NOT use for: human-readable docs, row-data export,
+  fast-mutating schemas (use --ttl 24h or skip). Triggers:
+  /redshift-cache-schema / prime cache / refresh schema cache /
+  快取結構 / メタデータキャッシュ.
 ---
 
 # Redshift Schema Cache
 
-Walks the Redshift catalog and writes structure to
-`~/.cache/redshift-comment-mcp/<profile>/` as markdown. Read-only DB
-access; output is on disk for offline browsing by humans / external
-tools.
+Walks the Redshift catalog and writes structure as files under
+`~/.cache/redshift-comment-mcp/<profile>/` for **LLM consumption** —
+read back by `/redshift-explore`, `/redshift-profile`, and the MCP
+server's CACHE PROTOCOL when fresh; fall back to MCP otherwise.
 
-**Cache, not wiki.** Files are 100% rebuildable; no hand edits assumed;
-synthesis / stale tracking belongs in a separate plugin. If you're
-tempted to add `# Notes` sections people will edit, stop — that's a
-different product.
+**Internal cache, not docs.** Files are 100% rebuildable; no human
+audience; no synthesis. Format optimized for LLM grep + Read.
 
 ## When to use / NOT
-- Use for offline browsing on flaky network / VPN, or onboarding handoff.
-- NOT for one-off questions (just call list_*); NOT for hand-curated
-  docs; NOT for clusters with > 50 schemas without `--scope`.
+- Use to prime / refresh before a heavy analysis session.
+- NOT for hand-edited docs; NOT for row-data export; NOT for fast-mutating schemas (use `--ttl 24h` or skip).
 
 ## Inputs
 | Form | Behavior |
@@ -33,92 +32,158 @@ different product.
 | (none) | full cache (refused if > 50 schemas) |
 | `--scope <s>[,<s>...]` | subset of schemas |
 | `--tables <s>.<t>[,...]` | only listed tables |
+| `--ttl <hours>` | override TTL written to `_meta.json` (default 168h = 1 week) |
 | `--dry-run` | enumerate, no writes |
-
-## Flow
-
-1. **Resolve profile name**: from session config, default `default`.
-2. **Enumerate**: `list_schemas(include_comments=true)` → MCP returns
-   `{schemas: [{name, comment}]}`. Filter by `--scope`/`--tables`.
-   Validate; warn on misses, don't abort. Refuse full-cache if > 50.
-3. **Walk**: for each in-scope schema:
-   - `list_tables(schema_name, include_comments=true)` → returns
-     `{tables: [{name, type, comment}]}`. Page through if `has_more`.
-   - Write `schemas/<schema>.md`.
-   - For each in-scope table: `list_columns(...,include_comments=true)`
-     → `{columns: [{name, type, nullable, comment}]}`. Write
-     `tables/<schema>__<table>.md`.
-4. **Index + meta**: regenerate `index.md` (TOC) + `_meta.json`
-   (`{schema_count, table_count, refreshed_at, profile, scope,
-   files_written: [<rel_path>...]}`). `files_written` is the
-   idempotency anchor — Step 5 reads the prior `_meta.json` to
-   compute the orphan set.
-5. **Orphan handling**: only orphan files **falling within the current
-   `--scope` / `--tables` filter that were NOT regenerated this run**
-   (i.e. the table got dropped from the DB or moved out of scope).
-   Files outside the current scope MUST be left untouched — a partial
-   `--scope dbt_marts` re-cache must NEVER move `dbt_staging/*` files
-   to `_orphans/`. Tracking: read previous-run filenames from
-   `_meta.json.files_written` (regenerated each run); diff against
-   this-run set, intersected with current scope. Move orphans to
-   `_orphans/<refreshed_at>/`. Never auto-prune `_orphans/`.
 
 ## Layout
 ```
 ~/.cache/redshift-comment-mcp/<profile>/
-├── index.md                       # TOC
-├── _meta.json                     # { refreshed_at, counts, profile }
-├── schemas/<schema>.md            # schema card + table list
-├── tables/<schema>__<table>.md    # column list
-└── _orphans/<date>/...            # files no longer in scope
+├── _meta.json                # freshness gate; consumers Read this first
+├── _tables_index.tsv         # schema\ttable\tsummary  (1 line per table, lossy)
+├── _columns_index.tsv        # schema\ttable\tcol\ttype\tsummary  (1 line per col)
+└── tables/
+    └── <schema>__<table>.md  # full markdown spec; multi-line markdown comments preserved verbatim
 ```
 
 Filenames lowercased; `__` separator handles `_` in identifiers.
 Identifiers in *file content* preserve original case.
 
-## File templates
+## File formats
 
-`tables/<schema>__<table>.md`:
+### `_meta.json` (freshness gate)
+```json
+{
+  "profile": "ichef-prod",
+  "refreshed_at": "2026-05-07T10:00:00Z",
+  "ttl_hours": 168,
+  "complete": true,
+  "schema_count": 8,
+  "table_count": 142,
+  "column_count": 3041,
+  "scope": ["dbt_marts", "dbt_staging"]
+}
+```
+Consumers must check **all three**: file exists, `complete: true`, and `(now - refreshed_at) < ttl_hours`. Any miss → fall back to MCP. `complete: false` is set at run start and only flipped to `true` at the end of a successful run.
+
+### `_tables_index.tsv` (cross-cluster table search)
+```
+schema	table	summary
+dbt_marts	fct_orders	Central order facts table for the e-commerce funnel.
+dbt_marts	dim_users	User dimension.
+dbt_staging	stg_orders	Staging layer for orders, one row per raw event.
+```
+Header row IS present (line 1: `schema\ttable\tsummary`). `summary` rule applied to the table comment:
+1. Take first line (split on `\n`)
+2. Replace embedded `\t` with single space
+3. Truncate to 100 chars
+4. Empty / null comment → `(no comment)`
+
+Lossy by design — agent grep this for candidates, then Read `tables/<schema>__<table>.md` for full content.
+
+### `_columns_index.tsv` (cross-cluster column search)
+```
+schema	table	column	type	summary
+dbt_marts	fct_orders	order_id	bigint	Unique order identifier.
+dbt_marts	fct_orders	status	varchar(32)	Order lifecycle state. Possible values:
+dbt_marts	fct_orders	revenue_twd	numeric(18,2)	Order revenue in TWD.
+```
+Same `summary` rule. Multi-line comments end with the first line truncated — the trailing `:` (as in `Possible values:`) is the natural cue for the agent to Read the per-table file for full detail.
+
+`type` preserves Redshift native form including precision (`numeric(18,2)`, `varchar(32)`); no conversion.
+
+### `tables/<schema>__<table>.md` (full per-table spec)
 ```markdown
-# `<schema>.<table>`
+# dbt_marts.fct_orders
+refreshed: 2026-05-07T10:00:00Z
 
-> <table comment, or "(no comment)">
+## Table comment
 
-Refreshed: 2026-05-03T12:34:56Z
+Central order facts table for the e-commerce funnel.
+
+### Granularity
+
+One row per `order_id`.
+
+### Key relationships
+
+- `user_id` → `dim_users.user_id`
+- `product_id` → `dim_products.product_id`
 
 ## Columns (12)
-| # | name | type | nullable | comment |
-|---|---|---|---|---|
-| 1 | order_id | bigint | NO | Unique order identifier |
+
+### `order_id` (bigint, NOT NULL)
+
+Unique order identifier.
+
+### `status` (varchar(32), NOT NULL)
+
+Order lifecycle state. Possible values:
+
+- `active`: payment confirmed, fulfillment pending
+- `cancelled`: cancelled by user or system
+- `pending`: payment in progress
+- `refunded`: cancelled after payment
+
+### `revenue_twd` (numeric(18,2))
+
+Order revenue in TWD.
+
+**Important**: NULL when:
+- order cancelled before payment
+- payment in escrow
+
+For total revenue, use `coalesce(revenue_twd, 0)`.
 ```
 
-`nullable` is the raw `"YES"`/`"NO"` string from MCP — do not convert.
-No row counts / samples in cache files — structure only by design.
+Conventions:
+- Column heading is `` ### `colname` (type, nullable) `` — backticks around `colname`, parenthetical `(type[, NOT NULL])`. Pattern `^### \`` is unique to column boundaries; agents can grep on it.
+- `nullable` shown only when `NO` (rendered as `, NOT NULL`); nullable columns omit it entirely.
+- Empty column comment → `*(no comment)*` placeholder under the column heading. Empty table comment → `*(no table comment)*` under `## Table comment`.
+- Comment markdown is **preserved verbatim** from the DB — including its own headings, lists, code spans, emphasis, links. The LLM reads raw text and disambiguates by context; no escape / safe-render needed.
 
-## Output (chat)
-```
-✓ Cached at ~/.cache/redshift-comment-mcp/<profile>/
-  Schemas: 8 (1 new, 0 removed)   Tables: 142 (3 new, 1 → _orphans/)
-  Refreshed: 2026-05-03T12:34:56Z
-```
-`--dry-run` lists filenames that would be written; no disk writes.
+## Flow
+
+1. **Resolve profile + TTL**: profile from session config (default `default`); TTL from `--ttl` arg → fall back to existing `_meta.json.ttl_hours` → default `168`.
+
+2. **Enumerate**: `list_schemas(include_comments=true)` → MCP returns `{schemas: [{name, comment}]}`. Filter by `--scope` / `--tables`. Validate; warn on misses, don't abort. Refuse full-cache without `--scope` if `> 50` schemas.
+
+3. **Mark in-progress**: write `_meta.json` with `complete: false` and the new `refreshed_at`. Any consumer reading mid-run will treat the cache as stale.
+
+4. **Walk** (read-only DB access):
+   - Per scoped schema: `list_tables(schema_name, include_comments=true)` → `{tables: [{name, type, comment}]}`. Page through `has_more`.
+   - Per scoped table: `list_columns(schema_name, table_name, include_comments=true)` → `{columns: [{name, type, nullable, comment}]}`. Page through.
+   - Build `tables/<schema>__<table>.md` (full spec) and append rows to `_tables_index.tsv` / `_columns_index.tsv` (lossy summary).
+
+5. **Finalize**: rewrite `_meta.json` with `complete: true`, the refreshed timestamp, scope, and counts. Compute orphan set (filenames recorded by the prior run minus this run's filenames, intersected with current scope) and **delete** orphan files — there is no human audience for forensic logs; orphans risk misleading the agent.
+
+   To compute orphans: read the prior `_meta.json` (if any) to get the prior run's scope. If a prior cache file falls under the **current** `--scope` / `--tables` filter and was not written this run, it's an orphan. Files outside current scope MUST be left untouched — a partial `--scope dbt_marts` re-cache must NEVER delete `dbt_staging/*`.
+
+6. **Output to chat**:
+   ```
+   ✓ Cached at ~/.cache/redshift-comment-mcp/<profile>/
+     8 schemas, 142 tables, 3041 columns.   TTL 168h.
+     Refreshed: 2026-05-07T10:00:00Z
+   ```
+
+`--dry-run` lists filenames that would be written; no disk writes; no `_meta.json` mutation.
 
 ## Anti-patterns
 
-- NEVER hand-edit cached files — they're regenerable; next refresh clobbers edits. Use a separate wiki plugin for persistent notes.
-- NEVER auto-prune `_orphans/` — they're the forensic trace when a DB drop happens. Let the user decide removal.
-- NEVER move out-of-scope orphans on partial `--scope` runs — silently corrupts cache for schemas the user did not touch.
-- NEVER convert `nullable` from raw `"YES"`/`"NO"` to bool — downstream tools rely on the raw MCP shape; conversion causes "works for me" bugs.
+- NEVER skip the `complete: false` → `complete: true` transition — partial caches must not be trusted by consumers; the flag is the only signal.
+- NEVER preserve orphan files for forensics — there is no human audience; orphans are stale data that risks misleading the agent. Delete them outright.
+- NEVER convert `nullable` from raw `"YES"` / `"NO"` strings to bool — keep the source-of-truth string consistent with MCP shape that downstream skills already rely on.
 - NEVER cache row data — charter is structure only; a billion-row table would exhaust local disk before the user notices.
+- NEVER inline the full multi-line comment into TSV indices — newlines + tabs break the format. TSV summary is lossy by design (first line, 100 chars); per-table `.md` is the source of truth for full content.
+- NEVER alter the column heading pattern `` ### `colname` (type[, NOT NULL]) `` — consumers grep `^### \`` to enumerate columns; deviating breaks them.
 
 ## Errors
 | Condition | Behavior |
 |---|---|
-| list_schemas empty | `_error: no_schemas_returned` — abort |
-| Per-schema list_tables fails | record skip, continue, footer note |
-| Per-table list_columns fails | record skip, continue, footer note |
-| Filesystem write fails | `_error: write_failed: <path>: <reason>` — abort |
-| Full cache without --scope, > 50 schemas | `_error: scope_too_large` |
+| `list_schemas` empty | `_error: no_schemas_returned` — abort, do not touch `_meta.json` |
+| Per-schema `list_tables` fails | record skip in chat output, continue with other schemas |
+| Per-table `list_columns` fails | record skip, continue |
+| Filesystem write fails | `_error: write_failed: <path>: <reason>` — abort, leave `_meta.json.complete: false` so consumers know cache is broken |
+| Full cache without `--scope`, > 50 schemas | `_error: scope_too_large` |
 
 Cache dir created with `mkdir -p`, mode 700.
 
@@ -126,7 +191,7 @@ Cache dir created with `mkdir -p`, mode 700.
 
 | Need | Use |
 |---|---|
-| Interactive schema walk (lighter than full cache) | `/redshift-explore` |
+| Interactive schema walk (uses this cache when fresh, falls back to MCP) | `/redshift-explore` |
+| Profile a column's values (uses this cache for column metadata) | `/redshift-profile` |
 | Visualize FK relationships | `/redshift-erd` |
-| Turn cached structure into dbt yml drafts | `/redshift-suggest-schema-yml` |
 | Mine actual usage from query history | `/redshift-lineage-from-stl` |

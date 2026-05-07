@@ -32,10 +32,33 @@ lists candidates comment-first so users read and pick.
 
 ## Flow
 
+### Step 0 — cache lookup (decide source for Steps 1-3)
+
+Read `~/.cache/redshift-comment-mcp/<profile>/_meta.json`. If it
+exists with `complete: true` and `(now - refreshed_at) < ttl_hours`,
+set `cache=fresh` and source metadata in the steps below from cache:
+
+- **Step 1** schemas → unique `schema` column of `_tables_index.tsv` (Bash `cut -f1 | sort -u`); comments from the per-table `.md` headers if needed
+- **Step 2** tables in `<schema>` → `grep "^<schema>\t" _tables_index.tsv`
+- **Step 3** columns in `<schema>.<table>` → Read `tables/<schema>__<table>.md` and parse `### \`colname\` (type[, NOT NULL])` blocks
+
+Otherwise (`cache=miss`), use the live MCP calls described in each
+step. On `cache=miss` from a missing / stale `_meta.json`, emit one
+chat line:
+
+```
+[cache] miss / stale — fetching live; rebuild with /redshift-cache-schema --refresh.
+```
+
+For `--keyword` fallback (`search_schemas` / `search_tables` /
+`search_columns`), always use live MCP — TSV indices are lossy
+(first-line summary) and will under-match keyword search.
+
 ### Step 1 — pick a schema
 
-`list_schemas(include_comments=true)` → MCP returns
-`{schemas: [{name, comment}]}`. Render numbered list, comment-first:
+`list_schemas(include_comments=true)` (or cache; see Step 0) →
+returns `{schemas: [{name, comment}]}`. Render numbered list,
+comment-first:
 ```
 Pick a schema:
   1. dbt_marts     — Final marts layer
@@ -51,17 +74,21 @@ re-render via search_schemas. Auto-pick if cluster has only one schema.
 
 ### Step 2 — pick a table
 
-`list_tables(schema_name, include_comments=true)` → MCP returns
-`{tables: [{name, type, comment}]}`. Same render shape. Keyword
-fallback: `search_tables(keywords, schema_name)`. Page through
-`--max-list` at a time if > 50 tables; show "1-10 of 47, reply 'more'".
+`list_tables(schema_name, include_comments=true)` (or cache via
+`grep "^<schema>\t" _tables_index.tsv`) → `{tables: [{name, type,
+comment}]}`. Same render shape. Keyword fallback always uses live
+`search_tables(keywords, schema_name)` (TSV summary is lossy). Page
+through `--max-list` at a time if > 50 tables; show "1-10 of 47,
+reply 'more'".
 
 ### Step 3 — pick a column
 
-`list_columns(schema_name, table_name, include_comments=true)` → MCP
-returns `{columns: [{name, type, nullable, comment}]}`. Render with
-PK-shaped columns first (heuristic: name = `id` or `<table>_id`), then
-commented columns, then rest:
+`list_columns(schema_name, table_name, include_comments=true)` (or
+cache via Read `tables/<schema>__<table>.md` and parse the
+`### \`colname\` (type[, NOT NULL])` blocks) → `{columns: [{name,
+type, nullable, comment}]}`. Render with PK-shaped columns first
+(heuristic: name = `id` or `<table>_id`), then commented columns,
+then rest:
 ```
 You picked dbt_marts.fct_orders. Now pick a column:
   1. order_id      bigint       — Unique order identifier (PK?)
