@@ -1,17 +1,16 @@
 ---
 name: redshift-setup
 description: >-
-  Conversational walkthrough for configuring a Redshift connection profile
-  for the redshift-comment-mcp plugin. Default form `/redshift-setup`
-  asks host / port / user / dbname (4 questions) and stores under the
-  built-in profile name `default`; named form `/redshift-setup <name>`
-  is the multi-cluster path and additionally auto-writes the
-  pluginConfigs profile selection in ~/.claude/settings.json so the
-  user does not have to hand-edit JSON. Password collection is handed
-  off to the user's own terminal (so password never enters Claude
-  conversation history); connection is verified via test-connection.
-  Use when user invokes /redshift-setup or asks to configure / set up
-  a Redshift connection. Redshift 連線設定対話フロー。
+  Configure a Redshift connection profile for the redshift-comment-mcp
+  plugin via chat — password stored in OS keychain via dialog or
+  terminal handoff (never in chat history), connection verified.
+  Named form `/redshift-setup <name>` also writes profile selection
+  to settings.json. Use when setting up first Redshift cluster or
+  adding another. Do NOT use for password-only changes (use
+  set-password CLI), profile deletion (use delete-profile), or
+  non-interactive setup. Triggers: /redshift-setup / set up Redshift
+  / add cluster / 設定 Redshift / 新增 cluster / 接続を設定 /
+  プロファイル.
 ---
 
 # Redshift Setup
@@ -151,94 +150,51 @@ tool stdout, or in any tool result that gets added back to the
 conversation transcript. Empirically verified during dry-run:
 `osascript ... text returned of result` echoed to stdout WILL surface
 the typed value into the Bash tool's response → into the JSONL
-transcript → durable on disk. Choose the right path below to avoid
-that leak.
+transcript → durable on disk. The reference files below contain the
+exact recipes that avoid that leak — follow them verbatim.
 
-**Three paths**, picked by OS detection at runtime:
+#### Step 4.1 — Detect OS
 
-#### Path 4a — macOS desktop: native password dialog (preferred)
-
-Run this Bash one-liner. The dialog appears outside the Claude UI;
-the password lives only in a shell variable inside the subshell
-(never echoed); only `✓ Password stored` reaches Bash stdout.
+Run this decision tree once at runtime to pick exactly ONE path:
 
 ```bash
-PW=$(osascript \
-       -e 'tell application "System Events" to display dialog "Redshift password for profile <NAME>:" default answer "" with hidden answer with title "Redshift MCP Setup" buttons {"Cancel", "Save"} default button "Save"' \
-       -e 'text returned of result' 2>/dev/null) \
-  || { echo "Cancelled by user" >&2; exit 1; }
-uv run --project "$PLUGIN_ROOT" python -c "
-import sys, keyring
-keyring.set_password('redshift-comment-mcp', '<NAME>', sys.stdin.read().rstrip('\n'))
-" <<< "$PW"
-unset PW
-echo "✓ Password stored in OS keychain"
-```
-
-Replace `<NAME>` with the profile name from Step 2. Substitute
-`$PLUGIN_ROOT` with the path resolved in Step 1 (or expand it in
-the same shell session if you exported it).
-
-DO NOT add `set -x` / verbose flags — they would echo the expanded
-`$PW` to stderr.
-
-#### Path 4b — Linux desktop with `zenity` available
-
-```bash
-if command -v zenity >/dev/null 2>&1; then
-  PW=$(zenity --password --title="Redshift MCP Setup" \
-              --text="Redshift password for profile <NAME>:" 2>/dev/null) \
-    || { echo "Cancelled by user" >&2; exit 1; }
-  uv run --project "$PLUGIN_ROOT" python -c "
-import sys, keyring
-keyring.set_password('redshift-comment-mcp', '<NAME>', sys.stdin.read().rstrip('\n'))
-" <<< "$PW"
-  unset PW
-  echo "✓ Password stored in OS keychain"
-fi
-```
-
-#### Path 4c — fallback (headless server, no GUI, Cowork uncertainty, Windows): user-terminal handoff
-
-If neither dialog path is available, fall back to the
-user-terminal-handoff pattern (per
-`domain-teams:skill-team / standards/user-terminal-handoff.md`).
-Print this block verbatim to the user — substitute `<NAME>` with the
-profile name:
-
-```
-請在你自己的 terminal（不是 Claude 對話）跑這條指令來設定密碼：
-
-    uvx --from "git+https://github.com/kouko/redshift-comment-mcp.git" \
-        redshift-comment-mcp set-password --profile <NAME>
-
-它會用 getpass 隱藏輸入（你打的字不會顯示），密碼會存進 OS keychain。
-完成後回我「done」。
-```
-
-(If user's chat language is English / 日本語, translate prose
-accordingly. Keep the command verbatim.)
-
-Then **stop and wait** for the user's "done" reply. Do NOT
-background-poll. Do NOT call `set-password` via Bash — that would
-defeat the entire point.
-
-#### Decision tree
-
-```bash
-# At runtime, decide which path to take:
 if [[ "$OSTYPE" == darwin* ]]; then
-    # → Path 4a (osascript)
+    PASSWORD_PATH=4a  # macOS native dialog
 elif command -v zenity >/dev/null 2>&1; then
-    # → Path 4b (zenity)
+    PASSWORD_PATH=4b  # Linux zenity dialog
 else
-    # → Path 4c (terminal handoff)
+    PASSWORD_PATH=4c  # terminal handoff
 fi
 ```
 
-Always announce the chosen path to the user in chat ("我會跳一個系統
-對話框收密碼" / "I'll show a system dialog for the password" / etc.)
-so they know to look for the OS dialog and don't switch contexts.
+Announce the chosen path to the user in chat ("我會跳一個系統對話框收
+密碼" / "I'll show a system dialog for the password" / "我會請你在自己
+的 terminal 設密碼") so they know where to look.
+
+#### Step 4.2 — Load the matching recipe and execute it
+
+Each path has its own complete bash recipe + caveats in a dedicated
+reference file. The recipes are not interchangeable: each one's
+caveats are tuned to that OS's specific transcript-leak vectors.
+
+- **Path 4a (macOS)** — **MANDATORY: read entire file
+  [`references/password-macos.md`](references/password-macos.md)**
+  before executing. Run the recipe in that file verbatim.
+- **Path 4b (Linux + zenity)** — **MANDATORY: read entire file
+  [`references/password-zenity.md`](references/password-zenity.md)**
+  before executing.
+- **Path 4c (terminal handoff)** — **MANDATORY: read entire file
+  [`references/password-terminal-handoff.md`](references/password-terminal-handoff.md)**
+  before executing.
+
+**Do NOT load the other two reference files** — each contains the
+full bash recipe for one path; loading more than one wastes context
+and can confuse which recipe to run. If the chosen path errors out
+mid-execution, the reference file for that path documents the
+fallback (typically Path 4c).
+
+After the chosen path emits `✓ Password stored in OS keychain` (or
+the user replies "done" on Path 4c), continue to Step 5.
 
 ### Step 5 — Verify
 

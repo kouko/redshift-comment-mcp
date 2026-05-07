@@ -1,20 +1,13 @@
 ---
 name: redshift-cache-schema
 description: >-
-  Dump Redshift cluster structure (schemas / tables / columns / comments)
-  as markdown under ~/.cache/redshift-comment-mcp/<profile>/ for offline
-  browsing — give analysts a directory of files to read instead of
-  re-issuing MCP queries every conversation. Cache (rebuildable from
-  live DB), NOT wiki (no synthesis, no hand-edits). Idempotent.
-  Use when user invokes /redshift-cache-schema, or says: "cache the
-  schema", "dump redshift structure", "offline schema browse", "save
-  metadata", "把 schema dump 下來", "離線瀏覽", "結構快取", "把 table
-  抓下來放本地", "快取 metadata", "schema を キャッシュ", "メタデータを
-  ローカルに", "スキーマ ダンプ", "オフライン参照". Do NOT use for:
-  persistent hand-edited docs (that's a wiki — separate plugin),
-  synthesis / stale-tracking (out of charter), exporting row data
-  (only structure is cached), one-off questions (use list_* directly),
-  clusters with hundreds of tables without --scope.
+  Dump Redshift cluster structure to local markdown for offline
+  browsing. Read-only, idempotent. Use when user wants the schema
+  cached locally (flaky VPN, onboarding handoff, offline audit).
+  Do NOT use for hand-edited docs (use a wiki plugin), row-data
+  export, or one-off questions (use list_* directly). Triggers:
+  /redshift-cache-schema / cache schema / dump structure / 結構快取
+  / 離線瀏覽 / オフライン参照.
 ---
 
 # Redshift Schema Cache
@@ -110,6 +103,14 @@ No row counts / samples in cache files — structure only by design.
 ```
 `--dry-run` lists filenames that would be written; no disk writes.
 
+## Anti-patterns
+
+- NEVER hand-edit cached files — they're regenerable; next refresh clobbers edits. Use a separate wiki plugin for persistent notes.
+- NEVER auto-prune `_orphans/` — they're the forensic trace when a DB drop happens. Let the user decide removal.
+- NEVER move out-of-scope orphans on partial `--scope` runs — silently corrupts cache for schemas the user did not touch.
+- NEVER convert `nullable` from raw `"YES"`/`"NO"` to bool — downstream tools rely on the raw MCP shape; conversion causes "works for me" bugs.
+- NEVER cache row data — charter is structure only; a billion-row table would exhaust local disk before the user notices.
+
 ## Errors
 | Condition | Behavior |
 |---|---|
@@ -120,3 +121,12 @@ No row counts / samples in cache files — structure only by design.
 | Full cache without --scope, > 50 schemas | `_error: scope_too_large` |
 
 Cache dir created with `mkdir -p`, mode 700.
+
+## See also
+
+| Need | Use |
+|---|---|
+| Interactive schema walk (lighter than full cache) | `/redshift-explore` |
+| Visualize FK relationships | `/redshift-erd` |
+| Turn cached structure into dbt yml drafts | `/redshift-suggest-schema-yml` |
+| Mine actual usage from query history | `/redshift-lineage-from-stl` |
