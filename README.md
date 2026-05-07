@@ -3,7 +3,7 @@
 **English** · [日本語](README.ja.md) · [繁體中文](README.zh-TW.md)
 
 A read-only **Model Context Protocol** server for Amazon Redshift,
-plus a Claude Code plugin with 7 slash-command skills built on top.
+plus a Claude Code plugin with 5 slash-command skills built on top.
 Designed around one assertion: **column names lie, comments don't**
 — so the server exposes comments aggressively and the skills compose
 those tools into the discovery workflows you actually do every day.
@@ -51,7 +51,7 @@ full charter.
 Pagination on every list / search; explicit `WARNING` strings nudging
 the LLM to read comments before trusting names.
 
-### Slash-command skills (7, defined in [`skills/`](skills/))
+### Slash-command skills (5, defined in [`skills/`](skills/))
 
 | Skill | One-liner | Since |
 |---|---|---|
@@ -110,7 +110,7 @@ prerequisite for plugin updates.
 ├── README.md / README.ja.md / README.zh-TW.md     (this file, tri-lingual)
 ├── implementation_guide.md                         design rationale + charter
 ├── src/redshift_comment_mcp/                       MCP server source — see its own README
-├── skills/                                         7 slash-command skills — see its own README
+├── skills/                                         5 slash-command skills — see its own README
 ├── commands/                                       plugin slash command stubs
 ├── tests/                                          pytest suite
 ├── pyproject.toml                                  packaging metadata
@@ -119,7 +119,7 @@ prerequisite for plugin updates.
 
 The two READMEs to read next:
 
-- [`skills/README.md`](skills/README.md) — overview of all 7 skills
+- [`skills/README.md`](skills/README.md) — overview of all 5 skills
 - [`src/redshift_comment_mcp/README.md`](src/redshift_comment_mcp/README.md) — server internals, module map, charter constraints
 
 ## Data layout at runtime
@@ -155,6 +155,27 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public, dbt_marts, dbt_staging
 For `/redshift-lineage-from-stl`, the user additionally needs
 `SYSLOG ACCESS UNRESTRICTED` (or admin) to read `STL_QUERY` /
 `SYS_QUERY_HISTORY`. If you're not running that skill, skip this grant.
+
+## Known limits
+
+**MCP response token cap (~25K tokens default)** — Claude Code silently
+truncates MCP tool results above ~25,000 tokens (no error, no marker;
+see [anthropics/claude-code#2638](https://github.com/anthropics/claude-code/issues/2638)).
+For dbt-rich schemas where column comments are long markdown blocks, a
+single `list_columns(include_comments=True)` page (50 rows) on a wide
+table can approach this. Two mitigations the plugin already applies:
+
+- `include_comments` defaults to **False** on `list_tables` /
+  `list_columns` (only `list_schemas` defaults True since schema count
+  is small) — agent must opt in to comment-loaded responses.
+- `/redshift-cache-schema` writes per-table `.md` files that consumers
+  Read directly via the Read tool, bypassing the MCP response path
+  entirely. Once primed, metadata lookups are not size-bound.
+
+If you still need to bump the cap (e.g. to fetch a heavily-documented
+column set in one shot), set `MAX_MCP_OUTPUT_TOKENS=50000` in the
+environment where Claude Code runs. This affects all MCP servers in
+that session, not just this one.
 
 ## Comment-writing tips for your DB
 

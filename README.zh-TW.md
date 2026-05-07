@@ -3,7 +3,7 @@
 [English](README.md) · [日本語](README.ja.md) · **繁體中文**
 
 一個給 Amazon Redshift 用的只讀 **Model Context Protocol** server，外加
-一個基於它的 Claude Code plugin，內含 7 支 slash command skills。整個
+一個基於它的 Claude Code plugin，內含 5 支 slash command skills。整個
 設計建立在一個前提上：**欄位名會騙人，註解不會** —— 所以 server 主動
 吐出註解，而 skills 把這些 tool 串成你每天真正在做的探索流程。
 
@@ -47,7 +47,7 @@ manifest 涵蓋面太窄、Web GUI 太慢、手刻 SQL 太重複。
 每支 list / search 都有分頁；明確的 `WARNING` 字串會推 LLM 先讀註解
 再相信名字。
 
-### Slash command skills（7 支，定義在 [`skills/`](skills/)）
+### Slash command skills（5 支，定義在 [`skills/`](skills/)）
 
 | Skill | 一句話 | 版本 |
 |---|---|---|
@@ -103,7 +103,7 @@ Plugin 透過 `uv run --project ${CLAUDE_PLUGIN_ROOT}` 直接從 cloned source
 ├── README.md / README.ja.md / README.zh-TW.md     (這個檔，三語)
 ├── implementation_guide.md                         設計理由 + charter
 ├── src/redshift_comment_mcp/                       MCP server 原始碼 —— 有自己的 README
-├── skills/                                         7 支 slash command skills —— 有自己的 README
+├── skills/                                         5 支 slash command skills —— 有自己的 README
 ├── commands/                                       plugin slash command stubs
 ├── tests/                                          pytest 套件
 ├── pyproject.toml                                  packaging metadata
@@ -112,7 +112,7 @@ Plugin 透過 `uv run --project ${CLAUDE_PLUGIN_ROOT}` 直接從 cloned source
 
 接下來該讀的 2 個 README：
 
-- [`skills/README.md`](skills/README.md) —— 7 支 skill 全覽
+- [`skills/README.md`](skills/README.md) —— 5 支 skill 全覽
 - [`src/redshift_comment_mcp/README.md`](src/redshift_comment_mcp/README.md) —— server 內部、模組地圖、charter 限制
 
 ## 執行期資料路徑
@@ -147,6 +147,26 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public, dbt_marts, dbt_staging
 要跑 `/redshift-lineage-from-stl` 才額外需要 `SYSLOG ACCESS UNRESTRICTED`
 （或 admin）來讀 `STL_QUERY` / `SYS_QUERY_HISTORY`。不跑這支 skill 就
 不用給。
+
+## 已知限制
+
+**MCP 回傳 token 上限（預設 ~25K tokens）** — Claude Code 對 MCP 工具
+回傳超過 ~25,000 tokens 的資料會**靜默截斷**（沒有錯誤、沒有 marker；
+參見 [anthropics/claude-code#2638](https://github.com/anthropics/claude-code/issues/2638)）。
+在 dbt 風格、欄位註解多行 markdown 的 schema 上，寬表的單一
+`list_columns(include_comments=True)` 一頁（50 列）就有可能逼近此上限。
+這個 plugin 已經套用的緩解策略：
+
+- `include_comments` 在 `list_tables` / `list_columns` **預設 False**
+  （只有 schema 數量小的 `list_schemas` 預設 True）—— agent 必須明確
+  opt-in 才會拿到含註解的回應。
+- `/redshift-cache-schema` 把單表 spec 寫進 `.md` 檔，consumer 用 Read
+  tool 直接讀，**完全繞過 MCP 回傳路徑**。一旦 prime 過，後續 metadata
+  查詢不受此上限限制。
+
+如果仍然需要拉高上限（例如要一次抓重註解的欄位群），可以在 Claude Code
+執行環境設 `MAX_MCP_OUTPUT_TOKENS=50000`。注意這會影響該 session 中
+**所有** MCP server，不只這個 plugin。
 
 ## 寫好註解的小提醒
 
