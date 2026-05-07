@@ -1,20 +1,14 @@
 ---
 name: redshift-explore
 description: >-
-  Three-step interactive wizard for exploring a Redshift cluster from
-  zero context: schema → table → column, each step listing candidates
-  with comments so the user picks by reading, not by remembering names.
-  Hands off to /redshift-profile on the chosen column. Makes the implementation_guide.md "Guided Data Discovery"
-  charter explicit. Use when user invokes /redshift-explore, or says:
-  "I don't know where to start", "explore the warehouse", "browse
-  Redshift", "where do I look", "找一下這個 cluster", "我不知道要看
-  哪個 table", "從哪開始", "guide me through", "走一遍 schema",
-  "Redshift を探検", "どのテーブルか分からない", "探したい",
-  "ガイド付き探索". Do NOT use when user already knows the table.column
-  (use /redshift-profile directly), in
-  non-interactive contexts (wizard requires human picks), for
-  schema-wide reporting (use /redshift-cache-schema), or batch
-  question answering (intentionally conversational).
+  Interactive walkthrough for an unfamiliar Redshift cluster — schema
+  → table → column, picked by reading comments. Hands off to
+  /redshift-profile. Use when user doesn't know where to start in a
+  cluster. Do NOT use when user already knows the table.column (use
+  /redshift-profile directly), in non-interactive contexts, or for
+  schema-wide reporting (use /redshift-cache-schema). Triggers:
+  /redshift-explore / browse Redshift / where do I look / 找 cluster
+  / 從哪開始 / 探検 / ガイド付き探索.
 ---
 
 # Redshift Guided Explore
@@ -100,6 +94,14 @@ Custom question: answer directly using the MCP tools that fit.
 Wizard prose IS the output. No JSON block — interactive by design.
 Step 4 produces the downstream skill's output.
 
+## Anti-patterns
+
+- NEVER skip the comment-first render even when the user named a table — the rendering IS the value. If the answer is already known, hand off to the right sister skill instead of running the wizard.
+- NEVER show > 50 candidates per step — paginate. Comment-first reading scales worse than alphabetical.
+- NEVER call `search_columns` without both `schema_name` AND `table_name` — MCP rejects wildcard scope; user gets a cryptic error.
+- NEVER auto-execute Step 4 option (a) without an explicit pick — handoff to `/redshift-profile` changes the workflow contract.
+- NEVER strip empty-comment items — render as `(no comment)` so the user sees what to ask the data owner about.
+
 ## Errors
 | Condition | Behavior |
 |---|---|
@@ -108,3 +110,11 @@ Step 4 produces the downstream skill's output.
 | Picked table has no columns | `_error: no_columns` (likely permission) |
 | Reply matches no candidate / keyword | re-render with hint |
 | User says cancel / quit | exit cleanly, no error |
+
+## See also
+
+| Need | Use |
+|---|---|
+| Profile a column once you have it | `/redshift-profile` |
+| Visualize a whole schema | `/redshift-erd` |
+| Offline browse without MCP | `/redshift-cache-schema` |

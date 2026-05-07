@@ -2,19 +2,14 @@
 name: redshift-erd
 description: >-
   Generate a Mermaid erDiagram for a Redshift schema with tables, key
-  columns, and FK relationships. FK source priority: pg_constraint
-  (HIGH) → dbt manifest depends_on (MEDIUM, if --manifest passed) →
-  naming heuristic `<other>_id` (LOW). Edges labeled with confidence.
-  Read-only. Use when user invokes /redshift-erd, or says: "ERD for",
-  "draw the schema", "table relationships", "foreign keys", "show me
-  how tables connect", "畫個 ERD", "看 table 關係", "schema 關係圖",
-  "FK 推論", "外鍵關係", "ER 図", "リレーション図", "テーブル関係",
-  "外部キー推論", "スキーマ可視化". Do NOT use for: column-level
-  lineage (use /redshift-lineage-from-stl), single-table inspection
-  (use /redshift-explore Step 3 or list_columns directly), schemas
-  with > 30 tables without --tables filter (output unreadable; refuse),
-  validating production constraints (Redshift does NOT enforce FKs —
-  they're advisory only).
+  columns, and confidence-labeled FK relationships. Read-only. Use
+  when user wants to map an unfamiliar schema visually, before
+  drilling into individual tables. Do NOT use for column-level lineage
+  (use /redshift-lineage-from-stl), single-table inspection (use
+  /redshift-explore), or validating production FKs (Redshift declares
+  but does not enforce them). Triggers: /redshift-erd / ERD / table
+  relationships / foreign keys / 畫個 ERD / 關係圖 / ER 図 /
+  リレーション図.
 ---
 
 # Redshift ERD
@@ -108,6 +103,14 @@ markdown) + edge rationale table:
 Footer: "Drew N tables, M edges (X HIGH / Y MEDIUM / Z LOW). Heuristic
 edges are guesses — verify before trusting."
 
+## Anti-patterns
+
+- NEVER claim FK constraints are enforced — Redshift declares but does not validate. Always render confidence tier in the edge label.
+- NEVER assume `pg_constraint` works on every cluster — `unnest WITH ORDINALITY` fails on some Redshift versions. On error, drop to MEDIUM/LOW silently and add a footer note.
+- NEVER infer multi-column FKs from naming — single-column `<other>_id` heuristic only. Multi-column tells need `pg_constraint`.
+- NEVER set non-default cardinality (e.g. `}|--||`) without reading actual constraint metadata — catalog cardinality is unreliable; default `}o--||`.
+- NEVER hide LOW-confidence edges silently, but DO truncate to top-N when count > 100 — visual noise crowds out HIGH edges.
+
 ## Errors
 | Condition | Behavior |
 |---|---|
@@ -116,3 +119,11 @@ edges are guesses — verify before trusting."
 | `--manifest` path missing | `_error: manifest_not_found: <path>` |
 | Heuristic > 100 edges | warn, render top-N by confidence + frequency |
 | Scope > 30 without filter | `_error: scope_too_large` |
+
+## See also
+
+| Need | Use |
+|---|---|
+| Find tables before drawing | `/redshift-explore` |
+| Offline structure browse | `/redshift-cache-schema` |
+| Actual runtime data flow (vs declared FKs) | `/redshift-lineage-from-stl` |

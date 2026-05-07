@@ -1,19 +1,14 @@
 ---
 name: redshift-profile
 description: >-
-  Profile a Redshift column: cardinality, top-N values, null rate, min/max,
-  plus existing comment — one round, composing redshift-comment-mcp's
-  list_columns + execute_sql. Read-only. Outputs JSON (chainable into
-  /redshift-suggest-schema-yml) + a chat summary. Use when user invokes
-  /redshift-profile, or says: "profile this column", "what values does
-  X contain", "is this an enum", "show distinct values", "value
-  distribution", "cardinality of", "top values", "null rate",
-  "看欄位有哪些值", "這欄位是不是 enum", "欄位分布", "幾種值", "空值比例",
-  "列舉值", "看資料樣本", "カラムプロファイル", "値の分布", "列挙値",
-  "欠損率", "ユニーク値". Do NOT use for: full row counts (use
-  execute_sql), schema/table search (use search_columns), writing to
-  Redshift (read-only charter), free-text columns where top-100 is
-  meaningless (warn and skip).
+  Profile a Redshift column — cardinality, top-N values, null rate,
+  min/max, plus comment. Read-only. Use when about to write CREATE
+  TABLE or dbt schema.yml based on column assumptions, or to check
+  whether a column is an enum. Do NOT use for full row counts (use
+  execute_sql), schema/table search (use search_columns), or
+  free-text columns where top-100 is noise. Triggers:
+  /redshift-profile / profile column / distinct values / enum /
+  欄位分布 / カラムプロファイル / 値の分布.
 ---
 
 # Redshift Column Profile
@@ -111,6 +106,14 @@ ending with a one-line interpretation hint:
 - high → "probably ID / free text"
 - null_pct>50% → "mostly null — verify upstream"
 
+## Anti-patterns
+
+- NEVER use MCP keys `column_name` / `data_type` — MCP returns `{name, type, nullable, comment}`. Wrong shape costs a debugging cycle.
+- NEVER profile free-text or huge-cardinality columns without warning the user — top-100 of `varchar(2000)` is noise. Warn and confirm before scanning.
+- NEVER skip the `::text` cast in the top-N CTE — Redshift coerces booleans/dates inconsistently across drivers; uniform JSON shape requires explicit cast.
+- NEVER report `min` / `max` for `string` / `boolean` types — lexical extrema mislead, and `/redshift-suggest-schema-yml` would turn them into range bounds.
+- NEVER swallow `execute_sql` errors — Redshift error text is diagnostic. Surface verbatim under `_error: execute_sql_failed`.
+
 ## Errors
 | Condition | `_error` |
 |---|---|
@@ -120,3 +123,11 @@ ending with a one-line interpretation hint:
 | execute_sql failed | `execute_sql_failed: <verbatim>` |
 
 Surface execute_sql errors verbatim — Redshift errors are diagnostic.
+
+## See also
+
+| Need | Use |
+|---|---|
+| Chain a profile into a dbt yml draft | `/redshift-suggest-schema-yml` |
+| Find which column to profile | `/redshift-explore` |
+| Structure (vs values) | `/redshift-cache-schema` |
