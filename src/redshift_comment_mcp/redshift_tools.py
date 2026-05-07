@@ -219,54 +219,24 @@ class RedshiftTools:
         self.mcp = FastMCP(
             name="Redshift Comment MCP",
             instructions="""
-This server provides Redshift database exploration tools with authoritative comments.
+Redshift database exploration tools where COMMENTS are the source of
+truth for schema / table / column meaning — names are unreliable and
+may conflict with comments. Always retrieve comments before drafting
+SQL; trust the comment over the name when they disagree.
 
-CRITICAL WORKFLOW - You MUST follow these rules:
-1. Schema/Table/Column names are UNRELIABLE and may be misleading
-2. Before using ANY schema, table, or column, you MUST retrieve its comment first
-3. Comments are AUTHORITATIVE - if a name conflicts with its comment, always trust the comment
-4. NEVER write SQL based on column names alone
+PAGINATION: list_*, search_*, and get_all_column_comments cap at 50
+items per response. Check `has_more`; if true, refetch with `offset`
+until exhausted before drawing conclusions.
 
-MANDATORY PAGINATION HANDLING:
-- All list tools return paginated results (max 50 items per request)
-- Check "has_more" field in every response
-- If has_more=true, you MUST call the tool again with offset to retrieve ALL remaining items
-- NEVER proceed with incomplete data - always fetch ALL pages before making decisions
-- Example: If total_count=120, you need 3 calls: offset=0, offset=50, offset=100
+OPTIMIZATION: list_* tools accept include_comments / include_parent_comments
+flags to fold get_*_comment calls into the same response.
 
-OPTIMIZATION - include_comments parameter:
-- list_schemas, list_tables, list_columns support include_comments=True
-- When enabled, comments are returned directly in the response
-- Reduces API calls by eliminating separate get_*_comment calls
+SEARCH KEYWORDS: search_schemas / search_tables / search_columns take
+space-separated keywords (OR logic). Pick keywords in the user's
+conversation language — comments usually match.
 
-Recommended exploration flow:
-1. Find schemas:
-   a. list_schemas(include_comments=True) - browse all schemas with comments
-   b. search_schemas - search schemas by keywords (no prerequisite)
-2. Find tables:
-   a. list_tables(include_comments=True) - browse tables with comments
-   b. search_tables (requires schema_name) - search by keywords
-3. Find columns:
-   a. list_columns(include_comments=True) - browse columns with comments
-   b. search_columns (requires schema_name and table_name) - search by keywords
-4. execute_sql ONLY after you have read ALL column definitions
-
-Alternative: Use get_schema_comment, get_table_comment, get_column_comment for targeted single-item queries.
-
-When using search_schemas, search_tables or search_columns:
-- search_schemas has no prerequisite - can be used directly
-- search_tables requires schema_name (complete step 1 first)
-- search_columns requires schema_name AND table_name (complete steps 1-2 first)
-- IMPORTANT: Design keywords based on the user's conversation language
-  - Database comments are typically written in the same language as the user
-  - For example: if user speaks Chinese, use Chinese keywords for searching comments
-  - English table/column names can still be searched alongside native language keywords
-- Search results still require verification via get_table_comment or get_column_comment
-
-When generating SQL:
-- Cite the column comments in your reasoning before writing the query
-- If a column's business definition differs from its name, use the definition from the comment
-- Always verify your understanding of metrics, calculations, and business logic from comments
+For ad-hoc exploration, prefer list_* / search_* tools over execute_sql
+against information_schema — they include comments directly.
 """
         )
         self._setup_tools()
@@ -278,11 +248,7 @@ When generating SQL:
 
         @self.mcp.tool
         def list_schemas(limit: Optional[int] = None, offset: int = 0, include_comments: bool = True) -> Dict[str, Any]:
-            """
-            List all schema names in the database. Supports pagination via limit/offset.
-            Set include_comments=True to include schema comments in the response.
-            WARNING: Schema names can be misleading. Use get_schema_comment before using any schema.
-            """
+            """List schema names. include_comments defaults to True (cheap — schema count is small)."""
             if include_comments:
                 sql = """
                 SELECT n.nspname AS schema_name, d.description AS schema_comment
@@ -327,12 +293,7 @@ When generating SQL:
 
         @self.mcp.tool
         def list_tables(schema_name: str, limit: Optional[int] = None, offset: int = 0, include_comments: bool = False, include_parent_comments: bool = True) -> Dict[str, Any]:
-            """
-            List all table names in a schema. Supports pagination via limit/offset.
-            Set include_comments=True to include table comments in the response.
-            Set include_parent_comments=True to include schema comment in the response.
-            WARNING: Table names can be misleading. Use get_table_comment before using any table.
-            """
+            """List tables in a schema. Pass include_comments=True to include table comments inline; include_parent_comments (default True) also returns the parent schema's comment."""
             if not schema_name or not schema_name.isidentifier():
                 raise ValueError("Invalid schema name.")
 
@@ -409,12 +370,7 @@ When generating SQL:
 
         @self.mcp.tool
         def list_columns(schema_name: str, table_name: str, limit: Optional[int] = None, offset: int = 0, include_comments: bool = False, include_parent_comments: bool = True) -> Dict[str, Any]:
-            """
-            List all column names and types in a table. Supports pagination via limit/offset.
-            Set include_comments=True to include column comments in the response.
-            Set include_parent_comments=True to include table comment in the response.
-            WARNING: Column names can be misleading. Use get_all_column_comments before writing SQL.
-            """
+            """List columns (name, type, nullable) in a table. Pass include_comments=True to include column comments inline; include_parent_comments (default True) also returns the parent table's comment."""
             if not schema_name.isidentifier() or not table_name.isidentifier():
                 raise ValueError("Invalid schema or table name.")
 
@@ -499,11 +455,7 @@ When generating SQL:
 
         @self.mcp.tool
         def search_schemas(keywords: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
-            """
-            Search for schemas by keywords in schema name OR schema comment. Supports multiple space-separated keywords (OR logic).
-            IMPORTANT: Design keywords based on the user's conversation language, as database comments are typically in the same language.
-            This is a discovery tool - you MUST still call get_schema_comment to verify the schema's purpose before using it.
-            """
+            """Search schemas by keywords (space-separated, OR logic) over schema name and comment."""
             # 解析關鍵字
             keyword_list = [k.strip() for k in keywords.split() if k.strip()]
             if not keyword_list:
@@ -569,12 +521,7 @@ When generating SQL:
 
         @self.mcp.tool
         def search_tables(keywords: str, schema_name: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
-            """
-            Search for tables by keywords in table name OR table comment. Supports multiple space-separated keywords (OR logic).
-            For best results, include keywords in BOTH languages: the language used in table names AND the language used in table comments.
-            REQUIRED: You must specify a schema_name. Use list_schemas and get_schema_comment first to identify the correct schema.
-            This is a discovery tool - you MUST still call get_table_comment to verify the table's purpose before using it.
-            """
+            """Search tables in a given schema_name by keywords (space-separated, OR logic) over table name and comment."""
             # 解析關鍵字
             keyword_list = [k.strip() for k in keywords.split() if k.strip()]
             if not keyword_list:
@@ -655,12 +602,7 @@ When generating SQL:
 
         @self.mcp.tool
         def search_columns(keywords: str, schema_name: str, table_name: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
-            """
-            Search for columns by keywords in column name OR column comment. Supports multiple space-separated keywords (OR logic).
-            For best results, include keywords in BOTH languages: the language used in column names AND the language used in column comments.
-            REQUIRED: You must specify schema_name and table_name. Use list_schemas, get_schema_comment, list_tables/search_tables, and get_table_comment first.
-            This is a discovery tool - you MUST still call get_column_comment to verify each column's definition before using it in SQL.
-            """
+            """Search columns in a given schema_name and table_name by keywords (space-separated, OR logic) over column name and comment."""
             # 解析關鍵字
             keyword_list = [k.strip() for k in keywords.split() if k.strip()]
             if not keyword_list:
@@ -744,9 +686,7 @@ When generating SQL:
 
         @self.mcp.tool
         def get_schema_comment(schema_name: str) -> Dict[str, Any]:
-            """
-            Get the authoritative comment for a schema. MANDATORY: You must call this before using any schema. The comment defines the schema's true business purpose. If the comment conflicts with the schema name, trust the comment.
-            """
+            """Get the authoritative comment for a schema — defines its true business purpose; trust it over the schema name."""
             if not schema_name or not schema_name.isidentifier():
                 raise ValueError("Invalid schema name.")
 
@@ -770,9 +710,7 @@ When generating SQL:
 
         @self.mcp.tool
         def get_table_comment(schema_name: str, table_name: str) -> Dict[str, Any]:
-            """
-            Get the authoritative comment for a table. MANDATORY: You must call this before using any table. The comment defines what data the table actually contains. If the comment conflicts with the table name, trust the comment.
-            """
+            """Get the authoritative comment for a table — defines what data it actually contains; trust it over the table name."""
             if not schema_name.isidentifier() or not table_name.isidentifier():
                 raise ValueError("Invalid schema or table name.")
 
@@ -798,9 +736,7 @@ When generating SQL:
 
         @self.mcp.tool
         def get_column_comment(schema_name: str, table_name: str, column_name: str) -> Dict[str, Any]:
-            """
-            Get the authoritative comment for a column. MANDATORY: You must call this before using any column in SQL queries. The comment defines the column's business definition and calculation logic. If the comment conflicts with the column name, trust the comment.
-            """
+            """Get the authoritative comment for a column — defines its business meaning and calculation logic; trust it over the column name."""
             if not schema_name.isidentifier() or not table_name.isidentifier():
                 raise ValueError("Invalid schema or table name.")
 
@@ -832,10 +768,7 @@ When generating SQL:
 
         @self.mcp.tool
         def get_all_column_comments(schema_name: str, table_name: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
-            """
-            Get comments for ALL columns in a table. Supports pagination via limit/offset.
-            Each comment is authoritative - if it conflicts with the column name, trust the comment.
-            """
+            """Get authoritative comments for ALL columns in a table at once. Each comment overrides the column name."""
             if not schema_name.isidentifier() or not table_name.isidentifier():
                 raise ValueError("Invalid schema or table name.")
 
@@ -881,10 +814,7 @@ When generating SQL:
 
         @self.mcp.tool
         def execute_sql(sql_statement: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
-            """
-            Execute a read-only SQL query (SELECT/WITH only). Supports pagination via limit/offset for results.
-            PREREQUISITE: Before calling this, you must have verified all column meanings using get_all_column_comments.
-            """
+            """Execute a read-only SQL query (SELECT/WITH only). Result rows are paginated via limit/offset."""
             validate_read_only_sql(sql_statement)
 
             try:
