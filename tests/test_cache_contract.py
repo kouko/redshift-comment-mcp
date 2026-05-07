@@ -171,6 +171,76 @@ def test_consumer_skills_only_reference_documented_paths():
     assert not failures, "\n".join(failures)
 
 
+# ===== MCP join behavior caveats =====
+
+def test_walk_step_documents_dedupe(cache_spec):
+    """The Walk step must warn that `list_tables` / `list_columns` results
+    can contain duplicate rows (the MCP join with `pg_description` returns
+    one row per (relation × comment-state) pair). Without an explicit dedupe
+    warning, a model following the spec verbatim writes duplicate entries
+    into the indices and per-table .md files.
+
+    Anchor: the bullet that calls `list_tables` / `list_columns` must be
+    followed by some form of dedupe instruction.
+    """
+    walk_section = re.search(
+        r"4\.\s+\*\*Walk\*\*.*?(?=\n5\.\s+\*\*Finalize)",
+        cache_spec,
+        re.DOTALL,
+    )
+    assert walk_section, "Walk step section not found in cache-schema spec"
+    walk_text = walk_section.group(0)
+
+    # Two warnings expected: one near list_tables, one near list_columns.
+    assert "dedupe" in walk_text.lower() or "deduplicate" in walk_text.lower(), (
+        "Walk step missing dedupe warning. MCP list_tables / list_columns "
+        "joins on pg_description and can return duplicate rows; without an "
+        "explicit dedupe instruction, a literal-spec follower writes dups."
+    )
+    # Both list calls should be in the dedupe-warning radius.
+    assert "(schema_name, name)" in walk_text or "schema_name, name" in walk_text, (
+        "Walk step missing dedupe key for list_tables: "
+        "expected `(schema_name, name)`."
+    )
+    assert (
+        "(schema_name, table_name, name)" in walk_text
+        or "schema_name, table_name, name" in walk_text
+    ), (
+        "Walk step missing dedupe key for list_columns: "
+        "expected `(schema_name, table_name, name)`."
+    )
+
+
+def test_no_columns_marker_documented(cache_spec):
+    """list_columns can succeed but return 0 columns (e.g. on a VIEW, or
+    when the caller lacks column-level privilege on a base table). Spec must
+    document the `_error: no_columns` marker so consumers can distinguish
+    "cache wrote a real empty .md" from "this relation genuinely has no
+    introspectable columns".
+    """
+    # 1. Errors table row must mention the 0-column condition.
+    errors_section = re.search(
+        r"##\s+Errors\s*\n(.*?)(?=\n##\s+|\Z)",
+        cache_spec,
+        re.DOTALL,
+    )
+    assert errors_section, "## Errors section not found in cache-schema spec"
+    errors_text = errors_section.group(1)
+    assert "0 columns" in errors_text or "no_columns" in errors_text, (
+        "## Errors table missing row for 'list_columns returns 0 columns' "
+        "(VIEW or insufficient privilege). Without it, consumers can't tell "
+        "an empty columns block from a genuinely-uncached table."
+    )
+
+    # 2. The marker token itself must appear somewhere in the spec — used by
+    #    consumers grepping per-table .md files for "is this an empty cache?".
+    assert "_error: no_columns" in cache_spec, (
+        "Spec missing the literal marker `_error: no_columns`. The Walk step "
+        "tells the producer to write this string into per-table .md when "
+        "list_columns returns []; consumers grep for it."
+    )
+
+
 # ===== CACHE PROTOCOL in server instructions =====
 
 def test_cache_protocol_in_server_instructions():

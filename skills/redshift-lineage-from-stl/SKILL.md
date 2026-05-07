@@ -84,6 +84,13 @@ does, justified because LLM-driven SQL parsing is unreliable.
    filtering, system-table filtering, per-edge aggregation. PEP 723 +
    `uv run --script` resolves `sqlglot` automatically.
 
+   **Note on `sql_text` escaping.** Some MCP server / transport layers
+   serialize `sql_text` with literal `\n` / `\r` / `\t` (two-char escape
+   sequences) instead of real control characters. The helper decodes
+   these defensively (idempotent), so writing the field verbatim is
+   fine. If you inspect the NDJSON manually and see literal `\n` in the
+   SQL, that's the cause — not a bug in your write.
+
 4. **Read `lineage.json`** and render. Surface `parse_errors` verbatim.
 
 ## Output

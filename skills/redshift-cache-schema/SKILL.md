@@ -151,8 +151,11 @@ Conventions:
 
 4. **Walk** (read-only DB access):
    - Per scoped schema: `list_tables(schema_name, include_comments=true)` → `{tables: [{name, type, comment}]}`. Page through `has_more`.
+     - **Dedupe rows by `(schema_name, name)` before iterating** — when MCP joins on `pg_description`, a single relation can appear multiple times (with vs without comment). Keep the row whose `comment` is non-null. `total_count` reflects raw join rows, not unique tables; do not use it for progress.
    - Per scoped table: `list_columns(schema_name, table_name, include_comments=true)` → `{columns: [{name, type, nullable, comment}]}`. Page through.
+     - Same dedupe risk: dedupe by `(schema_name, table_name, name)`, keeping the row whose `comment` is non-null.
    - Build `tables/<schema>__<table>.md` (full spec) and append rows to `_tables_index.tsv` / `_columns_index.tsv` (lossy summary).
+     - If `list_columns` returns an empty array, mark the per-table `.md` with `_error: no_columns: likely VIEW or permission` in place of the columns block (still emit the table heading + comment) and skip writing to `_columns_index.tsv`.
 
 5. **Finalize**: rewrite `_meta.json` with `complete: true`, the refreshed timestamp, scope, and counts. Compute orphan set (filenames recorded by the prior run minus this run's filenames, intersected with current scope) and **delete** orphan files — there is no human audience for forensic logs; orphans risk misleading the agent.
 
@@ -182,6 +185,7 @@ Conventions:
 | `list_schemas` empty | `_error: no_schemas_returned` — abort, do not touch `_meta.json` |
 | Per-schema `list_tables` fails | record skip in chat output, continue with other schemas |
 | Per-table `list_columns` fails | record skip, continue |
+| Per-table `list_columns` returns 0 columns (e.g. VIEW, or insufficient privilege on a base table) | Write per-table `.md` with `_error: no_columns: likely VIEW or permission` marker in place of the columns block; still emit the table heading + comment. Do not write to `_columns_index.tsv`. |
 | Filesystem write fails | `_error: write_failed: <path>: <reason>` — abort, leave `_meta.json.complete: false` so consumers know cache is broken |
 | Full cache without `--scope`, > 50 schemas | `_error: scope_too_large` |
 
