@@ -193,5 +193,4 @@ Cache dir created with `mkdir -p`, mode 700.
 |---|---|
 | Interactive schema walk (uses this cache when fresh, falls back to MCP) | `/redshift-explore` |
 | Profile a column's values (uses this cache for column metadata) | `/redshift-profile` |
-| Visualize FK relationships | `/redshift-erd` |
 | Mine actual usage from query history | `/redshift-lineage-from-stl` |

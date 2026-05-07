@@ -41,8 +41,6 @@
 }
 ```
 
-這段 JSON 可直接串接到 `/redshift-suggest-schema-yml`。
-
 ## 權威參考
 
 關於執行細節 — 輸入解析規則、型別分支矩陣、確切 SQL 模板、錯誤代碼 — 請見 [`SKILL.md`](./SKILL.md)。
