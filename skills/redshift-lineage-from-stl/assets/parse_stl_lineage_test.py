@@ -166,6 +166,29 @@ def t_multi_statement():
     print("✓ multi-statement SQL all parsed")
 
 
+def t_over_escaped_sql_decoded():
+    """sql_text with literal `\\n` / `\\r` / `\\t` (some MCP servers serialize
+    that way) must be decoded defensively before sqlglot parses, otherwise
+    the escape sequences leak into identifiers and produce phantom errors.
+    Idempotent: a second already-decoded row must yield the same edge.
+    """
+    real = "INSERT INTO dbt_marts.fct_orders\nSELECT * FROM dbt_staging.stg_orders;"
+    over_escaped = real.replace("\n", "\\n").replace("\t", "\\t")
+    out = run_script([
+        {"query": 30, "user": "a", "starttime": "2026-05-01 19:00:00", "sql": over_escaped},
+        {"query": 31, "user": "b", "starttime": "2026-05-01 19:01:00", "sql": real},
+    ])
+    assert out["summary"]["parse_errors"] == 0, out["parse_errors"]
+    assert out["summary"]["parsed"] == 2
+    assert len(out["edges"]) == 1, out["edges"]
+    e = out["edges"][0]
+    assert e["source"] == "dbt_staging.stg_orders"
+    assert e["target"] == "dbt_marts.fct_orders"
+    assert e["operation"] == "insert"
+    assert e["queries"] == 2
+    print("✓ over-escaped sql_text decoded (idempotent on real-newline input)")
+
+
 def t_parse_error_recorded():
     out = run_script([
         {"query": 11, "user": "x", "starttime": "2026-05-01 16:00:00",
@@ -191,6 +214,7 @@ def main():
         t_aggregation_users_and_count,
         t_cte_filtered,
         t_multi_statement,
+        t_over_escaped_sql_decoded,
         t_parse_error_recorded,
     ]
     for t in tests:

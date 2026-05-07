@@ -171,6 +171,16 @@ def main() -> int:
             if not sql:
                 continue
 
+            # Some MCP servers / transport layers return sql_text with literal
+            # escape sequences (\n, \r, \t) instead of real control chars. If
+            # we see no real newline but a literal "\n", decode the string.
+            # Idempotent on already-decoded input.
+            if "\n" not in sql and "\\n" in sql:
+                try:
+                    sql = sql.encode("utf-8").decode("unicode_escape")
+                except UnicodeDecodeError:
+                    pass
+
             try:
                 stmt_results = extract_targets_and_sources(sql)
             except Exception as e:
