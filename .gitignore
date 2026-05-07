@@ -105,7 +105,8 @@ Desktop.ini
 *.pyo
 *.pyd
 *.db
-*.sqlite3uv.lock
+*.sqlite3
+uv.lock
 
 # Claude Code editor-local settings (per-user, not for repo)
 .claude/
