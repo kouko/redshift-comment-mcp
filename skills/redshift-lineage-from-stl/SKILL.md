@@ -5,8 +5,8 @@ description: >-
   history — catches ad-hoc, BI-tool (Tableau / Looker), and manual-fix
   usage dbt manifest cannot see. Read-only. Use when auditing who
   reads / writes a table, or before deprecating one. Do NOT use for
-  dbt-internal lineage (use dbt manifest), declared FKs (use
-  /redshift-erd), or real-time monitoring. Triggers:
+  dbt-internal lineage (use dbt manifest) or real-time monitoring.
+  Triggers:
   /redshift-lineage-from-stl / actual lineage / who reads / Tableau
   usage / 實際 lineage / 誰在讀 / クエリ履歴.
 ---
@@ -131,6 +131,5 @@ exceeds retention)."
 
 | Need | Use |
 |---|---|
-| Declared (catalog) lineage — complement, not substitute | `/redshift-erd` |
 | Structure cache only (this skill mines runtime) | `/redshift-cache-schema` |
 | dbt internal model lineage | dbt manifest / dbt docs |

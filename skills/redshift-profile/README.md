@@ -41,8 +41,6 @@ Sample chat reply:
 }
 ```
 
-The JSON block is chainable into `/redshift-suggest-schema-yml`.
-
 ## Authoritative reference
 
 For execution details — input parsing rules, type-branch matrix, exact SQL templates, error codes — see [`SKILL.md`](./SKILL.md).

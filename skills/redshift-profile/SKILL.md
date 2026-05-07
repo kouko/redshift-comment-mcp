@@ -118,7 +118,7 @@ ending with a one-line interpretation hint:
 - NEVER use MCP keys `column_name` / `data_type` — MCP returns `{name, type, nullable, comment}`. Wrong shape costs a debugging cycle.
 - NEVER profile free-text or huge-cardinality columns without warning the user — top-100 of `varchar(2000)` is noise. Warn and confirm before scanning.
 - NEVER skip the `::text` cast in the top-N CTE — Redshift coerces booleans/dates inconsistently across drivers; uniform JSON shape requires explicit cast.
-- NEVER report `min` / `max` for `string` / `boolean` types — lexical extrema mislead, and `/redshift-suggest-schema-yml` would turn them into range bounds.
+- NEVER report `min` / `max` for `string` / `boolean` types — lexical extrema mislead downstream consumers (e.g. `varchar` "z" vs "a" is not a meaningful range).
 - NEVER swallow `execute_sql` errors — Redshift error text is diagnostic. Surface verbatim under `_error: execute_sql_failed`.
 
 ## Errors
@@ -135,6 +135,5 @@ Surface execute_sql errors verbatim — Redshift errors are diagnostic.
 
 | Need | Use |
 |---|---|
-| Chain a profile into a dbt yml draft | `/redshift-suggest-schema-yml` |
 | Find which column to profile | `/redshift-explore` |
 | Structure (vs values) | `/redshift-cache-schema` |

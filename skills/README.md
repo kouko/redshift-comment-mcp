@@ -33,9 +33,7 @@ What you will NOT find here:
 |---|---|---|
 | [redshift-setup](redshift-setup/) | Conversational walk-through to configure a connection profile (host / port / user / dbname / password). | v0.2.0 |
 | [redshift-profile](redshift-profile/) | Profile a column: cardinality / top-N / null rate / min-max / existing comment, all in one chat round. | v0.3.0 |
-| [redshift-suggest-schema-yml](redshift-suggest-schema-yml/) | Draft a paste-ready dbt v2 `models:` block with conservative test suggestions (not_null / unique / accepted_values). | v0.3.0 |
 | [redshift-cache-schema](redshift-cache-schema/) | LLM-internal cache: dumps cluster structure to local files so other skills resolve metadata via Read instead of MCP round-trips. Read by `/redshift-explore`, `/redshift-profile`, and the server-level CACHE PROTOCOL. | v0.3.0 |
-| [redshift-erd](redshift-erd/) | Generate a Mermaid erDiagram with three-tier FK inference (pg_constraint → dbt manifest → naming heuristic), confidence-labeled. | v0.3.0 |
 | [redshift-explore](redshift-explore/) | Three-step interactive wizard (schema → table → column) that lets users pick by reading comments instead of remembering names. | v0.3.0 |
 | [redshift-lineage-from-stl](redshift-lineage-from-stl/) | Mine `STL_QUERY` / `SYS_QUERY_HISTORY` + parse SQL with sqlglot to reconstruct *actual* table-to-table data flow from query history. | v0.3.0 |
 

@@ -57,9 +57,7 @@ the LLM to read comments before trusting names.
 |---|---|---|
 | [/redshift-setup](skills/redshift-setup/) | Conversational walk-through to configure a connection profile. | v0.2.0 |
 | [/redshift-profile](skills/redshift-profile/) | Profile a column: cardinality / top-N / null rate / min-max / existing comment, one round. | v0.3.0 |
-| [/redshift-suggest-schema-yml](skills/redshift-suggest-schema-yml/) | Draft a paste-ready dbt v2 `models:` block with conservative test suggestions. | v0.3.0 |
-| [/redshift-cache-schema](skills/redshift-cache-schema/) | Dump cluster structure as markdown to `~/.cache/...` for offline browsing. | v0.3.0 |
-| [/redshift-erd](skills/redshift-erd/) | Mermaid erDiagram with three-tier FK inference (pg_constraint → dbt manifest → naming heuristic), confidence-labeled. | v0.3.0 |
+| [/redshift-cache-schema](skills/redshift-cache-schema/) | LLM-internal cache: dumps cluster structure to local files for faster metadata lookups in subsequent skill invocations. | v0.3.0 |
 | [/redshift-explore](skills/redshift-explore/) | Three-step interactive wizard (schema → table → column) — pick by reading comments. | v0.3.0 |
 | [/redshift-lineage-from-stl](skills/redshift-lineage-from-stl/) | Mine `STL_QUERY` + sqlglot to reconstruct **actual** table-to-table lineage from query history. | v0.3.0 |
 

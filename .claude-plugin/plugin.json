@@ -1,6 +1,6 @@
 {
   "name": "redshift-comment-mcp",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "description": "Redshift MCP server with comment-first exploration. 11 tools for schema/table/column listing, hit-count keyword search, and SELECT-only SQL. Comments are authoritative — names are unreliable. Multi-cluster via named profiles. Plugin uses the cloned repo source directly (no PyPI release prerequisite); run `uvx --from \"git+https://github.com/kouko/redshift-comment-mcp.git\" redshift-comment-mcp setup` once after install to configure your profile.",
   "author": {
     "name": "kouko",

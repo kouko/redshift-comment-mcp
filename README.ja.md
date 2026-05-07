@@ -57,9 +57,7 @@ list / search はすべてページング対応。コメントを読んでから
 |---|---|---|
 | [/redshift-setup](skills/redshift-setup/) | 接続プロファイルを対話的に設定するウォークスルー。 | v0.2.0 |
 | [/redshift-profile](skills/redshift-profile/) | 1 ラウンドでカラムの cardinality / top-N / NULL 率 / min-max / 既存コメントを返すプロファイラ。 | v0.3.0 |
-| [/redshift-suggest-schema-yml](skills/redshift-suggest-schema-yml/) | 保守的なテスト提案つきの dbt v2 `models:` ブロックを下書き。 | v0.3.0 |
-| [/redshift-cache-schema](skills/redshift-cache-schema/) | クラスタ構造を `~/.cache/...` に markdown でダンプ、オフライン参照可能に。 | v0.3.0 |
-| [/redshift-erd](skills/redshift-erd/) | 三段階 FK 推定（pg_constraint → dbt manifest → 命名ヒューリスティック）と信頼度ラベル付きの Mermaid erDiagram。 | v0.3.0 |
+| [/redshift-cache-schema](skills/redshift-cache-schema/) | LLM 内部キャッシュ: クラスタ構造をローカルファイルにダンプし、後続のスキル呼び出しでメタデータを高速に解決。 | v0.3.0 |
 | [/redshift-explore](skills/redshift-explore/) | 三段ウィザード（schema → table → column）— 名前を覚えるのではなくコメントを読んで選ぶ。 | v0.3.0 |
 | [/redshift-lineage-from-stl](skills/redshift-lineage-from-stl/) | `STL_QUERY` + sqlglot を採掘してクエリ履歴から **実際の** テーブル間系譜を再構築。 | v0.3.0 |
 

@@ -143,5 +143,4 @@ Step 4 produces the downstream skill's output.
 | Need | Use |
 |---|---|
 | Profile a column once you have it | `/redshift-profile` |
-| Visualize a whole schema | `/redshift-erd` |
-| Offline browse without MCP | `/redshift-cache-schema` |
+| Prime / refresh the cache for faster metadata reads | `/redshift-cache-schema` |

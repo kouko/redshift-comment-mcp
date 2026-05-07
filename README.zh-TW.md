@@ -53,9 +53,7 @@ manifest 涵蓋面太窄、Web GUI 太慢、手刻 SQL 太重複。
 |---|---|---|
 | [/redshift-setup](skills/redshift-setup/) | 對話式逐步設定連線 profile。 | v0.2.0 |
 | [/redshift-profile](skills/redshift-profile/) | 一回合內回出欄位的 cardinality / top-N / null 比例 / min-max / 既有註解。 | v0.3.0 |
-| [/redshift-suggest-schema-yml](skills/redshift-suggest-schema-yml/) | 草擬可貼上的 dbt v2 `models:` 區塊，附保守的測試建議。 | v0.3.0 |
-| [/redshift-cache-schema](skills/redshift-cache-schema/) | 把 cluster 結構 dump 成 markdown 到 `~/.cache/...`，方便離線瀏覽。 | v0.3.0 |
-| [/redshift-erd](skills/redshift-erd/) | 三層 FK 推論（pg_constraint → dbt manifest → 命名啟發式）的 Mermaid erDiagram，每條邊都標 confidence。 | v0.3.0 |
+| [/redshift-cache-schema](skills/redshift-cache-schema/) | LLM 內部 cache：把 cluster 結構寫到本地檔，讓後續 skill 呼叫能快速解析 metadata。 | v0.3.0 |
 | [/redshift-explore](skills/redshift-explore/) | 三步 wizard（schema → table → column）—— 讀註解來挑，不用記名字。 | v0.3.0 |
 | [/redshift-lineage-from-stl](skills/redshift-lineage-from-stl/) | 挖 `STL_QUERY` + sqlglot 從查詢歷史還原**實際**的 table 對 table 資料流。 | v0.3.0 |
 
