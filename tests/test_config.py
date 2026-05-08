@@ -119,3 +119,98 @@ def test_delete_profile_tolerates_missing_keyring_entry(tmp_xdg, fake_keyring):
     config.write_profile("default", host="h", port=5439, user="u", dbname="d")
     # No password set.
     assert config.delete_profile("default") is True
+
+
+# ===== active-profile pointer =====
+
+
+def test_active_profile_path_uses_xdg(tmp_xdg):
+    p = config.active_profile_path()
+    assert str(p).startswith(str(tmp_xdg))
+    assert p.name == "active-profile"
+
+
+def test_read_active_profile_returns_none_when_missing(tmp_xdg):
+    assert config.read_active_profile() is None
+
+
+def test_write_then_read_active_profile_roundtrip(tmp_xdg):
+    config.write_active_profile("prod")
+    assert config.read_active_profile() == "prod"
+
+
+def test_write_active_profile_sets_mode_600(tmp_xdg):
+    config.write_active_profile("prod")
+    mode = config.active_profile_path().stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_write_active_profile_overwrites(tmp_xdg):
+    config.write_active_profile("prod")
+    config.write_active_profile("dev")
+    assert config.read_active_profile() == "dev"
+
+
+def test_read_active_profile_strips_whitespace(tmp_xdg):
+    p = config.active_profile_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("  prod  \n")
+    assert config.read_active_profile() == "prod"
+
+
+def test_read_active_profile_empty_file_returns_none(tmp_xdg):
+    p = config.active_profile_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text("   \n")
+    assert config.read_active_profile() is None
+
+
+def test_clear_active_profile_removes_file(tmp_xdg):
+    config.write_active_profile("prod")
+    assert config.active_profile_path().exists()
+    config.clear_active_profile()
+    assert not config.active_profile_path().exists()
+
+
+def test_clear_active_profile_is_idempotent_when_absent(tmp_xdg):
+    # Should not raise even when the file is absent.
+    config.clear_active_profile()
+    assert not config.active_profile_path().exists()
+
+
+def test_resolve_active_profile_cli_arg_wins(tmp_xdg, monkeypatch):
+    """CLI arg beats env var beats file beats fallback."""
+    monkeypatch.setenv("REDSHIFT_COMMENT_PROFILE", "envname")
+    config.write_active_profile("filename")
+    assert config.resolve_active_profile("cli-name") == "cli-name"
+
+
+def test_resolve_active_profile_env_wins_over_file(tmp_xdg, monkeypatch):
+    monkeypatch.setenv("REDSHIFT_COMMENT_PROFILE", "envname")
+    config.write_active_profile("filename")
+    assert config.resolve_active_profile() == "envname"
+
+
+def test_resolve_active_profile_file_when_no_env(tmp_xdg, monkeypatch):
+    monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+    config.write_active_profile("filename")
+    assert config.resolve_active_profile() == "filename"
+
+
+def test_resolve_active_profile_falls_back_to_default(tmp_xdg, monkeypatch):
+    """No CLI arg, no env var, no file → 'default'. Single-profile state."""
+    monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+    assert config.resolve_active_profile() == "default"
+
+
+def test_resolve_active_profile_empty_env_treated_as_unset(tmp_xdg, monkeypatch):
+    """Empty env var should not pin to "" — fall through to next layer."""
+    monkeypatch.setenv("REDSHIFT_COMMENT_PROFILE", "")
+    config.write_active_profile("filename")
+    assert config.resolve_active_profile() == "filename"
+
+
+def test_resolve_active_profile_empty_cli_arg_treated_as_unset(tmp_xdg, monkeypatch):
+    """Empty CLI arg should not pin to "" — fall through to env var."""
+    monkeypatch.setenv("REDSHIFT_COMMENT_PROFILE", "envname")
+    assert config.resolve_active_profile("") == "envname"
