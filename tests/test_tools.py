@@ -5,7 +5,11 @@ from contextlib import contextmanager
 from redshift_comment_mcp.redshift_tools import (
     RedshiftTools,
     paginate_results,
+    apply_comment_cap,
+    build_scale_hint,
     DEFAULT_MAX_ITEMS,
+    MAX_COMMENT_LEN,
+    SCALE_HINT_THRESHOLD,
     validate_read_only_sql,
 )
 from redshift_comment_mcp.connection import RedshiftConnectionConfig
@@ -975,3 +979,188 @@ class TestErrorHandling:
 
         with pytest.raises(ValueError, match="Invalid schema or table name"):
             get_column_comment(schema_name='valid', table_name='also-invalid', column_name='col')
+
+
+# ========== Comment cap & scale hint helper tests ==========
+
+class TestCommentCapHelper:
+    """apply_comment_cap unit tests"""
+
+    def test_short_comment_untouched(self):
+        items = [{"comment": "short"}]
+        n = apply_comment_cap(items, "comment", max_len=10)
+        assert n == 0
+        assert items[0]["comment"] == "short"
+
+    def test_long_comment_truncated_with_ellipsis(self):
+        items = [{"comment": "x" * 100}]
+        n = apply_comment_cap(items, "comment", max_len=10)
+        assert n == 1
+        assert items[0]["comment"] == "x" * 10 + "…"
+
+    def test_mixed_items_count_only_truncated(self):
+        items = [
+            {"comment": "short"},
+            {"comment": "x" * 50},
+            {"comment": "y" * 5},
+        ]
+        n = apply_comment_cap(items, "comment", max_len=10)
+        assert n == 1
+        assert items[0]["comment"] == "short"
+        assert items[1]["comment"].endswith("…")
+        assert items[2]["comment"] == "y" * 5
+
+    def test_non_string_comment_skipped(self):
+        items = [{"comment": None}, {"comment": 123}, {}]
+        n = apply_comment_cap(items, "comment", max_len=10)
+        assert n == 0  # None / int / missing key all skipped silently
+
+    def test_default_max_len_is_module_constant(self):
+        items = [{"comment": "x" * (MAX_COMMENT_LEN + 5)}]
+        n = apply_comment_cap(items, "comment")  # no explicit max_len
+        assert n == 1
+        # cap + 1 because we append the ellipsis after slicing to MAX_COMMENT_LEN
+        assert len(items[0]["comment"]) == MAX_COMMENT_LEN + 1
+
+
+class TestScaleHintHelper:
+    """build_scale_hint unit tests"""
+
+    def test_below_threshold_returns_none(self):
+        assert build_scale_hint(SCALE_HINT_THRESHOLD) is None
+        assert build_scale_hint(SCALE_HINT_THRESHOLD - 1) is None
+        assert build_scale_hint(0) is None
+
+    def test_above_threshold_returns_message_with_count(self):
+        msg = build_scale_hint(800)
+        assert msg is not None
+        assert "800" in msg
+        # 800 / 50 page_size = 16 paginated calls
+        assert "16" in msg
+        assert "search_tables" in msg
+        assert "redshift-cache-schema" in msg
+
+    def test_just_above_threshold(self):
+        msg = build_scale_hint(SCALE_HINT_THRESHOLD + 1)
+        assert msg is not None
+        # (101 + 49) // 50 = 3 pages
+        assert "3" in msg
+
+    def test_custom_page_size(self):
+        msg = build_scale_hint(200, page_size=25)
+        assert msg is not None
+        # 200 / 25 = 8 pages
+        assert "8" in msg
+
+
+class TestListTablesIntegrationWithCapAndHint:
+    """End-to-end behavior: list_tables emits scale_hint and truncates comments."""
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_scale_hint_emitted_when_total_above_threshold(self, mock_read_sql, mock_config):
+        config, _ = mock_config
+        # Schema lookup (parent comment) + tables list. Many tables (above threshold).
+        n_tables = SCALE_HINT_THRESHOLD + 50  # 150 tables
+        schema_df = pd.DataFrame({'schema_comment': ['big schema']})
+        tables_df = pd.DataFrame({
+            'table_name': [f't{i}' for i in range(n_tables)],
+            'table_type': ['BASE TABLE'] * n_tables,
+        })
+        mock_read_sql.side_effect = [schema_df, tables_df]
+
+        tools = RedshiftTools(config)
+        list_tables = _get_tool_fn(tools, 'list_tables')
+        result = list_tables(schema_name='big')
+
+        assert result["total_count"] == n_tables
+        assert "scale_hint" in result
+        assert str(n_tables) in result["scale_hint"]
+        assert "search_tables" in result["scale_hint"]
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_scale_hint_absent_when_total_below_threshold(self, mock_read_sql, mock_config):
+        config, _ = mock_config
+        schema_df = pd.DataFrame({'schema_comment': ['small schema']})
+        tables_df = pd.DataFrame({
+            'table_name': ['t1', 't2', 't3'],
+            'table_type': ['BASE TABLE'] * 3,
+        })
+        mock_read_sql.side_effect = [schema_df, tables_df]
+
+        tools = RedshiftTools(config)
+        list_tables = _get_tool_fn(tools, 'list_tables')
+        result = list_tables(schema_name='small')
+
+        assert "scale_hint" not in result
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_table_comment_truncated_when_too_long(self, mock_read_sql, mock_config):
+        config, _ = mock_config
+        long_comment = "L" * (MAX_COMMENT_LEN + 500)
+        schema_df = pd.DataFrame({'schema_comment': ['s']})
+        tables_df = pd.DataFrame({
+            'table_name': ['big_table'],
+            'table_type': ['BASE TABLE'],
+            'table_comment': [long_comment],
+        })
+        mock_read_sql.side_effect = [schema_df, tables_df]
+
+        tools = RedshiftTools(config)
+        list_tables = _get_tool_fn(tools, 'list_tables')
+        result = list_tables(schema_name='s', include_comments=True)
+
+        assert result["comment_truncated_count"] == 1
+        assert "comment_truncated_hint" in result
+        assert result["tables"][0]["comment"].endswith("…")
+        assert len(result["tables"][0]["comment"]) == MAX_COMMENT_LEN + 1
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_short_table_comment_not_flagged(self, mock_read_sql, mock_config):
+        config, _ = mock_config
+        schema_df = pd.DataFrame({'schema_comment': ['s']})
+        tables_df = pd.DataFrame({
+            'table_name': ['t'],
+            'table_type': ['BASE TABLE'],
+            'table_comment': ['short comment'],
+        })
+        mock_read_sql.side_effect = [schema_df, tables_df]
+
+        tools = RedshiftTools(config)
+        list_tables = _get_tool_fn(tools, 'list_tables')
+        result = list_tables(schema_name='s', include_comments=True)
+
+        assert "comment_truncated_count" not in result
+        assert "comment_truncated_hint" not in result
+
+
+class TestSingleGetterDoesNotTruncate:
+    """get_table_comment / get_column_comment are the full-text escape hatch."""
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_get_table_comment_returns_full_long_text(self, mock_read_sql, mock_config):
+        config, _ = mock_config
+        long_comment = "Z" * (MAX_COMMENT_LEN + 1000)
+        mock_df = pd.DataFrame({'table_comment': [long_comment]})
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        get_table_comment = _get_tool_fn(tools, 'get_table_comment')
+        result = get_table_comment(schema_name='s', table_name='t')
+
+        # Full text returned, no truncation, no marker
+        assert result["comment"] == long_comment
+        assert "…" not in result["comment"]
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_get_column_comment_returns_full_long_text(self, mock_read_sql, mock_config):
+        config, _ = mock_config
+        long_comment = "C" * (MAX_COMMENT_LEN + 1000)
+        mock_df = pd.DataFrame({'data_type': ['varchar'], 'column_comment': [long_comment]})
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        get_column_comment = _get_tool_fn(tools, 'get_column_comment')
+        result = get_column_comment(schema_name='s', table_name='t', column_name='c')
+
+        assert result["comment"] == long_comment
+        assert "…" not in result["comment"]

@@ -10,6 +10,16 @@ logger = logging.getLogger(__name__)
 # 分頁設定
 DEFAULT_MAX_ITEMS = 50  # 預設最大回傳筆數（超過時自動截斷）
 
+# Comment 大小防護
+# 經 production cluster 實測（2026-05-08, n=8534）：column comment p100=471，
+# table comment p90=919 / p95=1517 / p100=3680。1000 字元截斷 9% 的 table
+# 長尾，column comment 完全不受影響。單筆 getter（get_table_comment 等）不
+# 套用，使用者要全文時走那條路。
+MAX_COMMENT_LEN = 1000
+
+# scale_hint 觸發門檻：list_tables 回應 total_count 超過此值時附上分頁成本提示
+SCALE_HINT_THRESHOLD = 100
+
 
 # ===== SQL 安全驗證 =====
 
@@ -195,6 +205,42 @@ def paginate_results(items: list, limit: Optional[int], offset: int, default_max
     }
 
 
+def apply_comment_cap(items: list, key: str, max_len: int = MAX_COMMENT_LEN) -> int:
+    """In-place truncate the comment field at ``key`` for each item in ``items``;
+    returns the count of items that were truncated.
+
+    Items whose comment is shorter than or equal to ``max_len`` are left
+    untouched. Truncated comments get an ellipsis appended so the caller
+    can detect truncation visually as well as via the returned count.
+    """
+    count = 0
+    for item in items:
+        original = item.get(key)
+        if isinstance(original, str) and len(original) > max_len:
+            item[key] = original[:max_len] + "…"
+            count += 1
+    return count
+
+
+def build_scale_hint(total_count: int, page_size: int = DEFAULT_MAX_ITEMS) -> Optional[str]:
+    """Return a one-line scale hint when total_count would force painful
+    pagination, or None when the result is small enough to enumerate fully.
+
+    The threshold (SCALE_HINT_THRESHOLD) is intentionally above one page
+    so the hint only fires when full enumeration genuinely costs ≥3 round
+    trips. Message includes the actual page count so the LLM can weigh
+    cost objectively rather than relying on a magic threshold.
+    """
+    if total_count <= SCALE_HINT_THRESHOLD:
+        return None
+    pages = (total_count + page_size - 1) // page_size
+    return (
+        f"This schema has {total_count} tables. "
+        f"Full enumeration would need {pages} paginated tool calls. "
+        f"Consider search_tables(keywords) or /redshift-cache-schema for goal-oriented queries."
+    )
+
+
 def calculate_hit_count(name: str, comment: str, keywords: list) -> int:
     """
     計算關鍵字在 name 和 comment 中的命中次數。
@@ -227,6 +273,16 @@ SQL; trust the comment over the name when they disagree.
 PAGINATION: list_*, search_*, and get_all_column_comments cap at 50
 items per response. Check `has_more`; if true, refetch with `offset`
 until exhausted before drawing conclusions.
+
+COMMENT TRUNCATION: Multi-item responses cap each comment at 1000
+chars. Look for `comment_truncated_count` in the response; if present,
+some comments were cut. Call get_table_comment / get_column_comment
+on the specific item for full text. Single-item getters never truncate.
+
+SCALE GUIDANCE: list_tables emits `scale_hint` when total_count > 100.
+For schemas at that size, paginating list_tables to completion is
+expensive — prefer search_tables(keywords) for goal-oriented queries
+or /redshift-cache-schema for bulk analysis.
 
 OPTIMIZATION: list_* tools accept include_comments / include_parent_comments
 flags to fold get_*_comment calls into the same response.
@@ -358,6 +414,11 @@ line suggesting /redshift-cache-schema --refresh.
             # 分頁處理
             page = paginate_results(tables, limit, offset, DEFAULT_MAX_ITEMS)
 
+            # Comment 字元截斷（多筆回應防護；只對實際回傳的項目套用）
+            truncated_count = 0
+            if include_comments:
+                truncated_count = apply_comment_cap(page["items"], "comment")
+
             result = {
                 "schema_name": schema_name,
                 "total_count": page["total_count"],
@@ -373,6 +434,17 @@ line suggesting /redshift-cache-schema --refresh.
 
             if page["auto_truncated"]:
                 result["pagination_hint"] = f"Results auto-truncated to {DEFAULT_MAX_ITEMS}. Use limit/offset to retrieve more."
+
+            if truncated_count > 0:
+                result["comment_truncated_count"] = truncated_count
+                result["comment_truncated_hint"] = (
+                    f"{truncated_count} of {page['returned_count']} table comments were truncated "
+                    f"at {MAX_COMMENT_LEN} chars. Use get_table_comment(schema, table) for full text."
+                )
+
+            scale_hint = build_scale_hint(page["total_count"])
+            if scale_hint:
+                result["scale_hint"] = scale_hint
 
             return result
 
@@ -438,6 +510,11 @@ line suggesting /redshift-cache-schema --refresh.
             # 分頁處理
             page = paginate_results(columns, limit, offset, DEFAULT_MAX_ITEMS)
 
+            # Comment 字元截斷（多筆回應防護；只對實際回傳的項目套用）
+            truncated_count = 0
+            if include_comments:
+                truncated_count = apply_comment_cap(page["items"], "comment")
+
             result = {
                 "schema_name": schema_name,
                 "table_name": table_name,
@@ -454,6 +531,13 @@ line suggesting /redshift-cache-schema --refresh.
 
             if page["auto_truncated"]:
                 result["pagination_hint"] = f"Results auto-truncated to {DEFAULT_MAX_ITEMS}. Use limit/offset to retrieve more."
+
+            if truncated_count > 0:
+                result["comment_truncated_count"] = truncated_count
+                result["comment_truncated_hint"] = (
+                    f"{truncated_count} of {page['returned_count']} column comments were truncated "
+                    f"at {MAX_COMMENT_LEN} chars. Use get_column_comment(schema, table, col) for full text."
+                )
 
             return result
 
@@ -590,6 +674,9 @@ line suggesting /redshift-cache-schema --refresh.
             # 分頁處理
             page = paginate_results(tables, limit, offset, DEFAULT_MAX_ITEMS)
 
+            # Comment 字元截斷（search 永遠帶 comment，無 include_comments flag）
+            truncated_count = apply_comment_cap(page["items"], "table_comment")
+
             result = {
                 "keywords": keyword_list,
                 "schema_filter": schema_name,
@@ -603,6 +690,13 @@ line suggesting /redshift-cache-schema --refresh.
 
             if page["auto_truncated"]:
                 result["pagination_hint"] = f"Results auto-truncated to {DEFAULT_MAX_ITEMS}. Use limit/offset to retrieve more."
+
+            if truncated_count > 0:
+                result["comment_truncated_count"] = truncated_count
+                result["comment_truncated_hint"] = (
+                    f"{truncated_count} of {page['returned_count']} table comments were truncated "
+                    f"at {MAX_COMMENT_LEN} chars. Use get_table_comment(schema, table) for full text."
+                )
 
             return result
 
@@ -669,6 +763,9 @@ line suggesting /redshift-cache-schema --refresh.
             # 分頁處理
             page = paginate_results(columns, limit, offset, DEFAULT_MAX_ITEMS)
 
+            # Comment 字元截斷（search 永遠帶 comment，無 include_comments flag）
+            truncated_count = apply_comment_cap(page["items"], "column_comment")
+
             result = {
                 "keywords": keyword_list,
                 "schema_name": schema_name,
@@ -683,6 +780,13 @@ line suggesting /redshift-cache-schema --refresh.
 
             if page["auto_truncated"]:
                 result["pagination_hint"] = f"Results auto-truncated to {DEFAULT_MAX_ITEMS}. Use limit/offset to retrieve more."
+
+            if truncated_count > 0:
+                result["comment_truncated_count"] = truncated_count
+                result["comment_truncated_hint"] = (
+                    f"{truncated_count} of {page['returned_count']} column comments were truncated "
+                    f"at {MAX_COMMENT_LEN} chars. Use get_column_comment(schema, table, col) for full text."
+                )
 
             return result
 
@@ -795,6 +899,9 @@ line suggesting /redshift-cache-schema --refresh.
             # 分頁處理
             page = paginate_results(records, limit, offset, DEFAULT_MAX_ITEMS)
 
+            # Comment 字元截斷（多筆回應防護）
+            truncated_count = apply_comment_cap(page["items"], "column_comment")
+
             result = {
                 "schema_name": schema_name,
                 "table_name": table_name,
@@ -807,6 +914,13 @@ line suggesting /redshift-cache-schema --refresh.
 
             if page["auto_truncated"]:
                 result["pagination_hint"] = f"Results auto-truncated to {DEFAULT_MAX_ITEMS}. Use limit/offset to retrieve more."
+
+            if truncated_count > 0:
+                result["comment_truncated_count"] = truncated_count
+                result["comment_truncated_hint"] = (
+                    f"{truncated_count} of {page['returned_count']} column comments were truncated "
+                    f"at {MAX_COMMENT_LEN} chars. Use get_column_comment(schema, table, col) for full text."
+                )
 
             return result
 
