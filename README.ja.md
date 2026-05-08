@@ -61,6 +61,8 @@ list / search はすべてページング対応。コメントを読んでから
 | [/redshift-cache-schema](skills/redshift-cache-schema/) | LLM 内部キャッシュ: クラスタ構造をローカルファイルにダンプし、後続のスキル呼び出しでメタデータを高速に解決。 | v0.3.0 |
 | [/redshift-explore](skills/redshift-explore/) | 三段ウィザード（schema → table → column）— 名前を覚えるのではなくコメントを読んで選ぶ。 | v0.3.0 |
 | [/redshift-lineage-from-stl](skills/redshift-lineage-from-stl/) | `STL_QUERY` + sqlglot を採掘してクエリ履歴から **実際の** テーブル間系譜を再構築。 | v0.3.0 |
+| [/redshift-grep-columns](skills/redshift-grep-columns/) | 1 つまたは全スキーマを横断してカラム名／コメントをキーワード検索。キャッシュ優先（ローカル TSV grep）／ライブ MCP フォールバック。 | v0.4.0 |
+| [/redshift-grep-tables](skills/redshift-grep-tables/) | 全スキーマを横断してテーブル名／コメントをキーワード検索。キャッシュ優先（ローカル TSV grep）／ライブ MCP フォールバック。 | v0.4.0 |
 
 各スキルはフォルダ内に三言語 README を持っています（ただし
 `/redshift-setup` と `/redshift-switch-profile` はセットアップ系内部
