@@ -291,6 +291,14 @@ SEARCH KEYWORDS: search_schemas / search_tables / search_columns take
 space-separated keywords (OR logic). Pick keywords in the user's
 conversation language — comments usually match.
 
+SEARCH SCOPE:
+- search_tables(keywords, schema_name=None) — pass schema_name for
+  one schema (faster, narrower); omit it for cluster-wide search.
+- search_columns(keywords, schema_name, table_name=None) — pass
+  table_name for one-table drill-down; omit it for schema-wide
+  cross-table search (returns table_name on each row, the natural
+  primitive for FK / JOIN-key reconnaissance).
+
 For ad-hoc exploration, prefer list_* / search_* tools over execute_sql
 against information_schema — they include comments directly.
 
@@ -610,19 +618,22 @@ line suggesting /redshift-cache-schema --refresh.
             return result
 
         @self.mcp.tool
-        def search_tables(keywords: str, schema_name: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
-            """Search tables in a given schema_name by keywords (space-separated, OR logic) over table name and comment."""
+        def search_tables(keywords: str, schema_name: Optional[str] = None, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
+            """Search tables by keywords (space-separated, OR logic) over table name and comment.
+
+            Pass schema_name to scope to one schema (faster, narrower). Omit it to
+            search across all user schemas in the cluster (broader, slightly slower).
+            """
             # 解析關鍵字
             keyword_list = [k.strip() for k in keywords.split() if k.strip()]
             if not keyword_list:
                 raise ValueError("At least one keyword is required.")
 
-            # 驗證 schema_name
-            if not schema_name or not schema_name.isidentifier():
+            # schema_name 是可選的，但若提供必須是合法 identifier
+            if schema_name is not None and not schema_name.isidentifier():
                 raise ValueError("Invalid schema name.")
 
             # 建構 SQL - 使用參數化查詢防止 SQL injection
-            # 基礎查詢
             base_sql = """
             SELECT
                 n.nspname AS schema_name,
@@ -638,9 +649,10 @@ line suggesting /redshift-cache-schema --refresh.
               AND n.nspname <> 'information_schema'
             """
 
-            # 加入 schema 過濾條件（必填）
-            params = [schema_name]
-            base_sql += " AND n.nspname = %s"
+            params: list = []
+            if schema_name is not None:
+                base_sql += " AND n.nspname = %s"
+                params.append(schema_name)
 
             # 加入關鍵字搜尋條件（OR 邏輯）
             keyword_conditions = []
@@ -701,22 +713,31 @@ line suggesting /redshift-cache-schema --refresh.
             return result
 
         @self.mcp.tool
-        def search_columns(keywords: str, schema_name: str, table_name: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
-            """Search columns in a given schema_name and table_name by keywords (space-separated, OR logic) over column name and comment."""
+        def search_columns(keywords: str, schema_name: str, table_name: Optional[str] = None, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
+            """Search columns by keywords (space-separated, OR logic) over column name and comment.
+
+            schema_name is required. Pass table_name to scope to one table (cheap;
+            use this for routine drill-down). Omit table_name to search every table
+            in the schema (schema-wide; the natural primitive for cross-table FK /
+            JOIN-key reconnaissance, returns table_name on each row).
+            """
             # 解析關鍵字
             keyword_list = [k.strip() for k in keywords.split() if k.strip()]
             if not keyword_list:
                 raise ValueError("At least one keyword is required.")
 
-            # 驗證 schema_name 和 table_name
+            # schema 必填且需是合法 identifier
             if not schema_name or not schema_name.isidentifier():
                 raise ValueError("Invalid schema name.")
-            if not table_name or not table_name.isidentifier():
+            # table_name 可選；若提供必須是合法 identifier
+            if table_name is not None and not table_name.isidentifier():
                 raise ValueError("Invalid table name.")
 
             # 建構 SQL - 使用參數化查詢防止 SQL injection
+            # schema-wide 模式回傳 table_name；single-table 模式為了向後相容也帶上
             base_sql = """
             SELECT
+                c.table_name,
                 c.column_name,
                 c.data_type,
                 c.is_nullable,
@@ -725,11 +746,13 @@ line suggesting /redshift-cache-schema --refresh.
             LEFT JOIN pg_namespace n ON n.nspname = c.table_schema
             LEFT JOIN pg_class cl ON cl.relname = c.table_name AND cl.relnamespace = n.oid
             LEFT JOIN pg_description d ON d.objoid = cl.oid AND d.objsubid = c.ordinal_position
-            WHERE c.table_schema = %s AND c.table_name = %s
+            WHERE c.table_schema = %s
             """
 
-            # 參數列表
-            params = [schema_name, table_name]
+            params: list = [schema_name]
+            if table_name is not None:
+                base_sql += " AND c.table_name = %s"
+                params.append(table_name)
 
             # 加入關鍵字搜尋條件（OR 邏輯）
             keyword_conditions = []
@@ -739,7 +762,8 @@ line suggesting /redshift-cache-schema --refresh.
                 params.append(f"%{kw}%")
 
             base_sql += " AND (" + " OR ".join(keyword_conditions) + ")"
-            base_sql += " ORDER BY c.ordinal_position;"
+            # schema-wide 模式按 table 名分組，再依 ordinal 排
+            base_sql += " ORDER BY c.table_name, c.ordinal_position;"
 
             with self.config.get_connection() as conn:
                 df = wr.redshift.read_sql_query(base_sql, con=conn, params=params)
@@ -750,6 +774,7 @@ line suggesting /redshift-cache-schema --refresh.
                     comment = r['column_comment'] if r['column_comment'] else "(No comment available)"
                     hit_count = calculate_hit_count(name, comment, keyword_list)
                     columns.append({
+                        "table_name": r['table_name'],
                         "column_name": name,
                         "data_type": r['data_type'],
                         "is_nullable": r['is_nullable'],
@@ -757,8 +782,8 @@ line suggesting /redshift-cache-schema --refresh.
                         "hit_count": hit_count
                     })
 
-            # 依 hit_count DESC, column_name ASC 排序
-            columns.sort(key=lambda x: (-x["hit_count"], x["column_name"]))
+            # 依 hit_count DESC, table_name ASC, column_name ASC 排序
+            columns.sort(key=lambda x: (-x["hit_count"], x["table_name"], x["column_name"]))
 
             # 分頁處理
             page = paginate_results(columns, limit, offset, DEFAULT_MAX_ITEMS)
@@ -770,6 +795,7 @@ line suggesting /redshift-cache-schema --refresh.
                 "keywords": keyword_list,
                 "schema_name": schema_name,
                 "table_name": table_name,
+                "scope": "single_table" if table_name is not None else "schema_wide",
                 "total_count": page["total_count"],
                 "returned_count": page["returned_count"],
                 "offset": page["offset"],

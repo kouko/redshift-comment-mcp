@@ -79,24 +79,29 @@ shell metacharacters (`-`, `*`, `$`, etc. in user input).
 
 ### Step 1b — live MCP path (fallback)
 
-Used when `cache=miss/stale`. Strongly prefer prompting the user to
-prime the cache first if the cluster has > 5 schemas — live path costs
-many round trips.
+Used when `cache=miss/stale`. The MCP server's `search_columns` accepts an
+optional `table_name`; omit it for **schema-wide column search in one call**:
+
+```
+search_columns(keywords, schema_name=<schema>, table_name=None)
+```
+
+This returns one row per matching column with `table_name` included, ranked
+by `hit_count` across name + comment. Paginate via `has_more` if total > 50.
 
 Procedure:
-- If `--schema` given: skip schema enumeration; iterate the listed schemas.
-- Else: `list_schemas(include_comments=true)` → schema list.
-- Per schema: `search_tables(keywords, schema_name)` → candidate tables that
-  may contain matching columns (because comment search at table-level catches
-  tables with relevant business meaning even if the column name itself
-  doesn't match).
-- Per candidate table: `search_columns(keywords, schema_name, table_name)` →
-  matching columns. Page through `has_more` per call.
-- Aggregate all hits into one rendered list.
+- If `--schema` given: one call per listed schema.
+- Else: `list_schemas(include_comments=true)` → enumerate user schemas;
+  one `search_columns` per schema (schema-wide each).
+- Aggregate.
 
-Worst-case round trips on an 800-table single-schema cluster: 1 (search_tables)
-+ N (search_columns per matching table). Easily 30+ trips. Cache path costs
-exactly 1 grep.
+Latency on the live path is ~0.7s per schema-wide call (12K-column schemas).
+Compare to the cache path (~50ms via local TSV grep) — the live fallback is
+~14x slower than cache-hit but ~27x faster than the legacy approach of
+orchestrating `search_tables` + per-table `search_columns` (which costs N
+round trips on N matching tables, easily 19s+ on big schemas).
+
+Still emit the cache hint so user knows to prime for next time.
 
 ### Step 2 — render
 
@@ -126,7 +131,7 @@ If the user wants to profile one of the columns, suggest
 
 ## Anti-patterns
 
-- NEVER pump live MCP through a 100+ table schema as a substitute for the cache. Emit the cache hint and STOP after one schema's worth if cache is stale.
+- NEVER orchestrate `search_tables` + per-table `search_columns` as the live fallback — use `search_columns(keywords, schema_name, table_name=None)` for one-shot schema-wide search. The orchestration approach is ~27x slower and the legacy code path it replaced.
 - NEVER strip the `<schema>.<table>` prefix when rendering — same column name across tables IS the value of cross-table grep.
 - NEVER omit the cache freshness hint — a stale cache silently lying about FK relationships is the known risk for JOIN-discovery work.
 - NEVER use `grep` without `--` and single-quoted keyword — user keywords with leading `-` or shell metacharacters will misbehave.

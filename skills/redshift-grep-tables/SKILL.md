@@ -74,17 +74,30 @@ shell metacharacters in user input.
 
 ### Step 1b — live MCP path (fallback)
 
-Used when `cache=miss/stale`. Worst-case round trips: 1 (`list_schemas`)
-+ N (one `search_tables` per schema in scope). For a cluster with 20+
-schemas, this is 20+ tool calls. Strongly prefer prompting the user to
-run `/redshift-cache-schema` first.
+Used when `cache=miss/stale`. The MCP server's `search_tables` accepts an
+optional `schema_name`; omit it for **cluster-wide table search in one call**:
+
+```
+search_tables(keywords, schema_name=None)
+```
+
+This returns one row per matching table with `schema_name` included,
+ordered by `(schema_name, table_name)`. Paginate via `has_more` if
+total > 50.
 
 Procedure:
-- `list_schemas(include_comments=true)` → schema list. Filter by
-  `--schema` if given.
-- Per schema: `search_tables(keywords, schema_name)` → matching tables.
-  Page through `has_more` per call.
-- Aggregate all hits into one rendered list.
+- If `--schema <s1>,<s2>` given: one `search_tables` per listed schema
+  (cheap — typically a handful).
+- Else: one `search_tables(keywords, schema_name=None)` covers the
+  whole cluster.
+- Aggregate.
+
+Latency on the live path is ~0.2s for cluster-wide searches (cluster has
+<10K tables). Compare to cache path (~50ms via local TSV grep) — the live
+fallback is ~4x slower than cache-hit but vastly faster than the legacy
+N-call-per-schema approach.
+
+Still emit the cache hint so user knows to prime for next time.
 
 ### Step 2 — render
 
@@ -121,9 +134,10 @@ If the user wants to drill into a chosen table, suggest
 
 ## Anti-patterns
 
+- NEVER iterate `search_tables` per schema as the live fallback — use `search_tables(keywords, schema_name=None)` for one-shot cluster-wide search. The legacy iteration approach was N-calls-per-schema.
 - NEVER call `list_tables` for every schema as a substitute for `search_tables`. The MCP `search_tables` already filters at the SQL layer; `list_tables` then client-side filter is wasteful round trips.
 - NEVER omit the schema column in render — the whole point IS which schema has the table.
-- NEVER skip cache check — for clusters with 10+ schemas, live path costs N round trips; cache costs 50ms.
+- NEVER skip cache check — cache path is ~4x faster than even the optimized live path, and has zero leader-node load.
 - NEVER use `grep` without `--` and single-quoted keyword — user keywords with leading `-` or shell metacharacters will misbehave.
 
 ## Errors
