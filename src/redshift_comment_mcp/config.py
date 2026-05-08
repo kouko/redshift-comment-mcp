@@ -16,8 +16,15 @@ Profile schema in config.toml:
     host = "..."
     ...
 
-Multiple profiles let one install handle multiple clusters; pass
-``--profile <name>`` to ``redshift-comment-mcp`` to select one.
+Active-profile selection (which profile the MCP server uses on startup):
+
+    Resolution priority is CLI ``--profile`` flag > ``REDSHIFT_COMMENT_PROFILE``
+    env var > ``~/.config/redshift-comment-mcp/active-profile`` file (one
+    line, just the profile name) > ``"default"``.
+
+    Single-profile users never see this file — its absence means
+    "use 'default'". The ``/redshift-switch-profile`` skill writes /
+    removes the file; multi-profile users are the only ones it affects.
 """
 from __future__ import annotations
 
@@ -104,3 +111,59 @@ def set_password(profile: str, password: str) -> None:
 def list_profiles() -> list[str]:
     """Return sorted list of configured profile names."""
     return sorted(read_all().keys())
+
+
+# ===== active-profile pointer =====
+
+
+def active_profile_path() -> Path:
+    """Return the canonical active-profile pointer file path (XDG-compliant)."""
+    xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(xdg) / "redshift-comment-mcp" / "active-profile"
+
+
+def read_active_profile() -> Optional[str]:
+    """Return the active profile name, or None if the pointer file is absent.
+
+    Absent file is the canonical state for single-profile users (server
+    falls back to ``"default"``). Empty / whitespace-only file is treated
+    the same as absent.
+    """
+    p = active_profile_path()
+    if not p.exists():
+        return None
+    name = p.read_text().strip()
+    return name or None
+
+
+def write_active_profile(name: str) -> None:
+    """Write the active profile pointer file (mode 600)."""
+    p = active_profile_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(name + "\n")
+    p.chmod(0o600)
+
+
+def clear_active_profile() -> None:
+    """Remove the active profile pointer file if present.
+
+    Used when switching back to ``"default"`` — single-profile state
+    canonically corresponds to "no pointer file".
+    """
+    p = active_profile_path()
+    if p.exists():
+        p.unlink()
+
+
+def resolve_active_profile(cli_profile: Optional[str] = None) -> str:
+    """Resolve which profile the server should use.
+
+    Priority: explicit CLI ``--profile`` flag > ``REDSHIFT_COMMENT_PROFILE``
+    env var > ``active-profile`` pointer file > ``"default"``.
+    """
+    if cli_profile:
+        return cli_profile
+    env = os.environ.get("REDSHIFT_COMMENT_PROFILE")
+    if env:
+        return env
+    return read_active_profile() or "default"

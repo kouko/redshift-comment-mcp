@@ -18,19 +18,66 @@ SETUP_SUBCOMMANDS = {
 }
 
 
+def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, str, str]:
+    """Resolve ``(host, port, user, password, dbname)`` from parsed CLI args.
+
+    Two modes:
+
+    - **Legacy inline**: all of ``args.host`` / ``args.user`` / ``args.dbname``
+      are present. Password from ``args.password`` or
+      ``REDSHIFT_PASSWORD`` env var. Profile name is ignored.
+    - **Profile mode** (the default): look up the profile name via
+      ``config.resolve_active_profile(args.profile)`` (priority CLI flag >
+      ``REDSHIFT_COMMENT_PROFILE`` env > active-profile pointer file >
+      ``"default"``). Read host/user/dbname from
+      ``~/.config/redshift-comment-mcp/config.toml``, password from OS
+      keychain.
+
+    Raises ``ValueError`` with a ``/redshift-comment-mcp:redshift-setup``-
+    pointing message if the profile is missing or has no keychain password,
+    so a fresh install with no profile yet surfaces a helpful next step
+    rather than a cryptic stack trace.
+    """
+    inline_complete = bool(args.host and args.user and args.dbname)
+    if inline_complete:
+        password = args.password or os.getenv('REDSHIFT_PASSWORD')
+        if not password:
+            raise ValueError(
+                "必須透過 --password 參數或 REDSHIFT_PASSWORD 環境變數提供密碼。"
+            )
+        return args.host, args.port, args.user, password, args.dbname
+
+    from . import config as cfg
+    profile_name = cfg.resolve_active_profile(args.profile)
+    profile = cfg.read_profile(profile_name)
+    if not profile:
+        raise ValueError(
+            f"Profile '{profile_name}' is not configured. "
+            f"Run /redshift-comment-mcp:redshift-setup in chat to set up "
+            f"your Redshift connection (no terminal commands needed)."
+        )
+    password = cfg.get_password(profile_name)
+    if not password:
+        raise ValueError(
+            f"Password missing from keychain for profile '{profile_name}'. "
+            f"Run /redshift-comment-mcp:redshift-setup to re-enter, or "
+            f"`redshift-comment-mcp set-password --profile {profile_name}` from a terminal."
+        )
+    return profile["host"], profile["port"], profile["user"], password, profile["dbname"]
+
+
 def main():
     """主程式進入點。
 
     兩種模式：
     1. ``redshift-comment-mcp <subcommand>`` → 委派給 ``setup_cli.main``
        （setup / set-password / test-connection / list-profiles /
-       delete-profile）
-    2. ``redshift-comment-mcp [args]`` → 啟動 MCP 伺服器，支援以下兩種
-       連線方式：
-       - ``--profile NAME``：從 ``~/.config/redshift-comment-mcp/config.toml``
-         與 OS keychain 載入（推薦；先跑 ``setup`` 建立 profile）
-       - ``--host / --user / --dbname / --password``（或 ``REDSHIFT_PASSWORD``
-         env var）：原本 v0.1 的 inline 模式（保留向後相容）
+       delete-profile / set-fields）
+    2. ``redshift-comment-mcp [args]`` → 啟動 MCP 伺服器。Profile 解析
+       優先級：``--profile`` flag > ``REDSHIFT_COMMENT_PROFILE`` env var
+       > ``~/.config/redshift-comment-mcp/active-profile`` 檔 > ``"default"``。
+       若使用者提供完整 inline 連線參數 (``--host`` / ``--user`` /
+       ``--dbname`` 皆有)，則略過 profile 走 v0.1 inline 模式。
     """
     # Subcommand routing: first positional arg is one of the setup subcommands.
     if len(sys.argv) >= 2 and sys.argv[1] in SETUP_SUBCOMMANDS:
@@ -42,53 +89,22 @@ def main():
     parser.add_argument(
         "--profile",
         help=(
-            "Load connection from a saved profile. "
-            "Run `redshift-comment-mcp setup` first to create one."
+            "Override the resolved profile name. "
+            "Default resolution: REDSHIFT_COMMENT_PROFILE env var > "
+            "active-profile file > 'default'."
         ),
     )
-    parser.add_argument("--host", help="Redshift 主機位址 (使用 --profile 時自動載入)")
+    parser.add_argument("--host", help="Redshift 主機位址 (legacy inline 模式)")
     parser.add_argument("--port", type=int, default=5439, help="Redshift 連接埠")
-    parser.add_argument("--user", help="Redshift 使用者名稱 (使用 --profile 時自動載入)")
+    parser.add_argument("--user", help="Redshift 使用者名稱 (legacy inline 模式)")
     parser.add_argument(
         "--password",
         required=False,
-        help="Redshift 密碼 (若未提供，則嘗試從 REDSHIFT_PASSWORD 環境變數讀取；使用 --profile 時自動從 keychain 載入)",
+        help="Redshift 密碼 (legacy inline 模式；或 REDSHIFT_PASSWORD env var)",
     )
-    parser.add_argument("--dbname", help="Redshift 資料庫名稱 (使用 --profile 時自動載入)")
+    parser.add_argument("--dbname", help="Redshift 資料庫名稱 (legacy inline 模式)")
     args = parser.parse_args()
-
-    # Resolve connection params.
-    if args.profile:
-        from . import config as cfg
-        profile = cfg.read_profile(args.profile)
-        if not profile:
-            raise ValueError(
-                f"Profile '{args.profile}' not configured. "
-                f"Run `redshift-comment-mcp setup --profile {args.profile}` first."
-            )
-        password = cfg.get_password(args.profile)
-        if not password:
-            raise ValueError(
-                f"No password in keychain for profile '{args.profile}'. "
-                f"Run `redshift-comment-mcp set-password --profile {args.profile}`."
-            )
-        host = profile["host"]
-        port = profile["port"]
-        user = profile["user"]
-        dbname = profile["dbname"]
-    else:
-        if not args.host or not args.user or not args.dbname:
-            raise ValueError(
-                "Missing connection parameters. Either provide --profile NAME, "
-                "or all of --host / --user / --dbname (legacy mode)."
-            )
-        host = args.host
-        port = args.port
-        user = args.user
-        dbname = args.dbname
-        password = args.password or os.getenv('REDSHIFT_PASSWORD')
-        if not password:
-            raise ValueError("必須透過 --password 參數或 REDSHIFT_PASSWORD 環境變數提供密碼。")
+    host, port, user, password, dbname = resolve_connection_params(args)
 
     logger.info(f"正在啟動 Redshift MCP 伺服器... (host={host}, db={dbname}, user={user})")
 

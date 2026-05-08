@@ -34,6 +34,7 @@
 | Skill | 一言で | バージョン |
 |---|---|---|
 | [redshift-setup](redshift-setup/) | 接続プロファイル（host / port / user / dbname / password）を対話的に設定するウォークスルー。 | v0.2.0 |
+| [redshift-switch-profile](redshift-switch-profile/) | active-profile ポインタファイルを切り替えてアクティブプロファイルを変更（host / user / password の再入力なし）。シングルプロファイルのユーザーは穏やかに辞退される。 | v0.4.0 |
 | [redshift-profile](redshift-profile/) | 1 回のチャットで、カラムの cardinality / top-N / null 率 / min-max / 既存コメントを返すプロファイラ。 | v0.3.0 |
 | [redshift-cache-schema](redshift-cache-schema/) | LLM 内部キャッシュ: クラスタ構造をローカルファイルにダンプし、他のスキルが MCP 往復ではなく Read で解決できるように。`/redshift-explore`、`/redshift-profile`、サーバーレベルの CACHE PROTOCOL から読まれる。 | v0.3.0 |
 | [redshift-explore](redshift-explore/) | 三段ウィザード（schema → table → column）。ユーザーは名前を覚えるのではなく、コメントを読んで選びます。 | v0.3.0 |

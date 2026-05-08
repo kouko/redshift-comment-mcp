@@ -23,7 +23,7 @@ PYPROJECT = REPO_ROOT / "pyproject.toml"
 PLUGIN_JSON = REPO_ROOT / ".claude-plugin" / "plugin.json"
 
 # Skills exempt from the README trilingual rule (internal-only / setup-style).
-NO_README_SKILLS = {"redshift-setup"}
+NO_README_SKILLS = {"redshift-setup", "redshift-switch-profile"}
 
 # Identifiers that look like a skill / plugin name but aren't a skill dir.
 NON_SKILL_VALID_NAMES = {"redshift-comment-mcp"}
@@ -164,6 +164,50 @@ def test_pyproject_plugin_version_sync():
     assert pyproject_version == plugin_version, (
         f"Version drift: pyproject.toml fallback_version={pyproject_version!r} "
         f"vs plugin.json version={plugin_version!r}. Bump both together."
+    )
+
+
+# ===== D2 zero-config-install contract =====
+#
+# Post-D2 refactor: the plugin manifest must NOT collect any user-facing
+# config (no /plugins UI form). The MCP server resolves the active profile
+# itself via env > active-profile pointer file > "default" fallback. These
+# tests guard against accidental regression — re-adding userConfig or a
+# --profile flag pinned via ${user_config.profile} would break the
+# zero-config install contract and the single-profile-first design.
+
+
+def test_plugin_manifest_has_no_user_config():
+    """D2 contract: zero /plugins UI form. Re-adding userConfig regresses
+    the install UX back to the pre-D2 'fill profile name in form' flow."""
+    plugin = json.loads(PLUGIN_JSON.read_text())
+    assert "userConfig" not in plugin, (
+        "plugin.json reintroduced userConfig — D2 design is zero-config "
+        "install. Profile selection lives in ~/.config/redshift-comment-mcp/"
+        "active-profile, written by /redshift-setup and /redshift-switch-"
+        "profile. Read README §'Other install paths' before re-adding."
+    )
+
+
+def test_plugin_manifest_mcp_args_have_no_profile_flag():
+    """D2 contract: mcpServers args must not pin a --profile via
+    ${user_config.profile}. The server resolves profile itself."""
+    plugin = json.loads(PLUGIN_JSON.read_text())
+    args = (
+        plugin.get("mcpServers", {})
+              .get("redshift-comment", {})
+              .get("args", [])
+    )
+    assert "--profile" not in args, (
+        f"mcpServers.redshift-comment.args still contains --profile: {args!r}. "
+        f"D2 server resolves the active profile via env > pointer file > "
+        f"'default' fallback. Re-adding --profile re-couples the manifest "
+        f"to userConfig (which we removed). See README 'Other install paths'."
+    )
+    assert not any("user_config" in a for a in args), (
+        f"mcpServers args reference user_config interpolation: {args!r}. "
+        f"userConfig was removed in D2 — these references will resolve to "
+        f"empty strings at runtime."
     )
 
 

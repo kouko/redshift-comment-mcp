@@ -32,6 +32,7 @@ What you will NOT find here:
 | Skill | One-line | Stable |
 |---|---|---|
 | [redshift-setup](redshift-setup/) | Conversational walk-through to configure a connection profile (host / port / user / dbname / password). | v0.2.0 |
+| [redshift-switch-profile](redshift-switch-profile/) | Switch the active profile by flipping the active-profile pointer file (no host / user / password re-entry). Single-profile users get a friendly bow-out. | v0.4.0 |
 | [redshift-profile](redshift-profile/) | Profile a column: cardinality / top-N / null rate / min-max / existing comment, all in one chat round. | v0.3.0 |
 | [redshift-cache-schema](redshift-cache-schema/) | LLM-internal cache: dumps cluster structure to local files so other skills resolve metadata via Read instead of MCP round-trips. Read by `/redshift-explore`, `/redshift-profile`, and the server-level CACHE PROTOCOL. | v0.3.0 |
 | [redshift-explore](redshift-explore/) | Three-step interactive wizard (schema → table → column) that lets users pick by reading comments instead of remembering names. | v0.3.0 |

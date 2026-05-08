@@ -30,6 +30,7 @@ truth 的東西。每支 skill 不是組合既有的 `list_*` / `search_*` /
 | Skill | 一句話 | 版本 |
 |---|---|---|
 | [redshift-setup](redshift-setup/) | 對話式逐步設定連線 profile（host / port / user / dbname / password）。 | v0.2.0 |
+| [redshift-switch-profile](redshift-switch-profile/) | 切換 active profile（不再次輸入 host / user / password），靠翻轉 active-profile 指標檔做到。單 profile 使用者會被溫和拒絕。 | v0.4.0 |
 | [redshift-profile](redshift-profile/) | 一回合內回出欄位的 cardinality / top-N / null 比例 / min-max / 既有註解。 | v0.3.0 |
 | [redshift-cache-schema](redshift-cache-schema/) | LLM 內部 cache：把 cluster 結構寫到本地檔，讓其他 skill 用 Read 解析 metadata 而不是每次打 MCP。被 `/redshift-explore`、`/redshift-profile`、以及 server 層級的 CACHE PROTOCOL 讀取。 | v0.3.0 |
 | [redshift-explore](redshift-explore/) | 三步 wizard（schema → table → column）。使用者**讀註解**來挑選，不用記名字。 | v0.3.0 |

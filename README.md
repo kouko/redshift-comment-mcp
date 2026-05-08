@@ -3,7 +3,7 @@
 **English** · [日本語](README.ja.md) · [繁體中文](README.zh-TW.md)
 
 A read-only **Model Context Protocol** server for Amazon Redshift,
-plus a Claude Code plugin with 5 slash-command skills built on top.
+plus a Claude Code plugin with 6 slash-command skills built on top.
 Designed around one assertion: **column names lie, comments don't**
 — so the server exposes comments aggressively and the skills compose
 those tools into the discovery workflows you actually do every day.
@@ -51,17 +51,20 @@ full charter.
 Pagination on every list / search; explicit `WARNING` strings nudging
 the LLM to read comments before trusting names.
 
-### Slash-command skills (5, defined in [`skills/`](skills/))
+### Slash-command skills (6, defined in [`skills/`](skills/))
 
 | Skill | One-liner | Since |
 |---|---|---|
 | [/redshift-setup](skills/redshift-setup/) | Conversational walk-through to configure a connection profile. | v0.2.0 |
+| [/redshift-switch-profile](skills/redshift-switch-profile/) | Switch the active profile (no host / user / password re-entry); single-profile users get a friendly bow-out. | v0.4.0 |
 | [/redshift-profile](skills/redshift-profile/) | Profile a column: cardinality / top-N / null rate / min-max / existing comment, one round. | v0.3.0 |
 | [/redshift-cache-schema](skills/redshift-cache-schema/) | LLM-internal cache: dumps cluster structure to local files for faster metadata lookups in subsequent skill invocations. | v0.3.0 |
 | [/redshift-explore](skills/redshift-explore/) | Three-step interactive wizard (schema → table → column) — pick by reading comments. | v0.3.0 |
 | [/redshift-lineage-from-stl](skills/redshift-lineage-from-stl/) | Mine `STL_QUERY` + sqlglot to reconstruct **actual** table-to-table lineage from query history. | v0.3.0 |
 
-Each skill has its own tri-lingual README inside its folder.
+Each skill has its own tri-lingual README inside its folder (except
+`/redshift-setup` and `/redshift-switch-profile`, which are setup-style
+internals — see SKILL.md directly).
 
 ## Quick start
 
@@ -84,7 +87,8 @@ zenity prompt (Linux desktop) or your own terminal (headless) — never
 in chat.** It lands directly in your OS keychain.
 
 After setup, just type any of the slash commands above. Multi-cluster?
-Run `/redshift-setup` again with a different profile name.
+Add a second profile with `/redshift-setup <name>`, then switch between
+them with `/redshift-switch-profile`.
 
 For Claude Desktop / other MCP clients / local development, see
 [`docs/install.md`](docs/install.md) (or scroll down to **Other install
@@ -94,10 +98,10 @@ paths**).
 
 | Scenario | How |
 |---|---|
-| Claude Code (recommended) | `claude plugin install redshift-comment-mcp` (above) |
-| Claude Desktop / generic MCP client | `pip install redshift-comment-mcp` then point your client at `uvx redshift-comment-mcp --profile default` |
-| Local development | `git clone … && pip install -e ".[dev]"` then `python -m redshift_comment_mcp.server --profile default` |
-| Multi-cluster | One profile per cluster: `redshift-comment-mcp setup --profile prod` |
+| Claude Code (recommended) | `claude plugin install redshift-comment-mcp` (above). Zero config — manifest no longer asks for a profile name; the MCP server reads the active-profile pointer file written by `/redshift-setup`. |
+| Claude Desktop / generic MCP client | `pip install redshift-comment-mcp` then point your client at `uvx redshift-comment-mcp` (or `--profile <name>` to override the pointer file) |
+| Local development | `git clone … && pip install -e ".[dev]"` then `python -m redshift_comment_mcp.server` |
+| Multi-cluster | `/redshift-setup <name>` per cluster + `/redshift-switch-profile` to switch |
 
 The plugin runs from the cloned repo source via
 `uv run --project ${CLAUDE_PLUGIN_ROOT}` — PyPI release is NOT a
@@ -127,6 +131,7 @@ The two READMEs to read next:
 | Path | Contents | Permissions |
 |---|---|---|
 | `~/.config/redshift-comment-mcp/config.toml` | Non-secret profile fields | `0600` |
+| `~/.config/redshift-comment-mcp/active-profile` | One-line pointer to the active profile name. **Absent ↔ server uses `default`** (canonical single-profile state — most users never see this file). | `0600` |
 | OS keychain (`redshift-comment-mcp` / `<profile>`) | Passwords | OS-managed |
 | `~/.cache/redshift-comment-mcp/<profile>/` | Optional offline structure cache (written by `/redshift-cache-schema`) | `0700` |
 
