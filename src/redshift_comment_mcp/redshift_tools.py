@@ -410,11 +410,9 @@ line suggesting /redshift-cache-schema --refresh.
                         c.is_nullable,
                         d.description AS column_comment
                     FROM information_schema.columns c
-                    LEFT JOIN pg_description d ON d.objoid = (
-                        SELECT oid FROM pg_class WHERE relname = c.table_name AND relnamespace = (
-                            SELECT oid FROM pg_namespace WHERE nspname = c.table_schema
-                        )
-                    ) AND d.objsubid = c.ordinal_position
+                    LEFT JOIN pg_namespace n ON n.nspname = c.table_schema
+                    LEFT JOIN pg_class cl ON cl.relname = c.table_name AND cl.relnamespace = n.oid
+                    LEFT JOIN pg_description d ON d.objoid = cl.oid AND d.objsubid = c.ordinal_position
                     WHERE c.table_schema = %s AND c.table_name = %s
                     ORDER BY c.ordinal_position;
                     """
@@ -630,11 +628,9 @@ line suggesting /redshift-cache-schema --refresh.
                 c.is_nullable,
                 COALESCE(d.description, '') AS column_comment
             FROM information_schema.columns c
-            LEFT JOIN pg_description d ON d.objoid = (
-                SELECT oid FROM pg_class WHERE relname = c.table_name AND relnamespace = (
-                    SELECT oid FROM pg_namespace WHERE nspname = c.table_schema
-                )
-            ) AND d.objsubid = c.ordinal_position
+            LEFT JOIN pg_namespace n ON n.nspname = c.table_schema
+            LEFT JOIN pg_class cl ON cl.relname = c.table_name AND cl.relnamespace = n.oid
+            LEFT JOIN pg_description d ON d.objoid = cl.oid AND d.objsubid = c.ordinal_position
             WHERE c.table_schema = %s AND c.table_name = %s
             """
 
@@ -751,11 +747,9 @@ line suggesting /redshift-cache-schema --refresh.
             sql = """
             SELECT c.data_type, d.description AS column_comment
             FROM information_schema.columns c
-            LEFT JOIN pg_description d ON d.objoid = (
-                SELECT oid FROM pg_class WHERE relname = c.table_name AND relnamespace = (
-                    SELECT oid FROM pg_namespace WHERE nspname = c.table_schema
-                )
-            ) AND d.objsubid = c.ordinal_position
+            LEFT JOIN pg_namespace n ON n.nspname = c.table_schema
+            LEFT JOIN pg_class cl ON cl.relname = c.table_name AND cl.relnamespace = n.oid
+            LEFT JOIN pg_description d ON d.objoid = cl.oid AND d.objsubid = c.ordinal_position
             WHERE c.table_schema = %s AND c.table_name = %s AND c.column_name = %s;
             """
             with self.config.get_connection() as conn:
@@ -787,11 +781,9 @@ line suggesting /redshift-cache-schema --refresh.
                 c.is_nullable,
                 d.description AS column_comment
             FROM information_schema.columns c
-            LEFT JOIN pg_description d ON d.objoid = (
-                SELECT oid FROM pg_class WHERE relname = c.table_name AND relnamespace = (
-                    SELECT oid FROM pg_namespace WHERE nspname = c.table_schema
-                )
-            ) AND d.objsubid = c.ordinal_position
+            LEFT JOIN pg_namespace n ON n.nspname = c.table_schema
+            LEFT JOIN pg_class cl ON cl.relname = c.table_name AND cl.relnamespace = n.oid
+            LEFT JOIN pg_description d ON d.objoid = cl.oid AND d.objsubid = c.ordinal_position
             WHERE c.table_schema = %s AND c.table_name = %s
             ORDER BY c.ordinal_position;
             """
