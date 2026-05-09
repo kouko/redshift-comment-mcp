@@ -302,3 +302,143 @@ def test_switch_profile_does_not_reference_password_collection():
         f"redshift-switch-profile leaked password-collection tokens: {leaks}. "
         f"The skill assumes the target profile already has a password in keychain."
     )
+
+
+# ===== skill body ↔ MCP signature drift =====
+#
+# The grep skills' Step 1b shows MCP tool calls inline (e.g.
+# `search_columns(keywords, schema_name=<schema>, table_name=None)`). If the
+# MCP signature changes (a kwarg renamed, removed) the skill body silently
+# drifts. These tests parse the skill prose for tool-call patterns and check
+# every kwarg against the actual function definition in redshift_tools.py via
+# AST — no instantiation, no DB.
+
+import ast
+
+REDSHIFT_TOOLS_PY = REPO_ROOT / "src" / "redshift_comment_mcp" / "redshift_tools.py"
+GREP_COLUMNS_SKILL = SKILLS_DIR / "redshift-grep-columns" / "SKILL.md"
+GREP_TABLES_SKILL = SKILLS_DIR / "redshift-grep-tables" / "SKILL.md"
+
+
+def _mcp_tool_param_names(fn_name: str) -> set[str]:
+    """Return the parameter names of a function defined inside redshift_tools.py.
+
+    Walks the AST to find the nested function (registered MCP tools live
+    inside _setup_tools) and pulls its argument names. No instantiation.
+    """
+    tree = ast.parse(REDSHIFT_TOOLS_PY.read_text())
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == fn_name:
+            args = node.args
+            return {a.arg for a in (*args.args, *args.kwonlyargs)}
+    raise AssertionError(f"function {fn_name!r} not found in {REDSHIFT_TOOLS_PY.name}")
+
+
+_CALL_NAME_PARAM = re.compile(
+    # Match `\b(name)\(` then capture the balanced argument list.
+    # This is intentionally simple — we don't try to parse Python; we just
+    # extract the (...) span by walking parens, then scan for `kwarg=` patterns.
+    r"\b(search_columns|search_tables)\("
+)
+# Match `kwarg = ...` patterns inside an argument list. Excludes `==` and
+# excludes patterns that look like comparisons (`x == y`).
+_KWARG = re.compile(r"\b(\w+)\s*=(?!=)")
+
+
+def _extract_calls(body: str, fn_name: str) -> list[str]:
+    """Yield the inner argument-text of every `fn_name(...)` call in body."""
+    out: list[str] = []
+    for m in re.finditer(rf"\b{re.escape(fn_name)}\(", body):
+        depth = 1
+        i = m.end()
+        n = len(body)
+        while i < n and depth > 0:
+            c = body[i]
+            if c == "(":
+                depth += 1
+            elif c == ")":
+                depth -= 1
+                if depth == 0:
+                    out.append(body[m.end():i])
+                    break
+            i += 1
+    return out
+
+
+@pytest.mark.parametrize(
+    "skill_path,fn_name",
+    [
+        (GREP_COLUMNS_SKILL, "search_columns"),
+        (GREP_TABLES_SKILL, "search_tables"),
+    ],
+    ids=["grep-columns→search_columns", "grep-tables→search_tables"],
+)
+def test_grep_skill_calls_match_mcp_signature(skill_path, fn_name):
+    """Every kwarg the skill body uses on `fn_name(...)` must exist on the
+    actual MCP tool's signature.
+
+    Catches drift like: MCP renames `table_name` to `relation_name` and
+    forgets to update the skill body — the next LLM invocation would pass
+    a non-existent kwarg and crash.
+    """
+    body = skill_path.read_text()
+    actual_params = _mcp_tool_param_names(fn_name)
+
+    calls = _extract_calls(body, fn_name)
+    assert calls, (
+        f"{skill_path.parent.name}: SKILL.md mentions no `{fn_name}(...)` "
+        f"calls — Step 1b documentation likely drifted"
+    )
+
+    for call_text in calls:
+        used_kwargs = set(_KWARG.findall(call_text))
+        unknown = used_kwargs - actual_params
+        assert not unknown, (
+            f"{skill_path.parent.name} body uses {fn_name}({sorted(used_kwargs)}); "
+            f"unknown kwargs {sorted(unknown)} not in actual signature "
+            f"{sorted(actual_params)}. Update SKILL.md or revert the rename."
+        )
+
+
+# ===== bash block syntactic validity =====
+#
+# The grep skills teach the LLM concrete bash recipes (cache lookup, grep,
+# awk filter). A typo in the skill body would propagate into every LLM
+# invocation. `bash -n` does a syntax check without executing — cheap, runs
+# in CI, and catches the obvious `bash` style bugs.
+
+import subprocess
+
+_BASH_FENCE = re.compile(r"```bash\n(.*?)\n```", re.DOTALL)
+
+
+@pytest.mark.parametrize(
+    "skill_path",
+    [GREP_COLUMNS_SKILL, GREP_TABLES_SKILL],
+    ids=["grep-columns", "grep-tables"],
+)
+def test_grep_skill_bash_blocks_parse(skill_path):
+    """Every ```bash``` fence in the grep skills must pass `bash -n`.
+
+    Placeholders like `'KEYWORD'` / `"SCHEMA"` are valid bash literals —
+    the syntax check passes without needing concrete values.
+    """
+    text = skill_path.read_text()
+    blocks = _BASH_FENCE.findall(text)
+    assert blocks, (
+        f"{skill_path.parent.name}: no ```bash``` fenced blocks found — "
+        f"the skill's cache-path recipe must be present"
+    )
+    for i, src in enumerate(blocks):
+        result = subprocess.run(
+            ["bash", "-n"],
+            input=src,
+            text=True,
+            capture_output=True,
+        )
+        if result.returncode != 0:
+            pytest.fail(
+                f"{skill_path.parent.name} bash block #{i} fails `bash -n`:\n"
+                f"  stderr: {result.stderr.strip()}\n"
+                f"  source:\n{src}"
+            )
