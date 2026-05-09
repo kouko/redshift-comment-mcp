@@ -144,3 +144,5 @@ Step 4 produces the downstream skill's output.
 |---|---|
 | Profile a column once you have it | `/redshift-profile` |
 | Prime / refresh the cache for faster metadata reads | `/redshift-cache-schema` |
+| Find a column across many tables (FK / JOIN reconnaissance) | `/redshift-grep-columns` |
+| Find a table across schemas by topic | `/redshift-grep-tables` |

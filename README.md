@@ -61,6 +61,8 @@ the LLM to read comments before trusting names.
 | [/redshift-cache-schema](skills/redshift-cache-schema/) | LLM-internal cache: dumps cluster structure to local files for faster metadata lookups in subsequent skill invocations. | v0.3.0 |
 | [/redshift-explore](skills/redshift-explore/) | Three-step interactive wizard (schema → table → column) — pick by reading comments. | v0.3.0 |
 | [/redshift-lineage-from-stl](skills/redshift-lineage-from-stl/) | Mine `STL_QUERY` + sqlglot to reconstruct **actual** table-to-table lineage from query history. | v0.3.0 |
+| [/redshift-grep-columns](skills/redshift-grep-columns/) | Cross-table column search by keyword across one or all schemas. Cache-first via local TSV grep; live MCP fallback. | v0.4.0 |
+| [/redshift-grep-tables](skills/redshift-grep-tables/) | Cross-schema table search by keyword across all schemas. Cache-first via local TSV grep; live MCP fallback. | v0.4.0 |
 
 Each skill has its own tri-lingual README inside its folder (except
 `/redshift-setup` and `/redshift-switch-profile`, which are setup-style

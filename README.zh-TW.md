@@ -57,6 +57,8 @@ manifest 涵蓋面太窄、Web GUI 太慢、手刻 SQL 太重複。
 | [/redshift-cache-schema](skills/redshift-cache-schema/) | LLM 內部 cache：把 cluster 結構寫到本地檔，讓後續 skill 呼叫能快速解析 metadata。 | v0.3.0 |
 | [/redshift-explore](skills/redshift-explore/) | 三步 wizard（schema → table → column）—— 讀註解來挑，不用記名字。 | v0.3.0 |
 | [/redshift-lineage-from-stl](skills/redshift-lineage-from-stl/) | 挖 `STL_QUERY` + sqlglot 從查詢歷史還原**實際**的 table 對 table 資料流。 | v0.3.0 |
+| [/redshift-grep-columns](skills/redshift-grep-columns/) | 跨表搜欄位（名稱 + 註解），可在單一或全部 schema 上執行。Cache-first 走本地 TSV grep；live MCP fallback。 | v0.4.0 |
+| [/redshift-grep-tables](skills/redshift-grep-tables/) | 跨 schema 搜表（名稱 + 註解）。Cache-first 走本地 TSV grep；live MCP fallback。 | v0.4.0 |
 
 每支 skill 在自己的資料夾內都有三語 README（除了 `/redshift-setup` 與
 `/redshift-switch-profile` 屬於 setup-style 內部 skill —— 直接看 SKILL.md）。

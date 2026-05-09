@@ -603,6 +603,7 @@ class TestSearchTools:
         config, mock_conn = mock_config
 
         mock_df = pd.DataFrame({
+            'table_name': ['orders', 'orders', 'orders'],
             'column_name': ['total_amount', 'order_id', 'amount'],
             'data_type': ['numeric', 'integer', 'numeric'],
             'is_nullable': ['YES', 'NO', 'YES'],
@@ -669,6 +670,7 @@ class TestSearchTools:
         config, mock_conn = mock_config
 
         mock_df = pd.DataFrame({
+            'table_name': ['orders', 'orders'],
             'column_name': ['customer_id', 'customer_name'],
             'data_type': ['integer', 'varchar'],
             'is_nullable': ['NO', 'YES'],
@@ -1164,3 +1166,141 @@ class TestSingleGetterDoesNotTruncate:
 
         assert result["comment"] == long_comment
         assert "…" not in result["comment"]
+
+
+# ========== Cross-scope search behavior (schema_name / table_name optional) ==========
+
+class TestSearchToolsCrossScope:
+    """search_tables / search_columns now accept None for the narrowing arg
+    to enable cluster-wide / schema-wide searches respectively."""
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_search_tables_cross_schema(self, mock_read_sql, mock_config):
+        """search_tables(schema_name=None) should search across all schemas."""
+        config, _ = mock_config
+
+        mock_df = pd.DataFrame({
+            'schema_name': ['dbt_marts', 'raw_events', 'dbt_staging'],
+            'table_name': ['fct_orders', 'orders_raw', 'stg_orders'],
+            'table_type': ['BASE TABLE', 'BASE TABLE', 'BASE TABLE'],
+            'table_comment': ['Order facts', 'Raw orders', 'Staged orders'],
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        search_tables = _get_tool_fn(tools, 'search_tables')
+
+        # No schema_name argument
+        result = search_tables(keywords='order')
+
+        assert result["schema_filter"] is None
+        assert result["total_count"] == 3
+        # Verify rows from multiple schemas come back together
+        schemas_seen = {row["schema_name"] for row in result["tables"]}
+        assert schemas_seen == {"dbt_marts", "raw_events", "dbt_staging"}
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_search_tables_explicit_schema_still_works(self, mock_read_sql, mock_config):
+        """Backward compat: passing schema_name still scopes to that schema."""
+        config, _ = mock_config
+
+        mock_df = pd.DataFrame({
+            'schema_name': ['sales'],
+            'table_name': ['orders'],
+            'table_type': ['BASE TABLE'],
+            'table_comment': ['Orders'],
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        search_tables = _get_tool_fn(tools, 'search_tables')
+
+        result = search_tables(keywords='order', schema_name='sales')
+
+        assert result["schema_filter"] == 'sales'
+        assert result["total_count"] == 1
+
+    def test_search_tables_invalid_schema_when_provided(self, mock_config):
+        """Invalid schema_name still raises (only the None case is permitted to skip filter)."""
+        config, _ = mock_config
+        tools = RedshiftTools(config)
+        search_tables = _get_tool_fn(tools, 'search_tables')
+
+        with pytest.raises(ValueError, match="Invalid schema name"):
+            search_tables(keywords='order', schema_name='bad-name')
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_search_columns_schema_wide(self, mock_read_sql, mock_config):
+        """search_columns(table_name=None) should search every table in the schema
+        and emit table_name on each row."""
+        config, _ = mock_config
+
+        # Cross-table hits — multiple tables share the keyword in schema "dbt_marts"
+        mock_df = pd.DataFrame({
+            'table_name': ['fct_orders', 'fct_returns', 'dim_users'],
+            'column_name': ['customer_id', 'customer_id', 'id'],
+            'data_type': ['bigint', 'bigint', 'bigint'],
+            'is_nullable': ['NO', 'NO', 'NO'],
+            'column_comment': [
+                'Customer reference (FK to dim_users.id)',
+                'Customer who initiated the return',
+                'Customer primary key',
+            ],
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        search_columns = _get_tool_fn(tools, 'search_columns')
+
+        # Omit table_name: schema-wide search
+        result = search_columns(keywords='customer', schema_name='dbt_marts')
+
+        assert result["schema_name"] == 'dbt_marts'
+        assert result["table_name"] is None
+        assert result["scope"] == 'schema_wide'
+        assert result["total_count"] == 3
+        # Verify table_name is emitted per row (the natural primitive for cross-table)
+        tables_seen = {row["table_name"] for row in result["columns"]}
+        assert tables_seen == {"fct_orders", "fct_returns", "dim_users"}
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_search_columns_single_table_scope_label(self, mock_read_sql, mock_config):
+        """Backward compat: passing table_name still works and scope is single_table."""
+        config, _ = mock_config
+
+        mock_df = pd.DataFrame({
+            'table_name': ['orders'],
+            'column_name': ['customer_id'],
+            'data_type': ['bigint'],
+            'is_nullable': ['NO'],
+            'column_comment': ['Customer FK'],
+        })
+        mock_read_sql.return_value = mock_df
+
+        tools = RedshiftTools(config)
+        search_columns = _get_tool_fn(tools, 'search_columns')
+
+        result = search_columns(keywords='customer', schema_name='sales', table_name='orders')
+
+        assert result["schema_name"] == 'sales'
+        assert result["table_name"] == 'orders'
+        assert result["scope"] == 'single_table'
+
+    def test_search_columns_invalid_table_when_provided(self, mock_config):
+        """Invalid table_name still raises (only the None case skips the filter)."""
+        config, _ = mock_config
+        tools = RedshiftTools(config)
+        search_columns = _get_tool_fn(tools, 'search_columns')
+
+        with pytest.raises(ValueError, match="Invalid table name"):
+            search_columns(keywords='customer', schema_name='sales', table_name='bad-table')
+
+    def test_search_columns_schema_still_required(self, mock_config):
+        """schema_name remains required even though table_name is now optional —
+        cluster-wide column search would be too expensive on the leader node."""
+        config, _ = mock_config
+        tools = RedshiftTools(config)
+        search_columns = _get_tool_fn(tools, 'search_columns')
+
+        with pytest.raises(ValueError, match="Invalid schema name"):
+            search_columns(keywords='customer', schema_name='bad-schema')

@@ -1,0 +1,49 @@
+# redshift-grep-tables
+
+[English](README.md) · **日本語** · [繁體中文](README.zh-TW.md)
+
+## 何ができるか
+
+`redshift-grep-tables` は「X についてのテーブルはどのスキーマにある？」という質問に答えます。Redshift クラスタ内の全スキーマのテーブルメタデータを横断検索し、テーブル名とコメントの両方を対象にマッチします。結果はスキーマごとにグループ化され、テーブル型とコメントを併記します。
+
+キャッシュ優先：`/redshift-cache-schema` で生成された TSV インデックスが新鮮なら、`bash grep` で約 50 ms で応答します。キャッシュが古い／ない場合はライブ MCP（スキーマごとに 1 回 `search_tables` を呼ぶ）にフォールバックし、スキーマ数に比例してコストが増えます。
+
+## 使うべきとき
+
+トピックは分かるが、どのスキーマにあるか不明なときに使います。多層構造（ingestion / staging / mart）を持つ不慣れなクラスタで特に有用です。典型例：
+
+- トピック検索：「orders fact テーブルはどこ？」
+- レイヤー横断監査：「`fct_*` テーブルがあるスキーマはどれ？」
+- ベンダーカバレッジ確認：「Salesforce を取り込んでいるスキーマはどこ？」
+
+スキーマが既に分かっている場合は不向き（MCP `search_tables(kw, schema)` を直接使う）。カラム検索は `/redshift-grep-columns`、一般的なスキーマ閲覧は `/redshift-explore` を使ってください。
+
+## 例
+
+```
+/redshift-grep-tables fct
+```
+
+チャット応答例：
+
+> Tables matching "fct" (5 hits in 3 schemas):
+>
+> dbt_marts (3)
+>   fct_orders          BASE TABLE   Central order facts.
+>   fct_returns         BASE TABLE   Return events.
+>   fct_payments        BASE TABLE   Payment events.
+>
+> dbt_staging (1)
+>   stg_fct_orders      BASE TABLE   Staging for fct_orders.
+>
+> reporting (1)
+>   v_fct_orders_daily  VIEW         Daily aggregation of fct_orders.
+
+## パフォーマンス注意
+
+スキーマ 10 個以上のクラスタでキャッシュが古いまま grep しようとしていますか？
+先に `/redshift-cache-schema` を実行してください。ライブパスはスキーマごとに 1 ツール呼び出し。キャッシュパスは合計 50 ms。
+
+## 詳細仕様
+
+入力パース規則・bash パターン・エラーコードの正典は [`SKILL.md`](./SKILL.md) を参照。
