@@ -201,9 +201,17 @@ A more thorough Semantic Layer guide is in
 ## Development
 
 ```bash
-pytest tests/                    # run tests
+pytest tests/                    # run unit + invariant tests (fast, no live cluster)
+REDSHIFT_INTEGRATION=1 \
+  pytest tests/integration/      # opt-in: smoke-test against the active Redshift profile
 python -m build                  # build sdist + wheel
 ```
+
+The `tests/integration/` smoke gate exercises every MCP tool against a real
+Redshift cluster — connection, list / search / get tools, pagination, the
+SQL-safety guard. It skips cleanly when `REDSHIFT_INTEGRATION` is unset, when
+no active profile is configured, or when the keychain entry is missing, so
+default `pytest tests/` is safe in CI.
 
 CI / release flow lives in [`.github/`](.github/).
 
