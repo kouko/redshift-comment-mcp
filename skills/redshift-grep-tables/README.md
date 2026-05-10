@@ -4,9 +4,9 @@
 
 ## What it does
 
-`redshift-grep-tables` answers the question *"which schema has a table about X?"* by grepping across the table metadata of all schemas in a Redshift cluster. It searches both table names AND table comments, returning every hit grouped by schema with the table type and comment inline.
+`redshift-grep-tables` answers the question *"which schema has a table about X?"* by running one cluster-wide MCP `search_tables` call across all schemas in a Redshift cluster. It searches both table names AND table comments, returning every hit grouped by schema with the table type and comment inline.
 
-Cache-first: when `/redshift-cache-schema` has produced a fresh local TSV index, this skill answers in roughly 50 ms via `bash grep`. When the cache is stale or absent, it falls back to live MCP (one `search_tables` call per schema), which scales linearly with schema count.
+Single MCP call (~0.2s for clusters under 10K tables) thanks to the optional `schema_name=None` parameter on `search_tables`.
 
 ## When to use it
 
@@ -39,12 +39,6 @@ Sample chat reply:
 > reporting (1)
 >   v_fct_orders_daily  VIEW         Daily aggregation of fct_orders.
 
-## Performance note
-
-Cluster has 10+ schemas and you're about to grep without a fresh cache?
-Run `/redshift-cache-schema` first. Live path costs one tool call per
-schema; cache path costs 50 ms total.
-
 ## Authoritative reference
 
-For execution details — input parsing rules, exact bash patterns, error codes — see [`SKILL.md`](./SKILL.md).
+For execution details — input parsing rules, error codes — see [`SKILL.md`](./SKILL.md).

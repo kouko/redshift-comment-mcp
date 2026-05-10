@@ -27,7 +27,6 @@ def test_sql_text_escape_caveat_documented():
     note exists purely to spare the user from debugging "literal \\n in my
     NDJSON" as if it were a write bug. If the caveat is removed, that
     diagnostic value is lost — even though the helper would still work.
-    Symmetric with test_no_columns_marker_documented in test_cache_contract.
     """
     spec = LINEAGE_SKILL.read_text()
 

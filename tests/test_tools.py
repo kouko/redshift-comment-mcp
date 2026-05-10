@@ -1040,7 +1040,6 @@ class TestScaleHintHelper:
         # 800 / 50 page_size = 16 paginated calls
         assert "16" in msg
         assert "search_tables" in msg
-        assert "redshift-cache-schema" in msg
 
     def test_just_above_threshold(self):
         msg = build_scale_hint(SCALE_HINT_THRESHOLD + 1)

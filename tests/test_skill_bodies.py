@@ -400,45 +400,8 @@ def test_grep_skill_calls_match_mcp_signature(skill_path, fn_name):
         )
 
 
-# ===== bash block syntactic validity =====
-#
-# The grep skills teach the LLM concrete bash recipes (cache lookup, grep,
-# awk filter). A typo in the skill body would propagate into every LLM
-# invocation. `bash -n` does a syntax check without executing — cheap, runs
-# in CI, and catches the obvious `bash` style bugs.
-
-import subprocess
-
-_BASH_FENCE = re.compile(r"```bash\n(.*?)\n```", re.DOTALL)
-
-
-@pytest.mark.parametrize(
-    "skill_path",
-    [GREP_COLUMNS_SKILL, GREP_TABLES_SKILL],
-    ids=["grep-columns", "grep-tables"],
-)
-def test_grep_skill_bash_blocks_parse(skill_path):
-    """Every ```bash``` fence in the grep skills must pass `bash -n`.
-
-    Placeholders like `'KEYWORD'` / `"SCHEMA"` are valid bash literals —
-    the syntax check passes without needing concrete values.
-    """
-    text = skill_path.read_text()
-    blocks = _BASH_FENCE.findall(text)
-    assert blocks, (
-        f"{skill_path.parent.name}: no ```bash``` fenced blocks found — "
-        f"the skill's cache-path recipe must be present"
-    )
-    for i, src in enumerate(blocks):
-        result = subprocess.run(
-            ["bash", "-n"],
-            input=src,
-            text=True,
-            capture_output=True,
-        )
-        if result.returncode != 0:
-            pytest.fail(
-                f"{skill_path.parent.name} bash block #{i} fails `bash -n`:\n"
-                f"  stderr: {result.stderr.strip()}\n"
-                f"  source:\n{src}"
-            )
+# NOTE: bash block syntactic-validity test (bash -n on ```bash``` fences in
+# grep skills) was removed when the cache mechanism was deleted. The grep
+# skills no longer contain bash recipes — their flow is one MCP call per
+# schema for grep-columns / one cluster-wide call for grep-tables. If a
+# future skill adds bash recipes back, re-introduce a test of this shape.
