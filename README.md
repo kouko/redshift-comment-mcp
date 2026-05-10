@@ -31,8 +31,7 @@ This plugin's charter is **Guided Data Discovery**:
 - **MCP-composed skills.** New workflows are built by stringing
   together existing tools, not by adding new database connections.
 - **No persistence.** No synthesis layer, no `.redshift-wiki/`
-  markdown, no stale tracking. (Cache is rebuildable; that's
-  different.) Persistence belongs in a separate plugin.
+  markdown, no stale tracking. Persistence belongs in a separate plugin.
 
 See [`implementation_guide.md`](implementation_guide.md) §1.2 for the
 full charter.
