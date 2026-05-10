@@ -44,7 +44,6 @@
 |---|---|---|
 | `~/.config/redshift-comment-mcp/config.toml` | 非機密プロファイルフィールド（host / port / user / dbname） | `0600` |
 | OS キーチェーン（service `redshift-comment-mcp`、account `<profile-name>`） | パスワード | OS 管理 |
-| `~/.cache/redshift-comment-mcp/<profile>/` | [`/redshift-cache-schema`](../../skills/redshift-cache-schema/) スキルが書き込むオプショナルなオフライン構造キャッシュ | `0700` |
 
 ## 実行方法
 

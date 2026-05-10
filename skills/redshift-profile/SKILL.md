@@ -31,17 +31,14 @@ Discovers what a column actually contains. Read-only, MCP-composed.
 Quote identifiers in SQL as `"<schema>"."<table>"."<col>"`.
 
 ## Flow
-1. **Resolve column metadata** (`type`, `nullable`, `comment`) — try cache first:
+1. **Resolve column metadata** (`type`, `nullable`, `comment`):
 
-   - **Cache path** (preferred): if `~/.cache/redshift-comment-mcp/<profile>/_meta.json` is `complete: true` and `(now - refreshed_at) < ttl_hours`, Read `tables/<schema>__<table>.md` and find the `` ### `<col>` (type[, NOT NULL]) `` heading + the comment block under it. Capture `type`, `nullable` (presence of `, NOT NULL`), `comment` (text from heading to next `### \`` or `## `).
-   - **Live path**: `list_columns(schema_name, table_name, include_comments=true)`. Find the row whose `name == <col>` (MCP returns `{name, type, nullable, comment}` — NOT `column_name` / `data_type`; `nullable` is the string `"YES"` / `"NO"`).
+   `list_columns(schema_name, table_name, include_comments=true)`. Find
+   the row whose `name == <col>` (MCP returns `{name, type, nullable,
+   comment}` — NOT `column_name` / `data_type`; `nullable` is the
+   string `"YES"` / `"NO"`).
 
-   Stale / missing cache → fall back to live path; emit one chat line:
-   ```
-   [cache] miss for `<schema>.<table>` — fetching live; rebuild with /redshift-cache-schema --refresh.
-   ```
-
-   If column missing in either source → error `column_not_found`.
+   If column missing → error `column_not_found`.
 
 2. **Type branch** (lowercase prefix match on `type`):
 
@@ -136,4 +133,4 @@ Surface execute_sql errors verbatim — Redshift errors are diagnostic.
 | Need | Use |
 |---|---|
 | Find which column to profile | `/redshift-explore` |
-| Structure (vs values) | `/redshift-cache-schema` |
+| Find FK / shared columns across tables | `/redshift-grep-columns` |

@@ -46,7 +46,6 @@ Everything here serves **Guided Data Discovery**. Concretely:
 |---|---|---|
 | `~/.config/redshift-comment-mcp/config.toml` | non-secret profile fields (host / port / user / dbname) | `0600` |
 | OS keychain (service `redshift-comment-mcp`, account `<profile-name>`) | passwords | OS-managed |
-| `~/.cache/redshift-comment-mcp/<profile>/` | optional offline structure cache, written by the [`/redshift-cache-schema`](../../skills/redshift-cache-schema/) skill | `0700` |
 
 ## Running
 

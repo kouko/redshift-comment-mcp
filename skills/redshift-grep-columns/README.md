@@ -4,9 +4,9 @@
 
 ## What it does
 
-`redshift-grep-columns` answers the question *"which tables have a column matching this keyword?"* by grepping across the column metadata of one or all schemas in a Redshift cluster. It searches both column names AND column comments, returning every hit grouped by `<schema>.<table>` with the column type and comment inline.
+`redshift-grep-columns` answers the question *"which tables have a column matching this keyword?"* by running a schema-wide MCP `search_columns` call across one or all schemas in a Redshift cluster. It searches both column names AND column comments, returning every hit grouped by `<schema>.<table>` with the column type and comment inline.
 
-Cache-first: when `/redshift-cache-schema` has produced a fresh local TSV index, this skill answers in roughly 50 ms via `bash grep`. When the cache is stale or absent, it falls back to live MCP (`search_tables` + `search_columns` per matching table), which can take many round trips.
+One MCP call per schema (~0.7s each on 12K-column schemas) thanks to the optional `table_name=None` parameter on `search_columns` — no orchestration of per-table calls.
 
 ## When to use it
 
@@ -40,10 +40,10 @@ Sample chat reply:
 
 ## Performance note
 
-Cluster has > 5 schemas and you're about to grep without a fresh cache?
-Run `/redshift-cache-schema` first. Live-path cost scales linearly with
-schema and matching-table counts; cache-path cost is constant.
+Latency scales linearly with the number of schemas in scope. For clusters
+with > 5 schemas, prompt the user to scope via `--schema` to keep
+leader-node load bounded.
 
 ## Authoritative reference
 
-For execution details — input parsing rules, exact bash patterns, error codes — see [`SKILL.md`](./SKILL.md).
+For execution details — input parsing rules, error codes — see [`SKILL.md`](./SKILL.md).

@@ -32,9 +32,10 @@ truth 的東西。每支 skill 不是組合既有的 `list_*` / `search_*` /
 | [redshift-setup](redshift-setup/) | 對話式逐步設定連線 profile（host / port / user / dbname / password）。 | v0.2.0 |
 | [redshift-switch-profile](redshift-switch-profile/) | 切換 active profile（不再次輸入 host / user / password），靠翻轉 active-profile 指標檔做到。單 profile 使用者會被溫和拒絕。 | v0.4.0 |
 | [redshift-profile](redshift-profile/) | 一回合內回出欄位的 cardinality / top-N / null 比例 / min-max / 既有註解。 | v0.3.0 |
-| [redshift-cache-schema](redshift-cache-schema/) | LLM 內部 cache：把 cluster 結構寫到本地檔，讓其他 skill 用 Read 解析 metadata 而不是每次打 MCP。被 `/redshift-explore`、`/redshift-profile`、以及 server 層級的 CACHE PROTOCOL 讀取。 | v0.3.0 |
 | [redshift-explore](redshift-explore/) | 三步 wizard（schema → table → column）。使用者**讀註解**來挑選，不用記名字。 | v0.3.0 |
 | [redshift-lineage-from-stl](redshift-lineage-from-stl/) | 挖 `STL_QUERY` / `SYS_QUERY_HISTORY` + 用 sqlglot 解析 SQL，從查詢歷史還原**實際**的 table 對 table 資料流。 | v0.3.0 |
+| [redshift-grep-columns](redshift-grep-columns/) | 跨表搜欄位（名稱 + 註解），單一或全部 schema 上跑 schema-wide MCP 呼叫。 | v0.4.0 |
+| [redshift-grep-tables](redshift-grep-tables/) | 跨 schema 搜表（名稱 + 註解），cluster-wide MCP 呼叫。 | v0.4.0 |
 
 ## 使用方式
 
