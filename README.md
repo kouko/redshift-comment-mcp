@@ -92,9 +92,8 @@ After setup, just type any of the slash commands above. Multi-cluster?
 Add a second profile with `/redshift-setup <name>`, then switch between
 them with `/redshift-switch-profile`.
 
-For Claude Desktop / other MCP clients / local development, see
-[`docs/install.md`](docs/install.md) (or scroll down to **Other install
-paths**).
+For Claude Desktop / other MCP clients / local development, scroll
+down to **Other install paths**.
 
 ## Other install paths
 
