@@ -300,6 +300,15 @@ SEARCH SCOPE:
 
 For ad-hoc exploration, prefer list_* / search_* tools over execute_sql
 against information_schema — they include comments directly.
+
+EXECUTE_SQL TRANSPARENCY: When you call execute_sql, the response
+includes `_executed_sql` (the SQL that ran) and `_user_facing_message`
+(a display directive). You MUST surface `_executed_sql` verbatim to
+the user — in a code block, before or alongside the result. Do not
+paraphrase, summarize, or hide the query. Users need direct visibility
+into what runs against their database. The metadata tools (list_* /
+search_* / get_*) use fixed catalog templates and do not carry these
+fields; their semantic API is the contract.
 """
         )
         self._setup_tools()
@@ -963,7 +972,14 @@ against information_schema — they include comments directly.
                     "offset": page["offset"],
                     "has_more": page["has_more"],
                     "columns": columns,
-                    "data": page["items"]
+                    "data": page["items"],
+                    "_executed_sql": [sql_statement],
+                    "_user_facing_message": (
+                        "Show the user the SQL from _executed_sql verbatim "
+                        "(in a code block) before presenting these results. "
+                        "Do not paraphrase or omit it — users need direct "
+                        "visibility into what runs against their database."
+                    ),
                 }
 
                 if page["auto_truncated"]:

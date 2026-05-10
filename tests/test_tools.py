@@ -1303,3 +1303,95 @@ class TestSearchToolsCrossScope:
 
         with pytest.raises(ValueError, match="Invalid schema name"):
             search_columns(keywords='customer', schema_name='bad-schema')
+
+
+class TestExecuteSqlTransparency:
+    """execute_sql echoes the user's SQL plus a user-facing display directive.
+
+    Scope rationale: only execute_sql runs unbounded LLM-generated SQL; the
+    metadata tools use fixed catalog templates whose SQL is implementation
+    detail, not user-actionable. Forcing display of those would be noise.
+    Hence transparency fields live ONLY on execute_sql.
+    """
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_execute_sql_returns_executed_sql_field(self, mock_read_sql, mock_config):
+        config, _ = mock_config
+        mock_read_sql.return_value = pd.DataFrame({'x': [1]})
+
+        tools = RedshiftTools(config)
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
+        result = execute_sql(sql_statement="SELECT 1 AS x")
+
+        assert "_executed_sql" in result
+        assert result["_executed_sql"] == ["SELECT 1 AS x"]
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_execute_sql_returns_user_facing_message(self, mock_read_sql, mock_config):
+        """Message must clearly direct the agent to surface the SQL to the user."""
+        config, _ = mock_config
+        mock_read_sql.return_value = pd.DataFrame({'x': [1]})
+
+        tools = RedshiftTools(config)
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
+        result = execute_sql(sql_statement="SELECT 1 AS x")
+
+        assert "_user_facing_message" in result
+        msg = result["_user_facing_message"]
+        # Must reference the field name (so the agent knows what to display)
+        assert "_executed_sql" in msg
+        # Must use directive language; "verbatim" / "do not" pin the no-paraphrase
+        # contract more than just "show". Either signal is enough.
+        msg_lower = msg.lower()
+        assert "verbatim" in msg_lower or "do not" in msg_lower
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_execute_sql_preserves_existing_fields(self, mock_read_sql, mock_config):
+        """Adding transparency fields must not displace columns / data / paging info."""
+        config, _ = mock_config
+        mock_read_sql.return_value = pd.DataFrame({'a': [1, 2], 'b': [3, 4]})
+
+        tools = RedshiftTools(config)
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
+        result = execute_sql(sql_statement="SELECT a, b FROM t")
+
+        for key in ("total_count", "returned_count", "offset",
+                    "has_more", "columns", "data"):
+            assert key in result, f"existing field {key!r} disappeared"
+        assert result["columns"] == ["a", "b"]
+        assert result["total_count"] == 2
+
+    @patch('awswrangler.redshift.read_sql_query')
+    def test_metadata_tools_do_not_carry_transparency_fields(self, mock_read_sql, mock_config):
+        """Negative test pinning the scope decision: metadata tools must NOT
+        return _executed_sql / _user_facing_message. The catalog SQL is
+        implementation detail; surfacing it to users is noise, not signal.
+        Pin one tool from each category as a regression guard against scope creep."""
+        config, _ = mock_config
+        mock_read_sql.return_value = pd.DataFrame({
+            'schema_name': ['public'], 'schema_comment': [None],
+        })
+
+        tools = RedshiftTools(config)
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
+        search_schemas = _get_tool_fn(tools, 'search_schemas')
+        get_schema_comment = _get_tool_fn(tools, 'get_schema_comment')
+
+        # list_*
+        r = list_schemas(include_comments=True)
+        assert "_executed_sql" not in r
+        assert "_user_facing_message" not in r
+
+        # search_* (different mock shape)
+        mock_read_sql.return_value = pd.DataFrame({
+            'schema_name': [], 'schema_comment': [],
+        })
+        r = search_schemas(keywords="any")
+        assert "_executed_sql" not in r
+        assert "_user_facing_message" not in r
+
+        # get_*
+        mock_read_sql.return_value = pd.DataFrame({'schema_comment': ['c']})
+        r = get_schema_comment(schema_name="public")
+        assert "_executed_sql" not in r
+        assert "_user_facing_message" not in r
