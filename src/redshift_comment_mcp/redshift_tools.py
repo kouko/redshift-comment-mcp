@@ -237,7 +237,7 @@ def build_scale_hint(total_count: int, page_size: int = DEFAULT_MAX_ITEMS) -> Op
     return (
         f"This schema has {total_count} tables. "
         f"Full enumeration would need {pages} paginated tool calls. "
-        f"Consider search_tables(keywords) or /redshift-cache-schema for goal-oriented queries."
+        f"Consider search_tables(keywords) for goal-oriented queries."
     )
 
 
@@ -281,8 +281,7 @@ on the specific item for full text. Single-item getters never truncate.
 
 SCALE GUIDANCE: list_tables emits `scale_hint` when total_count > 100.
 For schemas at that size, paginating list_tables to completion is
-expensive — prefer search_tables(keywords) for goal-oriented queries
-or /redshift-cache-schema for bulk analysis.
+expensive — prefer search_tables(keywords) for goal-oriented queries.
 
 OPTIMIZATION: list_* tools accept include_comments / include_parent_comments
 flags to fold get_*_comment calls into the same response.
@@ -301,14 +300,6 @@ SEARCH SCOPE:
 
 For ad-hoc exploration, prefer list_* / search_* tools over execute_sql
 against information_schema — they include comments directly.
-
-CACHE PROTOCOL: Before list_* / search_* / get_*_comment, check
-~/.cache/redshift-comment-mcp/<profile>/_meta.json. If it exists,
-complete=true, and (now - refreshed_at) < ttl_hours, prefer Reading
-cache files: tables/<schema>__<table>.md for column detail, Bash grep
-on _tables_index.tsv / _columns_index.tsv for keyword search. Cache
-miss / stale / complete=false → fall back to MCP and emit one [cache]
-line suggesting /redshift-cache-schema --refresh.
 """
         )
         self._setup_tools()

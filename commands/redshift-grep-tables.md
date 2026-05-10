@@ -1,5 +1,5 @@
 ---
-description: "Cross-schema table search — find every table whose name or comment matches a keyword across all schemas in the cluster. Cache-first, live MCP fallback. Composes the redshift-comment-mcp tools."
+description: "Cross-schema table search — find every table whose name or comment matches a keyword across all schemas in the cluster via cluster-wide MCP call. Composes the redshift-comment-mcp tools."
 ---
 
 Use the redshift-comment-mcp:redshift-grep-tables skill to find tables by keyword across all schemas. Argument forms accepted:

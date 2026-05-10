@@ -1,5 +1,5 @@
 ---
-description: "Cross-table column search — find every column whose name or comment matches a keyword across all tables in one (or all) schemas. Cache-first, live MCP fallback. Composes the redshift-comment-mcp tools."
+description: "Cross-table column search — find every column whose name or comment matches a keyword across all tables in one (or all) schemas via schema-wide MCP call. Composes the redshift-comment-mcp tools."
 ---
 
 Use the redshift-comment-mcp:redshift-grep-columns skill to find columns by keyword across many tables. Argument forms accepted:

@@ -31,8 +31,7 @@ This plugin's charter is **Guided Data Discovery**:
 - **MCP-composed skills.** New workflows are built by stringing
   together existing tools, not by adding new database connections.
 - **No persistence.** No synthesis layer, no `.redshift-wiki/`
-  markdown, no stale tracking. (Cache is rebuildable; that's
-  different.) Persistence belongs in a separate plugin.
+  markdown, no stale tracking. Persistence belongs in a separate plugin.
 
 See [`implementation_guide.md`](implementation_guide.md) §1.2 for the
 full charter.
@@ -58,11 +57,10 @@ the LLM to read comments before trusting names.
 | [/redshift-setup](skills/redshift-setup/) | Conversational walk-through to configure a connection profile. | v0.2.0 |
 | [/redshift-switch-profile](skills/redshift-switch-profile/) | Switch the active profile (no host / user / password re-entry); single-profile users get a friendly bow-out. | v0.4.0 |
 | [/redshift-profile](skills/redshift-profile/) | Profile a column: cardinality / top-N / null rate / min-max / existing comment, one round. | v0.3.0 |
-| [/redshift-cache-schema](skills/redshift-cache-schema/) | LLM-internal cache: dumps cluster structure to local files for faster metadata lookups in subsequent skill invocations. | v0.3.0 |
 | [/redshift-explore](skills/redshift-explore/) | Three-step interactive wizard (schema → table → column) — pick by reading comments. | v0.3.0 |
 | [/redshift-lineage-from-stl](skills/redshift-lineage-from-stl/) | Mine `STL_QUERY` + sqlglot to reconstruct **actual** table-to-table lineage from query history. | v0.3.0 |
-| [/redshift-grep-columns](skills/redshift-grep-columns/) | Cross-table column search by keyword across one or all schemas. Cache-first via local TSV grep; live MCP fallback. | v0.4.0 |
-| [/redshift-grep-tables](skills/redshift-grep-tables/) | Cross-schema table search by keyword across all schemas. Cache-first via local TSV grep; live MCP fallback. | v0.4.0 |
+| [/redshift-grep-columns](skills/redshift-grep-columns/) | Cross-table column search by keyword across one or all schemas via schema-wide MCP call. | v0.4.0 |
+| [/redshift-grep-tables](skills/redshift-grep-tables/) | Cross-schema table search by keyword across all schemas via cluster-wide MCP call. | v0.4.0 |
 
 Each skill has its own tri-lingual README inside its folder (except
 `/redshift-setup` and `/redshift-switch-profile`, which are setup-style
@@ -134,7 +132,6 @@ The two READMEs to read next:
 | `~/.config/redshift-comment-mcp/config.toml` | Non-secret profile fields | `0600` |
 | `~/.config/redshift-comment-mcp/active-profile` | One-line pointer to the active profile name. **Absent ↔ server uses `default`** (canonical single-profile state — most users never see this file). | `0600` |
 | OS keychain (`redshift-comment-mcp` / `<profile>`) | Passwords | OS-managed |
-| `~/.cache/redshift-comment-mcp/<profile>/` | Optional offline structure cache (written by `/redshift-cache-schema`) | `0700` |
 
 ## Recommended DB GRANTs (defense-in-depth)
 
@@ -174,9 +171,9 @@ table can approach this. Two mitigations the plugin already applies:
 - `include_comments` defaults to **False** on `list_tables` /
   `list_columns` (only `list_schemas` defaults True since schema count
   is small) — agent must opt in to comment-loaded responses.
-- `/redshift-cache-schema` writes per-table `.md` files that consumers
-  Read directly via the Read tool, bypassing the MCP response path
-  entirely. Once primed, metadata lookups are not size-bound.
+- `MAX_COMMENT_LEN=1000` caps each comment in multi-item responses
+  (with `comment_truncated_count` + ellipsis marker). Single-item
+  getters (`get_table_comment` / `get_column_comment`) never truncate.
 
 If you still need to bump the cap (e.g. to fetch a heavily-documented
 column set in one shot), set `MAX_MCP_OUTPUT_TOKENS=50000` in the

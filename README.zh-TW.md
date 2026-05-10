@@ -28,8 +28,7 @@ manifest 涵蓋面太窄、Web GUI 太慢、手刻 SQL 太重複。
 - **MCP 組合型 skill**。新工作流靠串接既有 tools 實現，不會多開資料庫
   連線。
 - **不做持久化**。沒有 synthesis layer、沒有 `.redshift-wiki/` markdown、
-  沒有 stale tracking。（cache 是可重建的，那是另一回事。）持久化是另
-  一個 plugin 的工作。
+  沒有 stale tracking。持久化是另一個 plugin 的工作。
 
 完整 charter 見 [`implementation_guide.md`](implementation_guide.md) §1.2。
 
@@ -54,11 +53,10 @@ manifest 涵蓋面太窄、Web GUI 太慢、手刻 SQL 太重複。
 | [/redshift-setup](skills/redshift-setup/) | 對話式逐步設定連線 profile。 | v0.2.0 |
 | [/redshift-switch-profile](skills/redshift-switch-profile/) | 切換 active profile（不再次輸入 host / user / password）；單 profile 使用者會被溫和拒絕。 | v0.4.0 |
 | [/redshift-profile](skills/redshift-profile/) | 一回合內回出欄位的 cardinality / top-N / null 比例 / min-max / 既有註解。 | v0.3.0 |
-| [/redshift-cache-schema](skills/redshift-cache-schema/) | LLM 內部 cache：把 cluster 結構寫到本地檔，讓後續 skill 呼叫能快速解析 metadata。 | v0.3.0 |
 | [/redshift-explore](skills/redshift-explore/) | 三步 wizard（schema → table → column）—— 讀註解來挑，不用記名字。 | v0.3.0 |
 | [/redshift-lineage-from-stl](skills/redshift-lineage-from-stl/) | 挖 `STL_QUERY` + sqlglot 從查詢歷史還原**實際**的 table 對 table 資料流。 | v0.3.0 |
-| [/redshift-grep-columns](skills/redshift-grep-columns/) | 跨表搜欄位（名稱 + 註解），可在單一或全部 schema 上執行。Cache-first 走本地 TSV grep；live MCP fallback。 | v0.4.0 |
-| [/redshift-grep-tables](skills/redshift-grep-tables/) | 跨 schema 搜表（名稱 + 註解）。Cache-first 走本地 TSV grep；live MCP fallback。 | v0.4.0 |
+| [/redshift-grep-columns](skills/redshift-grep-columns/) | 跨表搜欄位（名稱 + 註解），單一或全部 schema 上跑 schema-wide MCP 呼叫。 | v0.4.0 |
+| [/redshift-grep-tables](skills/redshift-grep-tables/) | 跨 schema 搜表（名稱 + 註解），cluster-wide MCP 呼叫。 | v0.4.0 |
 
 每支 skill 在自己的資料夾內都有三語 README（除了 `/redshift-setup` 與
 `/redshift-switch-profile` 屬於 setup-style 內部 skill —— 直接看 SKILL.md）。
@@ -127,7 +125,6 @@ Plugin 透過 `uv run --project ${CLAUDE_PLUGIN_ROOT}` 直接從 cloned source
 | `~/.config/redshift-comment-mcp/config.toml` | 非機密 profile 欄位 | `0600` |
 | `~/.config/redshift-comment-mcp/active-profile` | 一行純文字指標，記錄哪個 profile 是 active。**檔案不存在 ↔ server 用 `default`**（單 profile 標準狀態，多數使用者不會看到此檔）。 | `0600` |
 | OS keychain（`redshift-comment-mcp` / `<profile>`） | 密碼 | OS 管理 |
-| `~/.cache/redshift-comment-mcp/<profile>/` | `/redshift-cache-schema` 寫入的可選離線結構快取 | `0700` |
 
 ## 建議的 DB GRANT 設定（縱深防禦）
 
@@ -166,9 +163,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA public, dbt_marts, dbt_staging
 - `include_comments` 在 `list_tables` / `list_columns` **預設 False**
   （只有 schema 數量小的 `list_schemas` 預設 True）—— agent 必須明確
   opt-in 才會拿到含註解的回應。
-- `/redshift-cache-schema` 把單表 spec 寫進 `.md` 檔，consumer 用 Read
-  tool 直接讀，**完全繞過 MCP 回傳路徑**。一旦 prime 過，後續 metadata
-  查詢不受此上限限制。
+- `MAX_COMMENT_LEN=1000` 自動截斷多筆回應的單筆註解（含
+  `comment_truncated_count` + 省略符號標記）。單筆 getter
+  （`get_table_comment` / `get_column_comment`）不截。
 
 如果仍然需要拉高上限（例如要一次抓重註解的欄位群），可以在 Claude Code
 執行環境設 `MAX_MCP_OUTPUT_TOKENS=50000`。注意這會影響該 session 中

@@ -138,5 +138,4 @@ exceeds retention)."
 
 | Need | Use |
 |---|---|
-| Structure cache only (this skill mines runtime) | `/redshift-cache-schema` |
 | dbt internal model lineage | dbt manifest / dbt docs |
