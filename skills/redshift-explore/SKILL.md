@@ -68,8 +68,9 @@ You picked dbt_marts.fct_orders. Now pick a column:
   ...
 ```
 Recognized replies: number/name → Step 4; keyword →
-`search_columns(keywords, schema_name, table_name)` (both schema_name
-AND table_name required — no wildcards); `back` → Step 2.
+`search_columns(keywords, schema_name, table_name)` (Step 3 always
+passes the picked table_name; `/redshift-grep-columns` is the schema-
+wide variant); `back` → Step 2.
 
 ### Step 4 — handoff
 
@@ -97,7 +98,7 @@ Step 4 produces the downstream skill's output.
 
 - NEVER skip the comment-first render even when the user named a table — the rendering IS the value. If the answer is already known, hand off to the right sister skill instead of running the wizard.
 - NEVER show > 50 candidates per step — paginate. Comment-first reading scales worse than alphabetical.
-- NEVER call `search_columns` without both `schema_name` AND `table_name` — MCP rejects wildcard scope; user gets a cryptic error.
+- NEVER call `search_columns` with `table_name=None` from inside this wizard — Step 3 has a specific table picked; schema-wide column search belongs in `/redshift-grep-columns`, not in the explore wizard.
 - NEVER auto-execute Step 4 option (a) without an explicit pick — handoff to `/redshift-profile` changes the workflow contract.
 - NEVER strip empty-comment items — render as `(no comment)` so the user sees what to ask the data owner about.
 
