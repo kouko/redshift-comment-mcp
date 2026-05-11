@@ -214,3 +214,74 @@ def test_resolve_active_profile_empty_cli_arg_treated_as_unset(tmp_xdg, monkeypa
     """Empty CLI arg should not pin to "" — fall through to env var."""
     monkeypatch.setenv("REDSHIFT_COMMENT_PROFILE", "envname")
     assert config.resolve_active_profile("") == "envname"
+
+
+# ===== single-profile fallback (upgrade-rescue for PR #22) =====
+#
+# 3884f98 made single-profile users canonical with "absent pointer file =
+# use 'default'". That works only for users whose single profile happens
+# to be named "default". Pre-3884f98 setups picked the name at install
+# time, so anyone with a non-"default" name got hard-broken by the
+# upgrade. These tests pin the rescue: when the implicit fallback would
+# hit a missing "default" profile, but exactly one profile exists, use
+# that one. Multi-profile / zero-profile cases stay loud (server raises
+# its existing ValueError with improved guidance from server.py).
+
+
+def test_resolve_active_profile_falls_back_to_single_profile_when_no_default(
+    tmp_xdg, monkeypatch
+):
+    """Upgrade rescue: one profile, not named 'default', no pointer file,
+    no env, no CLI → use that one profile."""
+    monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+    config.write_profile("ichef-prod", host="h", port=5439, user="u", dbname="d")
+    assert config.resolve_active_profile() == "ichef-prod"
+
+
+def test_resolve_active_profile_prefers_default_over_other_profiles(
+    tmp_xdg, monkeypatch
+):
+    """When 'default' exists alongside others, the implicit fallback must
+    still pick 'default' — backward compatibility for users who do use
+    that name."""
+    monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+    config.write_profile("default", host="h1", port=5439, user="u", dbname="d")
+    config.write_profile("prod", host="h2", port=5439, user="u", dbname="d")
+    assert config.resolve_active_profile() == "default"
+
+
+def test_resolve_active_profile_returns_default_when_multiple_profiles_no_default(
+    tmp_xdg, monkeypatch
+):
+    """Ambiguous case: 2+ profiles, none 'default', no pointer file.
+    Return 'default' so the server raises a clear error pointing at
+    /redshift-switch-profile — do NOT silently pick one of them."""
+    monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+    config.write_profile("prod", host="h1", port=5439, user="u", dbname="d")
+    config.write_profile("staging", host="h2", port=5439, user="u", dbname="d")
+    # Returns literal "default" — server.read_profile("default") then fails
+    # cleanly, which triggers the improved error message tested in
+    # test_server_resolution.py.
+    assert config.resolve_active_profile() == "default"
+
+
+def test_resolve_active_profile_returns_default_when_no_profiles_at_all(
+    tmp_xdg, monkeypatch
+):
+    """Fresh install / empty config.toml: nothing to rescue with, return
+    'default' so server raises the 'run /redshift-setup' error."""
+    monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+    assert config.resolve_active_profile() == "default"
+
+
+def test_resolve_active_profile_pointer_file_overrides_single_profile_fallback(
+    tmp_xdg, monkeypatch
+):
+    """If user explicitly set a pointer file, honor it even if it names a
+    non-existent profile — explicit beats implicit, lets server raise a
+    'pointer references missing profile' style error rather than silently
+    redirecting to the single existing profile."""
+    monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+    config.write_profile("ichef-prod", host="h", port=5439, user="u", dbname="d")
+    config.write_active_profile("ghost-profile")
+    assert config.resolve_active_profile() == "ghost-profile"

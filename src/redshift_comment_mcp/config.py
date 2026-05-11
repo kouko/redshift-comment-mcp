@@ -159,11 +159,35 @@ def resolve_active_profile(cli_profile: Optional[str] = None) -> str:
     """Resolve which profile the server should use.
 
     Priority: explicit CLI ``--profile`` flag > ``REDSHIFT_COMMENT_PROFILE``
-    env var > ``active-profile`` pointer file > ``"default"``.
+    env var > ``active-profile`` pointer file > implicit fallback.
+
+    Implicit fallback (when nothing was explicit):
+      1. ``"default"`` if it exists in config.toml — backward compatibility
+         for users whose single profile is named "default"
+      2. The lone profile if exactly one exists — **upgrade rescue** for
+         pre-3884f98 users who picked a non-"default" name at install
+      3. ``"default"`` as a literal — lets the server raise its existing
+         "Profile 'default' is not configured" error (improved by
+         server.py to surface available profiles + switch-profile skill)
+
+    Explicit inputs are returned as-is even when they don't resolve to a
+    real profile — the user told us what they want; let the downstream
+    raise a typo-friendly error.
     """
     if cli_profile:
         return cli_profile
     env = os.environ.get("REDSHIFT_COMMENT_PROFILE")
     if env:
         return env
-    return read_active_profile() or "default"
+    pointer = read_active_profile()
+    if pointer:
+        return pointer
+
+    # Implicit fallback path — touches config.toml because resolution now
+    # depends on what's actually configured, not just on a literal name.
+    profiles = read_all()
+    if "default" in profiles:
+        return "default"
+    if len(profiles) == 1:
+        return next(iter(profiles))
+    return "default"
