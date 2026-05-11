@@ -51,6 +51,20 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
     profile_name = cfg.resolve_active_profile(args.profile)
     profile = cfg.read_profile(profile_name)
     if not profile:
+        # Two distinct UX cases share this raise site:
+        # - No profiles at all → user needs to run /redshift-setup
+        # - ≥1 profile, just not the one we resolved → user needs to
+        #   switch (typo in name, or post-upgrade multi-profile with no
+        #   "default" and no pointer file). List them so the user can
+        #   spot the right name without re-running setup.
+        existing = cfg.list_profiles()
+        if existing:
+            raise ValueError(
+                f"Profile '{profile_name}' is not configured. "
+                f"Existing profiles: {', '.join(existing)}. "
+                f"Run /redshift-comment-mcp:redshift-switch-profile to pick one, "
+                f"or /redshift-comment-mcp:redshift-setup to add a new profile."
+            )
         raise ValueError(
             f"Profile '{profile_name}' is not configured. "
             f"Run /redshift-comment-mcp:redshift-setup in chat to set up "

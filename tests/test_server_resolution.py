@@ -195,3 +195,73 @@ def test_profile_exists_but_no_password_error_offers_two_paths(tmp_xdg, fake_key
     assert "/redshift-comment-mcp:redshift-setup" in msg
     assert "set-password" in msg
     assert "default" in msg
+
+
+# ===== upgrade rescue: single non-"default" profile works end-to-end =====
+
+
+def test_profile_mode_single_non_default_profile_auto_resolves(
+    tmp_xdg, fake_keyring, monkeypatch
+):
+    """End-to-end upgrade rescue: a fresh machine has one profile named
+    'ichef-prod' (not 'default') and no active-profile pointer file. The
+    server must auto-pick that profile and connect — no error, no manual
+    setup step required."""
+    monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+    config.write_profile(
+        "ichef-prod",
+        host="ichef-prod.example.com", port=5439, user="alice", dbname="warehouse",
+    )
+    config.set_password("ichef-prod", "ichef-pw")
+    args = _ns()
+    host, port, user, password, dbname = server.resolve_connection_params(args)
+    assert (host, port, user, password, dbname) == (
+        "ichef-prod.example.com", 5439, "alice", "ichef-pw", "warehouse",
+    )
+
+
+# ===== error message clarity when no rescue is possible =====
+
+
+def test_ambiguous_multi_profile_error_lists_profiles_and_suggests_switch(
+    tmp_xdg, fake_keyring, monkeypatch
+):
+    """Multi-profile / no 'default' / no pointer is the genuinely ambiguous
+    case that needs explicit user action. The error must:
+    1. Name the available profiles so the user knows what to switch TO
+    2. Suggest /redshift-switch-profile (not /redshift-setup — they already
+       have profiles configured; setup would just add another)
+    """
+    monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+    config.write_profile("prod", host="h1", port=5439, user="u", dbname="d")
+    config.write_profile("staging", host="h2", port=5439, user="u", dbname="d")
+    args = _ns()
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    msg = str(excinfo.value)
+    assert "prod" in msg
+    assert "staging" in msg
+    assert "/redshift-comment-mcp:redshift-switch-profile" in msg
+
+
+def test_named_profile_typo_error_lists_existing_profiles(
+    tmp_xdg, fake_keyring, monkeypatch
+):
+    """If the user explicitly named a profile (via env or pointer file)
+    that doesn't exist, mention the existing profiles so they can spot
+    the typo — not just 'run /redshift-setup'.
+
+    Note: deliberately picked names that don't share substrings, so
+    `"existing-name" in msg` can't pass on the existing error template
+    (which echoes the typo).
+    """
+    monkeypatch.setenv("REDSHIFT_COMMENT_PROFILE", "wrong-name")
+    config.write_profile("prod-warehouse", host="h", port=5439, user="u", dbname="d")
+    args = _ns()
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    msg = str(excinfo.value)
+    # The typo name must be in the error so the user sees the mismatch.
+    assert "wrong-name" in msg
+    # Existing profile must be named so the user can correct the typo.
+    assert "prod-warehouse" in msg
