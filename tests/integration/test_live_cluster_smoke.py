@@ -418,3 +418,16 @@ def test_list_columns_offset(live_redshift_tools, live_target):
     )
     assert shifted["columns"][0]["name"] != full["columns"][0]["name"]
     assert shifted["offset"] == 1
+
+
+# ===== execute_sql user-transparency =====
+
+
+def test_execute_sql_carries_transparency_fields_on_real_response(live_redshift_tools):
+    """Smoke: the live execute_sql round-trip carries both _executed_sql
+    (verbatim user SQL) and _user_facing_message (display directive)."""
+    execute_sql = _get_tool_fn(live_redshift_tools, "execute_sql")
+    result = execute_sql(sql_statement="SELECT 1 AS x")
+    assert result["_executed_sql"] == ["SELECT 1 AS x"]
+    assert "_user_facing_message" in result
+    assert "_executed_sql" in result["_user_facing_message"]
