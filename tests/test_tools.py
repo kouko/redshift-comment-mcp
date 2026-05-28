@@ -1612,3 +1612,296 @@ class TestSetupViaDialogTool:
 
         assert result["error"] == "missing_field"
         assert len(write_calls) == 0  # nothing was written
+
+    # ===== additional coverage rounds (gap-fill) =====
+
+    def test_setup_via_dialog_platform_unsupported_returns_status(self, monkeypatch):
+        """Platforms without osascript/zenity wiring (e.g. Windows) get the
+        unsupported branch. Profile fields are still saved so the user can
+        re-key with --stdin later."""
+        write_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: (None, "unsupported"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "platform_unsupported"
+        assert "platform" in result  # carries the platform name for debugging
+        assert "--stdin" in result["message"]
+        assert len(write_calls) == 1  # fields were saved even though password wasn't
+
+    def test_setup_via_dialog_empty_password_status(self, monkeypatch):
+        """Dialog returned (\"\", \"ok\") — weird state where the user clicked
+        OK without typing anything. Treat as failure; don't write an empty
+        password to keychain."""
+        set_pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: set_pw_calls.append((name, pw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("", "ok"),  # dialog OK but empty
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "empty_password"
+        assert len(set_pw_calls) == 0  # password was NOT written to keychain
+
+    def test_setup_via_dialog_write_profile_failed_returns_error(self, monkeypatch):
+        """write_profile raises (e.g. config dir not writable) → tool exits
+        with a clear error BEFORE touching the dialog. Defensive: catches
+        disk-permission issues without prompting the user for password
+        for nothing."""
+        def failing_write(name, **kw):
+            raise PermissionError("config dir not writable")
+        monkeypatch.setattr('redshift_comment_mcp.config.write_profile', failing_write)
+        # Dialog should not even be called — assert via tripwire:
+        dialog_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: dialog_calls.append(profile) or ("x", "ok"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["error"] == "write_profile_failed"
+        assert "not writable" in result["message"]
+        assert dialog_calls == []  # tripwire: dialog was NOT invoked
+
+    def test_setup_via_dialog_keychain_write_failed_returns_error(self, monkeypatch):
+        """set_password raises (e.g. keychain locked / access denied) AFTER
+        write_profile succeeded → tool returns keychain_write_failed. The
+        config.toml entry is left behind (recoverable: user can re-key via
+        set-password --dialog later)."""
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        def failing_set(name, pw):
+            raise RuntimeError("keychain locked")
+        monkeypatch.setattr('redshift_comment_mcp.config.set_password', failing_set)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("dialog-pw", "ok"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["error"] == "keychain_write_failed"
+        assert "locked" in result["message"]
+
+    def test_setup_via_dialog_overwrites_existing_profile(self, monkeypatch):
+        """Calling setup_via_dialog with an existing profile name should
+        overwrite the fields (same UX as /redshift-setup skill). Second call
+        wins — final state is the most recent invocation's args."""
+        write_calls = []
+        pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: pw_calls.append((name, pw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("pw", "ok"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        r1 = setup_via_dialog(host='old-host', user='u1', dbname='d1', profile='default')
+        r2 = setup_via_dialog(host='new-host', user='u2', dbname='d2', profile='default')
+
+        assert r1["status"] == "configured" and r2["status"] == "configured"
+        assert len(write_calls) == 2
+        assert write_calls[0][1]['host'] == 'old-host'
+        assert write_calls[1][1]['host'] == 'new-host'  # second call overwrites
+        assert len(pw_calls) == 2
+
+    def test_fastmcp_instructions_contains_setup_recovery_block(self):
+        """The SETUP RECOVERY block in FastMCP `instructions=` is the agent's
+        discovery channel for degraded-mode UX at handshake time. Regression
+        net against accidental removal during instructions edit / refactor."""
+        tools = self._make_tools()
+        instructions = tools.mcp.instructions or ""
+        assert "SETUP RECOVERY" in instructions, (
+            "instructions= missing SETUP RECOVERY block — agents lose the "
+            "handshake-time discovery channel for degraded-mode UX"
+        )
+        assert "setup_via_dialog" in instructions, (
+            "instructions= must name setup_via_dialog so agents know which "
+            "tool to call on not_configured error"
+        )
+        assert "not_configured" in instructions, (
+            "instructions= must name the not_configured error code so the "
+            "agent can pattern-match it"
+        )
+
+
+class TestDegradedModeContractAdditional:
+    """Round-2 coverage: end-to-end bootstrap-then-use, lazy-property direct
+    verification, and guard scope (only ConfigurationError gets converted —
+    other exceptions propagate normally)."""
+
+    def test_bootstrap_then_use_end_to_end(self, monkeypatch, mock_config):
+        """The v0.7.0 promise visualised: server boots without profile, agent
+        sets it up via the MCP tool, next DB tool call works WITHOUT a
+        restart. Glues all three changes together (degraded-mode start, lazy
+        re-resolution, setup_via_dialog write) and proves they compose."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        config, mock_conn = mock_config
+        # Shared state simulating "is the profile configured yet" — flipped
+        # by the mocked set_password (last step of setup_via_dialog).
+        state = {"configured": False}
+
+        def lazy_provider():
+            if state["configured"]:
+                return config
+            raise ConfigurationError("Profile 'default' is not configured")
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: state.__setitem__("configured", True),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("dialog-pw", "ok"),
+        )
+
+        tools = RedshiftTools(lazy_provider)
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        # 1. Initial call: not configured — server didn't crash, tool returned error
+        first = list_schemas()
+        assert first.get("error") == "not_configured", (
+            f"Step 1: expected not_configured error, got {first}"
+        )
+
+        # 2. Agent calls setup_via_dialog with conversational fields
+        setup = setup_via_dialog(host='h.example.com', user='u', dbname='d')
+        assert setup["status"] == "configured", f"Step 2: setup failed: {setup}"
+
+        # 3. Same tool call now works — NO restart, lazy resolve picked up state
+        with patch('awswrangler.redshift.read_sql_query') as mock_read:
+            mock_read.return_value = pd.DataFrame({
+                'schema_name': ['public'],
+                'schema_comment': ['ok'],
+            })
+            success = list_schemas()
+        assert success.get("error") != "not_configured", (
+            f"Step 3: lazy resolve should have picked up new profile, got {success}"
+        )
+        assert "schemas" in success or "items" in success, (
+            f"Step 3: expected schemas in response, got keys: {list(success.keys())}"
+        )
+
+    def test_config_property_is_lazy_not_cached(self):
+        """Each access to `tools.config` invokes the provider afresh — no
+        process-internal cache. This is what makes lazy re-resolution
+        actually pick up new keychain writes (no cache to invalidate)."""
+        call_count = [0]
+        sentinel = object()
+
+        def provider():
+            call_count[0] += 1
+            return sentinel
+
+        tools = RedshiftTools(provider)
+
+        assert tools.config is sentinel
+        assert tools.config is sentinel
+        assert tools.config is sentinel
+        assert call_count[0] == 3, (
+            f"@property config should call provider on every access "
+            f"(got {call_count[0]} calls for 3 accesses — caching has crept in)"
+        )
+
+    def test_guarded_does_not_catch_non_configuration_errors(self, mock_config):
+        """@_guarded converts ConfigurationError to not_configured response.
+        Other exceptions (validation, DB errors, etc.) MUST propagate
+        unchanged so FastMCP can surface them through normal error handling.
+        Catches the bug where someone widens the except clause to bare
+        Exception, hiding real failures behind a misleading not_configured
+        response."""
+        config, mock_conn = mock_config
+        tools = RedshiftTools(lambda: config)
+
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
+
+        # validate_read_only_sql raises plain ValueError (not ConfigurationError)
+        # → must propagate, NOT get caught by @_guarded
+        with pytest.raises(ValueError, match="SELECT and WITH"):
+            execute_sql(sql_statement="DROP TABLE users")
+
+
+class TestServerStartup:
+    """v0.7.0 degraded-mode contract at the server entry point: server.main()
+    must NOT raise when no profile is configured."""
+
+    def test_server_main_does_not_crash_when_no_profile(self, monkeypatch, tmp_path):
+        """The keystone test: invoke server.main() with an empty XDG config
+        dir + stubbed mcp_server.run(). Pre-v0.7.0 this raised
+        ValueError("Profile 'default' is not configured...") and exited with
+        traceback. Post-v0.7.0 it must enter the stdio loop. A failure here
+        means someone re-introduced upfront resolve_connection_params() in
+        main()."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))  # empty config dir
+        monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+        monkeypatch.setattr("sys.argv", ["redshift-comment-mcp"])
+
+        # Stub mcp_server.run() so this test doesn't enter the actual stdio
+        # blocking loop. FastMCP's .run method is replaced at class level →
+        # any instance the server creates uses the stub.
+        run_invocations = []
+        from fastmcp import FastMCP
+        monkeypatch.setattr(
+            FastMCP,
+            "run",
+            lambda self, *args, **kwargs: run_invocations.append(self),
+        )
+
+        from redshift_comment_mcp import server as server_module
+
+        # The assertion is the call itself — it must NOT raise.
+        server_module.main()
+
+        # And mcp_server.run() should have been entered exactly once, proving
+        # the server reached the stdio-loop step instead of bailing early.
+        assert len(run_invocations) == 1, (
+            f"mcp_server.run() invoked {len(run_invocations)} times "
+            f"(expected exactly 1 — server should reach the stdio loop even "
+            f"without a configured profile)"
+        )
