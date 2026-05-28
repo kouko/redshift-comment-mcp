@@ -1684,7 +1684,12 @@ class TestSetupViaDialogTool:
         assert "--stdin" in msg
 
     def test_setup_via_dialog_missing_field_returns_error(self, monkeypatch):
-        """Empty host/user/dbname → reject without touching config or keychain."""
+        """Empty host/user/dbname → reject without touching config or keychain.
+
+        Schema-consistency check: missing_field carries `exception_class`
+        like the other `error: ...` responses (ValidationError sentinel,
+        no real underlying exception). Agents can pattern-match on a
+        single error-response shape across all error paths."""
         write_calls = []
         monkeypatch.setattr(
             'redshift_comment_mcp.config.write_profile',
@@ -1697,6 +1702,10 @@ class TestSetupViaDialogTool:
         result = setup_via_dialog(host='', user='u', dbname='d')
 
         assert result["error"] == "missing_field"
+        # Schema-consistency with not_configured / write_profile_failed /
+        # keychain_write_failed:
+        assert result["exception_class"] == "ValidationError"
+        assert "host" in result["message"]
         assert len(write_calls) == 0  # nothing was written
 
     # ===== additional coverage rounds (gap-fill) =====
@@ -2117,10 +2126,15 @@ class TestSetupViaDialogConnectionVerification:
         assert result["tested"] is True
         assert "succeeded" in result["message"].lower()
 
-    def test_connection_test_fails_returns_configured_but_connection_failed(self, monkeypatch):
+    def test_connection_test_fails_returns_configured_but_connection_failed(self, monkeypatch, caplog):
         """The keystone safety: profile fields and password were saved, but
         the connection test caught a mismatch. Agent should NOT declare
-        setup done; should re-prompt user."""
+        setup done; should re-prompt user.
+
+        Also verifies M3 polish — connection-test failure is logged
+        server-side at WARNING level (not just surfaced in the response)
+        so an operator looking at server.log later can correlate."""
+        import logging as _logging
         self._setup_common_mocks(monkeypatch)
         monkeypatch.setattr(
             'redshift_comment_mcp.setup_cli._test_redshift_connection',
@@ -2130,7 +2144,8 @@ class TestSetupViaDialogConnectionVerification:
         tools = self._make_tools()
         setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
 
-        result = setup_via_dialog(host='wrong.example.com', user='u', dbname='d')
+        with caplog.at_level(_logging.WARNING, logger='redshift_comment_mcp.redshift_tools'):
+            result = setup_via_dialog(host='wrong.example.com', user='u', dbname='d')
 
         assert result["status"] == "configured_but_connection_failed"
         assert result["tested"] is False
@@ -2139,6 +2154,18 @@ class TestSetupViaDialogConnectionVerification:
         assert "VPN" in result["message"] or "host" in result["message"].lower()
         # Profile name preserved so agent knows which one to re-setup
         assert result["profile"] == "default"
+        # M3: server-side WARNING log must include profile + cluster coords
+        # + the underlying connection error, so operators can debug
+        warning_records = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert len(warning_records) >= 1, (
+            "connection-test failure must produce a server-side WARNING log "
+            "(was missing pre-round-7); operator-side debugging relied on "
+            "this entry"
+        )
+        log_text = " ".join(r.getMessage() for r in warning_records)
+        assert "default" in log_text  # profile name
+        assert "wrong.example.com" in log_text  # cluster host
+        assert "timed out" in log_text.lower()  # underlying error
 
     def test_connection_test_args_include_resolved_values(self, monkeypatch):
         """Verify _test_redshift_connection is called with the actual

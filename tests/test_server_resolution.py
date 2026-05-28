@@ -164,10 +164,12 @@ def test_profile_mode_cli_flag_beats_env_and_file(tmp_xdg, fake_keyring, monkeyp
 # ===== profile mode error messages point at both skill and CLI =====
 
 
-def test_profile_not_configured_error_offers_three_paths(tmp_xdg, fake_keyring, monkeypatch):
-    """Error must surface all three setup paths so any caller can recover:
-    Claude Code skill, code-agent pipeline (set-fields + set-password
-    --dialog), and human terminal (uvx redshift-comment-mcp setup)."""
+def test_profile_not_configured_error_offers_recovery_paths(tmp_xdg, fake_keyring, monkeypatch):
+    """Error must surface all setup paths so any caller can recover:
+    Claude Code skill, in-band MCP tool setup_via_dialog, code-agent
+    pipeline (set-fields + set-password --dialog), and human terminal
+    (uvx redshift-comment-mcp setup). Name kept path-agnostic so adding
+    a 5th option later doesn't require a test rename."""
     monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
     args = _ns()
     with pytest.raises(ValueError) as excinfo:
@@ -196,9 +198,11 @@ def test_named_profile_not_configured_error_includes_name(tmp_xdg, fake_keyring,
     assert "ichef-prod" in str(excinfo.value)
 
 
-def test_profile_exists_but_no_password_error_offers_two_paths(tmp_xdg, fake_keyring, monkeypatch):
+def test_profile_exists_but_no_password_error_offers_recovery_paths(tmp_xdg, fake_keyring, monkeypatch):
     """If profile fields exist but password missing, error should offer
-    BOTH the skill (preferred) AND the set-password CLI fallback."""
+    multiple re-key paths (Claude Code skill, in-band setup_via_dialog,
+    and terminal set-password CLI). Name kept path-agnostic so adding
+    new options later doesn't require a test rename."""
     monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
     config.write_profile("default", host="h", port=5439, user="u", dbname="d")
     # No password set → keychain miss

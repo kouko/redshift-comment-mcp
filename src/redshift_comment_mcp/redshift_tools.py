@@ -1291,8 +1291,15 @@ the only chat-leak-free paths.
             from .setup_cli import _collect_password_via_dialog
 
             if not all([host, user, dbname]):
+                # `exception_class` field kept for schema consistency with the
+                # other `error: ...` responses (not_configured /
+                # write_profile_failed / keychain_write_failed). Validation
+                # has no underlying exception, so a sentinel string is used —
+                # lets agents pattern-match on a single error-response shape
+                # regardless of which failure path fired.
                 return {
                     "error": "missing_field",
+                    "exception_class": "ValidationError",
                     "message": "host, user, and dbname are all required.",
                 }
 
@@ -1377,6 +1384,17 @@ the only chat-leak-free paths.
             ok, conn_err = _test_redshift_connection(host, port, user, password, dbname)
 
             if not ok:
+                # warning (not error) — the writes succeeded, the failure is
+                # recoverable (user re-runs setup_via_dialog with corrected
+                # fields). But still worth a server-side log entry so an
+                # operator looking at server.log later can correlate
+                # client-reported "configured_but_connection_failed" responses
+                # with the underlying network / credential / cluster state.
+                logger.warning(
+                    f"setup_via_dialog: profile '{profile}' written but "
+                    f"connection test to {host}:{port}/{dbname} as {user} "
+                    f"failed: {conn_err}"
+                )
                 return {
                     "status": "configured_but_connection_failed",
                     "profile": profile,
