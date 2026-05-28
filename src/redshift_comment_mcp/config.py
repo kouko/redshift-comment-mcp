@@ -44,6 +44,16 @@ import tomli_w
 KEYRING_SERVICE = "redshift-comment-mcp"
 
 
+class ConfigurationError(ValueError):
+    """Raised when the resolved profile is missing fields or keychain password.
+
+    Subclasses ValueError so existing ``except ValueError`` clauses still catch
+    it (backward-compat). Downstream code that wants to react specifically to
+    "needs setup" — e.g. degraded-mode MCP tools that return a structured
+    not_configured error instead of raising — should catch this subclass.
+    """
+
+
 def config_path() -> Path:
     """Return the canonical config file path (XDG-compliant)."""
     xdg = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")

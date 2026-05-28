@@ -38,7 +38,7 @@ full charter.
 
 ## What you get
 
-### MCP tools (11, defined in [`src/redshift_comment_mcp/`](src/redshift_comment_mcp/))
+### MCP tools (13, defined in [`src/redshift_comment_mcp/`](src/redshift_comment_mcp/))
 
 | Group | Tools |
 |---|---|
@@ -46,6 +46,7 @@ full charter.
 | Search (hit-count ranked) | `search_schemas` · `search_tables` · `search_columns` |
 | Comment retrieval | `get_schema_comment` · `get_table_comment` · `get_column_comment` · `get_all_column_comments` |
 | Query | `execute_sql` (SELECT / WITH only) |
+| Setup (since v0.7.0) | `setup_via_dialog` — in-band profile bootstrap; OS-native password dialog, never crosses MCP wire; tests connection before declaring success · `get_setup_status` — read-only configuration check; safe to call at session start; never returns password value |
 
 Pagination on every list / search; explicit `WARNING` strings nudging
 the LLM to read comments before trusting names.
@@ -139,21 +140,37 @@ the exact same files; no duplicate setup needed.
 Other useful subcommands: `set-password`, `delete-profile`. See
 `uvx redshift-comment-mcp --help`.
 
-**For code-agent bootstrap** (any MCP client with a Bash tool, no Claude
-Code required): use the non-interactive `set-fields` + `set-password
---dialog` pair so the password is collected via an OS-native dialog
-(macOS `osascript` / Linux `zenity`) and never enters chat / stdout:
+**For code-agent bootstrap** (any MCP client, since v0.7.0): the
+preferred path is the in-band MCP tool `setup_via_dialog` — no Bash
+tool, no MCP client restart, password stays out of chat:
+
+```
+agent calls any DB tool          → {"error": "not_configured", "next_step": "Call setup_via_dialog..."}
+agent asks user for host/user/dbname  (these are NOT secrets)
+agent calls MCP tool setup_via_dialog(host=..., user=..., dbname=...)
+                                 → server-side spawns OS dialog (macOS osascript / Linux zenity)
+                                 → user types password directly into dialog
+                                 → server writes config.toml + keychain
+                                 → {"status": "configured", ...}
+agent retries the DB tool        → works (lazy resolve; no restart needed)
+```
+
+The server boots in **degraded mode** even when no profile exists —
+DB tools return a structured `not_configured` error pointing at
+`setup_via_dialog`, so the agent sees the recovery path in its own
+tool-call result (no need to read MCP client log files). After setup,
+lazy resolution picks up the new profile on the next tool call.
+
+**Fallback for headless / non-GUI hosts** (no `osascript` / no
+`zenity`): drop to the Bash + CLI path which uses `--stdin` instead of
+the dialog:
 
 ```bash
 uvx redshift-comment-mcp set-fields --profile default \
     --host H --port P --user U --dbname D
-uvx redshift-comment-mcp set-password --profile default --dialog
+echo "$PASSWORD" | uvx redshift-comment-mcp set-password \
+    --profile default --stdin
 ```
-
-The agent asks the user for host/user/dbname conversationally, then runs
-the two commands; password entry happens entirely in the system dialog.
-For headless / non-GUI hosts, use `set-password --stdin` to pipe the
-password instead (one line, no trailing newline).
 
 **Step 2 — single profile.** In `claude_desktop_config.json` (or your
 client's equivalent):

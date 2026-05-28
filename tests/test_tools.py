@@ -54,7 +54,7 @@ def test_connection_management(mock_config):
     config, mock_conn = mock_config
     
     # 建立工具實例
-    redshift_tools = RedshiftTools(config)
+    redshift_tools = RedshiftTools(lambda: config)
     
     # 驗證 FastMCP 實例被建立
     assert redshift_tools.mcp is not None
@@ -74,7 +74,7 @@ def test_list_schemas_with_connection(mock_read_sql, mock_config):
     mock_read_sql.return_value = mock_df
     
     # 建立工具實例 - 這會觸發工具註冊
-    redshift_tools = RedshiftTools(config)
+    redshift_tools = RedshiftTools(lambda: config)
     
     # 驗證伺服器建立成功
     mcp_server = redshift_tools.get_server()
@@ -153,7 +153,7 @@ def test_redshift_tools_initialization():
     config = MagicMock()
     
     # 建立工具實例
-    redshift_tools = RedshiftTools(config)
+    redshift_tools = RedshiftTools(lambda: config)
     
     # 驗證屬性設定
     assert redshift_tools.config == config
@@ -247,7 +247,7 @@ class TestListToolsExecution:
         mock_df = pd.DataFrame({'schema_name': ['public', 'sales', 'analytics']})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         # 取得註冊的工具函數
         list_schemas = _get_tool_fn(tools, 'list_schemas')
 
@@ -269,7 +269,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_schemas = _get_tool_fn(tools, 'list_schemas')
 
         result = list_schemas(include_comments=True)
@@ -292,7 +292,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_schemas = _get_tool_fn(tools, 'list_schemas')
 
         result = list_schemas(include_comments=True)
@@ -313,7 +313,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_comments=False)
@@ -337,7 +337,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_comments=True)
@@ -361,7 +361,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_comments=True)
@@ -380,7 +380,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.return_value = tables_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_parent_comments=False)
@@ -405,7 +405,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [table_df, columns_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_comments=False)
@@ -430,7 +430,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [table_df, columns_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_comments=True)
@@ -456,7 +456,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [table_df, columns_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_comments=True)
@@ -476,7 +476,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.return_value = columns_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_parent_comments=False)
@@ -505,7 +505,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_schemas = _get_tool_fn(tools, 'search_schemas')
 
         result = search_schemas(keywords='sales 銷售')
@@ -521,7 +521,7 @@ class TestSearchTools:
     def test_search_schemas_empty_keywords(self, mock_config):
         """測試 search_schemas 空關鍵字驗證"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         search_schemas = _get_tool_fn(tools, 'search_schemas')
 
@@ -539,7 +539,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_schemas = _get_tool_fn(tools, 'search_schemas')
 
         result = search_schemas(keywords='public')
@@ -560,7 +560,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_schemas = _get_tool_fn(tools, 'search_schemas')
 
         # 搜尋 "sales data" - sales_data 應該命中兩個關鍵字
@@ -586,7 +586,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_tables = _get_tool_fn(tools, 'search_tables')
 
         # 搜尋 "order items" - order_items 應該命中兩個關鍵字
@@ -611,7 +611,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         # 搜尋 "total amount" - total_amount 應該命中兩個關鍵字
@@ -635,7 +635,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_tables = _get_tool_fn(tools, 'search_tables')
 
         result = search_tables(keywords='order 訂單', schema_name='sales')
@@ -647,7 +647,7 @@ class TestSearchTools:
     def test_search_tables_empty_keywords(self, mock_config):
         """測試 search_tables 空關鍵字驗證"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         search_tables = _get_tool_fn(tools, 'search_tables')
 
@@ -657,7 +657,7 @@ class TestSearchTools:
     def test_search_tables_invalid_schema(self, mock_config):
         """測試 search_tables 無效 schema 名稱"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         search_tables = _get_tool_fn(tools, 'search_tables')
 
@@ -678,7 +678,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         result = search_columns(keywords='customer', schema_name='sales', table_name='orders')
@@ -691,7 +691,7 @@ class TestSearchTools:
     def test_search_columns_invalid_table(self, mock_config):
         """測試 search_columns 無效 table 名稱"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         search_columns = _get_tool_fn(tools, 'search_columns')
 
@@ -712,7 +712,7 @@ class TestCommentQueryTools:
         mock_df = pd.DataFrame({'schema_comment': ['This is the sales schema']})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_schema_comment = _get_tool_fn(tools, 'get_schema_comment')
 
         result = get_schema_comment(schema_name='sales')
@@ -728,7 +728,7 @@ class TestCommentQueryTools:
         mock_df = pd.DataFrame(columns=['schema_comment'])  # 空的 DataFrame
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_schema_comment = _get_tool_fn(tools, 'get_schema_comment')
 
         with pytest.raises(ValueError, match="not found"):
@@ -742,7 +742,7 @@ class TestCommentQueryTools:
         mock_df = pd.DataFrame({'table_comment': ['Contains order records']})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_table_comment = _get_tool_fn(tools, 'get_table_comment')
 
         result = get_table_comment(schema_name='sales', table_name='orders')
@@ -762,7 +762,7 @@ class TestCommentQueryTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_column_comment = _get_tool_fn(tools, 'get_column_comment')
 
         result = get_column_comment(schema_name='sales', table_name='orders', column_name='id')
@@ -786,7 +786,7 @@ class TestCommentQueryTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_all_column_comments = _get_tool_fn(tools, 'get_all_column_comments')
 
         result = get_all_column_comments(schema_name='sales', table_name='orders')
@@ -812,7 +812,7 @@ class TestExecuteSQL:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
 
         result = execute_sql(sql_statement='SELECT * FROM users')
@@ -829,7 +829,7 @@ class TestExecuteSQL:
         mock_df = pd.DataFrame({'count': [10]})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
 
         result = execute_sql(sql_statement='WITH cte AS (SELECT * FROM users) SELECT count(*) FROM cte')
@@ -839,7 +839,7 @@ class TestExecuteSQL:
     def test_execute_sql_dangerous_drop(self, mock_config):
         """測試拒絕 DROP 語句"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         execute_sql = _get_tool_fn(tools, 'execute_sql')
 
@@ -849,7 +849,7 @@ class TestExecuteSQL:
     def test_execute_sql_dangerous_delete(self, mock_config):
         """測試拒絕包含 DELETE 的查詢"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         execute_sql = _get_tool_fn(tools, 'execute_sql')
 
@@ -860,7 +860,7 @@ class TestExecuteSQL:
     def test_execute_sql_invalid_start(self, mock_config):
         """測試拒絕非 SELECT/WITH 開頭的查詢"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         execute_sql = _get_tool_fn(tools, 'execute_sql')
 
@@ -880,7 +880,7 @@ class TestExecuteSQL:
         """擋掉 v0.3.x 後新增的關鍵字（MERGE / GRANT / REVOKE / COPY / UNLOAD），
         含 CTE 偽裝（SELECT 開頭但 DML/admin 動作藏在後段）。"""
         config, _ = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         with pytest.raises(ValueError, match=keyword):
             execute_sql(sql_statement=sql)
@@ -890,7 +890,7 @@ class TestExecuteSQL:
         """BOM 等不可見字元在 SQL 前不應誤觸 startswith 檢查。"""
         config, _ = mock_config
         mock_read_sql.return_value = pd.DataFrame({'x': [1]})
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         # 各種會出現在傳輸層或編輯器複製的不可見前綴
         for prefix in ('﻿', '​', ' ', '⁠'):
@@ -955,7 +955,7 @@ class TestErrorHandling:
     def test_list_tables_invalid_schema(self, mock_config):
         """測試 list_tables 無效 schema 名稱"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         list_tables = _get_tool_fn(tools, 'list_tables')
 
@@ -965,7 +965,7 @@ class TestErrorHandling:
     def test_list_columns_invalid_table(self, mock_config):
         """測試 list_columns 無效 table 名稱"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         list_columns = _get_tool_fn(tools, 'list_columns')
 
@@ -975,7 +975,7 @@ class TestErrorHandling:
     def test_get_column_comment_invalid_names(self, mock_config):
         """測試 get_column_comment 無效名稱"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         get_column_comment = _get_tool_fn(tools, 'get_column_comment')
 
@@ -1069,7 +1069,7 @@ class TestListTablesIntegrationWithCapAndHint:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
         result = list_tables(schema_name='big')
 
@@ -1088,7 +1088,7 @@ class TestListTablesIntegrationWithCapAndHint:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
         result = list_tables(schema_name='small')
 
@@ -1106,7 +1106,7 @@ class TestListTablesIntegrationWithCapAndHint:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
         result = list_tables(schema_name='s', include_comments=True)
 
@@ -1126,7 +1126,7 @@ class TestListTablesIntegrationWithCapAndHint:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
         result = list_tables(schema_name='s', include_comments=True)
 
@@ -1144,7 +1144,7 @@ class TestSingleGetterDoesNotTruncate:
         mock_df = pd.DataFrame({'table_comment': [long_comment]})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_table_comment = _get_tool_fn(tools, 'get_table_comment')
         result = get_table_comment(schema_name='s', table_name='t')
 
@@ -1159,7 +1159,7 @@ class TestSingleGetterDoesNotTruncate:
         mock_df = pd.DataFrame({'data_type': ['varchar'], 'column_comment': [long_comment]})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_column_comment = _get_tool_fn(tools, 'get_column_comment')
         result = get_column_comment(schema_name='s', table_name='t', column_name='c')
 
@@ -1186,7 +1186,7 @@ class TestSearchToolsCrossScope:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_tables = _get_tool_fn(tools, 'search_tables')
 
         # No schema_name argument
@@ -1211,7 +1211,7 @@ class TestSearchToolsCrossScope:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_tables = _get_tool_fn(tools, 'search_tables')
 
         result = search_tables(keywords='order', schema_name='sales')
@@ -1222,7 +1222,7 @@ class TestSearchToolsCrossScope:
     def test_search_tables_invalid_schema_when_provided(self, mock_config):
         """Invalid schema_name still raises (only the None case is permitted to skip filter)."""
         config, _ = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_tables = _get_tool_fn(tools, 'search_tables')
 
         with pytest.raises(ValueError, match="Invalid schema name"):
@@ -1248,7 +1248,7 @@ class TestSearchToolsCrossScope:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         # Omit table_name: schema-wide search
@@ -1276,7 +1276,7 @@ class TestSearchToolsCrossScope:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         result = search_columns(keywords='customer', schema_name='sales', table_name='orders')
@@ -1288,7 +1288,7 @@ class TestSearchToolsCrossScope:
     def test_search_columns_invalid_table_when_provided(self, mock_config):
         """Invalid table_name still raises (only the None case skips the filter)."""
         config, _ = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         with pytest.raises(ValueError, match="Invalid table name"):
@@ -1298,7 +1298,7 @@ class TestSearchToolsCrossScope:
         """schema_name remains required even though table_name is now optional —
         cluster-wide column search would be too expensive on the leader node."""
         config, _ = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         with pytest.raises(ValueError, match="Invalid schema name"):
@@ -1319,7 +1319,7 @@ class TestExecuteSqlTransparency:
         config, _ = mock_config
         mock_read_sql.return_value = pd.DataFrame({'x': [1]})
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         result = execute_sql(sql_statement="SELECT 1 AS x")
 
@@ -1332,7 +1332,7 @@ class TestExecuteSqlTransparency:
         config, _ = mock_config
         mock_read_sql.return_value = pd.DataFrame({'x': [1]})
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         result = execute_sql(sql_statement="SELECT 1 AS x")
 
@@ -1351,7 +1351,7 @@ class TestExecuteSqlTransparency:
         config, _ = mock_config
         mock_read_sql.return_value = pd.DataFrame({'a': [1, 2], 'b': [3, 4]})
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         result = execute_sql(sql_statement="SELECT a, b FROM t")
 
@@ -1372,7 +1372,7 @@ class TestExecuteSqlTransparency:
             'schema_name': ['public'], 'schema_comment': [None],
         })
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_schemas = _get_tool_fn(tools, 'list_schemas')
         search_schemas = _get_tool_fn(tools, 'search_schemas')
         get_schema_comment = _get_tool_fn(tools, 'get_schema_comment')
@@ -1395,3 +1395,935 @@ class TestExecuteSqlTransparency:
         r = get_schema_comment(schema_name="public")
         assert "_executed_sql" not in r
         assert "_user_facing_message" not in r
+
+
+# ===== Degraded-mode startup (v0.7.0): no profile yet =====
+#
+# The server boots regardless of profile state. DB tools return a structured
+# not_configured error rather than letting the ConfigurationError crash
+# the process. The setup_via_dialog tool can bootstrap a profile in-session
+# without the password ever crossing the MCP wire.
+
+
+class TestDegradedModeContract:
+    """v0.7.0: server starts without profile; DB tools return error JSON."""
+
+    def test_db_tool_returns_not_configured_when_provider_raises(self):
+        """ConfigurationError from the lazy provider becomes a structured
+        tool response, not a propagating exception. This is the core
+        degraded-mode behavior — the server never crashes on missing profile."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def failing_provider():
+            raise ConfigurationError(
+                "Profile 'default' is not configured. Configure via one of: ..."
+            )
+
+        tools = RedshiftTools(failing_provider)
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
+
+        result = list_schemas()
+
+        assert result["error"] == "not_configured"
+        assert "default" in result["message"]
+        assert "setup_via_dialog" in result["next_step"]
+
+    def test_not_configured_response_schema_matches_setup_via_dialog_errors(self):
+        """Schema consistency: not_configured response must carry the same
+        `exception_class` field as setup_via_dialog's error responses
+        (write_profile_failed / keychain_write_failed). Without this, agents
+        have to special-case different error-response shapes from related
+        tools — schema discipline that round-6 polish brought in."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def failing_provider():
+            raise ConfigurationError("anything")
+
+        tools = RedshiftTools(failing_provider)
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
+        result = list_schemas()
+
+        # Required fields for the unified error-response schema:
+        assert "error" in result
+        assert "exception_class" in result, (
+            "not_configured response missing exception_class field — "
+            "schema diverges from setup_via_dialog's error responses"
+        )
+        assert result["exception_class"] == "ConfigurationError"
+        assert "message" in result
+        # not_configured-specific:
+        assert "next_step" in result
+
+    def test_every_db_tool_handles_not_configured(self):
+        """All 11 DB tools should propagate the not_configured pattern.
+        Catches the case where a new tool is added without @_guarded."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def failing_provider():
+            raise ConfigurationError("not configured")
+
+        tools = RedshiftTools(failing_provider)
+
+        # Tools that take no required args, or where we can pass minimal stubs
+        cases = [
+            ('list_schemas', {}),
+            ('list_tables', {'schema_name': 'x'}),
+            ('list_columns', {'schema_name': 'x', 'table_name': 'y'}),
+            ('search_schemas', {'keywords': 'k'}),
+            ('search_tables', {'keywords': 'k', 'schema_name': 'x'}),
+            ('search_columns', {'keywords': 'k', 'schema_name': 'x'}),
+            ('get_schema_comment', {'schema_name': 'x'}),
+            ('get_table_comment', {'schema_name': 'x', 'table_name': 'y'}),
+            ('get_column_comment', {'schema_name': 'x', 'table_name': 'y', 'column_name': 'z'}),
+            ('get_all_column_comments', {'schema_name': 'x', 'table_name': 'y'}),
+            ('execute_sql', {'sql_statement': 'SELECT 1'}),
+        ]
+        for tool_name, kwargs in cases:
+            fn = _get_tool_fn(tools, tool_name)
+            result = fn(**kwargs)
+            assert isinstance(result, dict), f"{tool_name} returned non-dict: {type(result)}"
+            assert result.get("error") == "not_configured", (
+                f"{tool_name} did not return not_configured (got: {result})"
+            )
+
+    def test_lazy_re_resolution_picks_up_new_config(self, mock_config):
+        """Provider is called per tool invocation, so config changes between
+        calls take effect without restart. First call: state says
+        unconfigured, provider raises, tool returns not_configured. Flip
+        state. Second call: provider returns valid config, tool runs.
+
+        State-based provider (vs. list-of-states indexed by call count)
+        is robust to tools that access ``self.config`` more than once per
+        invocation — the property invocations all see the same external
+        state instead of marching off the end of a list."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        config, mock_conn = mock_config
+        state = {"configured": False}
+
+        def stateful_provider():
+            if state["configured"]:
+                return config
+            raise ConfigurationError("provider says: not configured yet")
+
+        tools = RedshiftTools(stateful_provider)
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
+
+        # 1st call: state is unconfigured → tool returns not_configured
+        result1 = list_schemas()
+        assert result1.get("error") == "not_configured"
+
+        # Flip external state — simulates setup_via_dialog / CLI setup
+        # writing config.toml + keychain in between tool calls.
+        state["configured"] = True
+
+        # 2nd call: provider now returns the good config → tool runs.
+        # No reset of any indexes, no fragile call-count assertion.
+        with patch('awswrangler.redshift.read_sql_query') as mock_read:
+            mock_read.return_value = pd.DataFrame({
+                'schema_name': ['public'],
+                'schema_comment': ['ok'],
+            })
+            result2 = list_schemas()
+        assert result2.get("error") != "not_configured", (
+            f"Second call should have picked up the new state via lazy "
+            f"resolution, but got: {result2}"
+        )
+        assert "schemas" in result2 or "items" in result2, (
+            f"Second call should return schema data, got keys: "
+            f"{list(result2.keys())}"
+        )
+
+
+# ===== setup_via_dialog MCP tool (v0.7.0) =====
+
+
+class TestSetupViaDialogTool:
+    """In-band profile bootstrap via MCP tool. Password collection happens
+    via OS-native dialog server-side; never crosses MCP wire."""
+
+    def _make_tools(self, provider=None):
+        """Build a RedshiftTools instance with a no-op provider by default
+        (setup_via_dialog doesn't need the provider to succeed)."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        if provider is None:
+            def provider():
+                raise ConfigurationError("not yet")
+        return RedshiftTools(provider)
+
+    def test_setup_via_dialog_works_without_configured_profile(self, monkeypatch):
+        """setup_via_dialog is the bootstrap tool — it MUST NOT be gated by
+        the @_guarded decorator (it has to run before a profile exists)."""
+        write_calls = []
+        set_pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: set_pw_calls.append((name, pw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("dialog-secret", "ok"),
+        )
+        # Stub the post-write connection test to simulate a reachable cluster
+        # — keeps this test hermetic (no real Redshift attempt).
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (True, None),
+        )
+
+        tools = self._make_tools()  # provider raises ConfigurationError
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='h.example.com',
+            user='alice',
+            dbname='analytics',
+            profile='prod',
+            port=5439,
+        )
+
+        assert result["status"] == "configured", f"got: {result}"
+        assert result["profile"] == "prod"
+        assert write_calls == [
+            ('prod', {'host': 'h.example.com', 'port': 5439,
+                      'user': 'alice', 'dbname': 'analytics'}),
+        ]
+        assert set_pw_calls == [('prod', 'dialog-secret')]
+
+    def test_setup_via_dialog_dialog_cancelled_status(self, monkeypatch):
+        """User clicked Cancel → profile fields are still written (recoverable
+        state) but no password is set."""
+        write_calls = []
+        set_pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: set_pw_calls.append((name, pw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: (None, "cancelled"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "dialog_cancelled"
+        assert len(write_calls) == 1  # fields were written
+        assert len(set_pw_calls) == 0  # password was NOT written
+
+    def test_setup_via_dialog_dialog_unavailable_hints_stdin(self, monkeypatch):
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: (None, "unavailable"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "dialog_unavailable"
+        assert "--stdin" in result["message"]
+
+    def test_setup_via_dialog_permission_denied_status_carries_actionable_message(
+        self, monkeypatch
+    ):
+        """macOS Apple-Events permission denial returns a distinct
+        `permission_denied` status (NOT dialog_cancelled). The message
+        must give the agent actionable user instructions: open System
+        Settings → Privacy & Security → Automation, or run tccutil reset.
+        Without this distinction the agent would say "you cancelled the
+        dialog?" when actually the dialog never appeared."""
+        write_calls = []
+        set_pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: set_pw_calls.append((name, pw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: (None, "permission_denied"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "permission_denied"
+        # Profile fields saved (recoverable state — same as cancelled)
+        assert len(write_calls) == 1
+        # Password NOT written
+        assert len(set_pw_calls) == 0
+        # Message must include the macOS-specific recovery path
+        msg = result["message"]
+        assert "Automation" in msg or "System Events" in msg
+        assert "System Settings" in msg or "Privacy" in msg
+        # Must NOT mislead agent into treating this as user cancellation
+        assert "cancelled" not in msg.lower()
+        # Fallback also mentioned for users who can't or won't grant permission
+        assert "--stdin" in msg
+
+    def test_setup_via_dialog_missing_field_returns_error(self, monkeypatch):
+        """Empty host/user/dbname → reject without touching config or keychain.
+
+        Schema-consistency check: missing_field carries `exception_class`
+        like the other `error: ...` responses (ValidationError sentinel,
+        no real underlying exception). Agents can pattern-match on a
+        single error-response shape across all error paths."""
+        write_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='', user='u', dbname='d')
+
+        assert result["error"] == "missing_field"
+        # Schema-consistency with not_configured / write_profile_failed /
+        # keychain_write_failed:
+        assert result["exception_class"] == "ValidationError"
+        assert "host" in result["message"]
+        assert len(write_calls) == 0  # nothing was written
+
+    # ===== additional coverage rounds (gap-fill) =====
+
+    def test_setup_via_dialog_platform_unsupported_returns_status(self, monkeypatch):
+        """Platforms without osascript/zenity wiring (e.g. Windows) get the
+        unsupported branch. Profile fields are still saved so the user can
+        re-key with --stdin later."""
+        write_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: (None, "unsupported"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "platform_unsupported"
+        assert "platform" in result  # carries the platform name for debugging
+        assert "--stdin" in result["message"]
+        assert len(write_calls) == 1  # fields were saved even though password wasn't
+
+    def test_setup_via_dialog_empty_password_status(self, monkeypatch):
+        """Dialog returned (\"\", \"ok\") — weird state where the user clicked
+        OK without typing anything. Treat as failure; don't write an empty
+        password to keychain."""
+        set_pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: set_pw_calls.append((name, pw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("", "ok"),  # dialog OK but empty
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "empty_password"
+        assert len(set_pw_calls) == 0  # password was NOT written to keychain
+
+    def test_setup_via_dialog_write_profile_failed_returns_error(self, monkeypatch):
+        """write_profile raises (e.g. config dir not writable) → tool exits
+        with a clear error BEFORE touching the dialog. Defensive: catches
+        disk-permission issues without prompting the user for password
+        for nothing.
+
+        Per CWE-209 (round-5 polish): the raw str(e) MUST NOT appear in
+        the response message — the exception class name IS exposed (as
+        a separate field, useful for diagnosis), but the message text
+        is sanitized."""
+        secret_marker = "SUPER_SENSITIVE_PATH_/Users/private/.aws/credentials"
+        def failing_write(name, **kw):
+            # Simulate an exception whose str() contains sensitive context
+            raise PermissionError(secret_marker)
+        monkeypatch.setattr('redshift_comment_mcp.config.write_profile', failing_write)
+        # Dialog should not even be called — assert via tripwire:
+        dialog_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: dialog_calls.append(profile) or ("x", "ok"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["error"] == "write_profile_failed"
+        assert result["exception_class"] == "PermissionError"
+        # CWE-209: response MUST NOT carry raw exception text
+        import json
+        serialized = json.dumps(result)
+        assert secret_marker not in serialized, (
+            "write_profile_failed response leaked raw exception text — "
+            "CWE-209 regression"
+        )
+        # ...but should still be agent-actionable
+        assert "config" in result["message"].lower() or "filesystem" in result["message"].lower()
+        assert dialog_calls == []  # tripwire: dialog was NOT invoked
+
+    def test_setup_via_dialog_keychain_write_failed_returns_error(self, monkeypatch):
+        """set_password raises (e.g. keychain locked / access denied) AFTER
+        write_profile succeeded → tool returns keychain_write_failed. The
+        config.toml entry is left behind (recoverable: user can re-key via
+        set-password --dialog later).
+
+        Per CWE-209 (round-5): raw str(e) is NOT in the response message —
+        only the exception class name + a sanitized hint."""
+        password_marker = "the-actual-password-this-must-never-leak"
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        def failing_set(name, pw):
+            # Simulate a hypothetical buggy backend that includes the
+            # password in its exception args. The sanitisation logic must
+            # prevent this from reaching the MCP response regardless.
+            raise RuntimeError(f"backend rejected password {password_marker!r}")
+        monkeypatch.setattr('redshift_comment_mcp.config.set_password', failing_set)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("dialog-pw", "ok"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["error"] == "keychain_write_failed"
+        assert result["exception_class"] == "RuntimeError"
+        # Hard security invariant: password must NEVER reach the response
+        import json
+        serialized = json.dumps(result)
+        assert password_marker not in serialized, (
+            "keychain_write_failed response leaked the password value "
+            "via the exception args — CWE-209 + LLM02:2025 regression"
+        )
+        # ...but message remains actionable
+        assert "--stdin" in result["message"]
+
+    def test_setup_via_dialog_keychain_specific_exception_hints(self, monkeypatch):
+        """Snyk guidance: catch specific keyring exception types where
+        possible. setup_via_dialog maps known exception class names to
+        tailored hint sentences so the agent sees a more useful diagnosis
+        than the generic fallback ("Underlying keychain write failed.")."""
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("pw", "ok"),
+        )
+
+        # Build a fake KeyringLocked exception class — what real keyring
+        # would raise on a locked backend. setup_via_dialog inspects
+        # type(e).__name__, so a class named KeyringLocked is enough.
+        class KeyringLocked(Exception):
+            pass
+
+        def failing_set(name, pw):
+            raise KeyringLocked()
+        monkeypatch.setattr('redshift_comment_mcp.config.set_password', failing_set)
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["exception_class"] == "KeyringLocked"
+        # Tailored hint, not the generic fallback
+        assert "locked" in result["message"].lower()
+        assert "unlock" in result["message"].lower()
+
+    def test_setup_via_dialog_overwrites_existing_profile(self, monkeypatch):
+        """Calling setup_via_dialog with an existing profile name should
+        overwrite the fields (same UX as /redshift-setup skill). Second call
+        wins — final state is the most recent invocation's args."""
+        write_calls = []
+        pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: pw_calls.append((name, pw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("pw", "ok"),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (True, None),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        r1 = setup_via_dialog(host='old-host', user='u1', dbname='d1', profile='default')
+        r2 = setup_via_dialog(host='new-host', user='u2', dbname='d2', profile='default')
+
+        assert r1["status"] == "configured" and r2["status"] == "configured"
+        assert len(write_calls) == 2
+        assert write_calls[0][1]['host'] == 'old-host'
+        assert write_calls[1][1]['host'] == 'new-host'  # second call overwrites
+        assert len(pw_calls) == 2
+
+    def test_fastmcp_instructions_contains_setup_recovery_block(self):
+        """The SETUP RECOVERY block in FastMCP `instructions=` is the agent's
+        discovery channel for degraded-mode UX at handshake time. Regression
+        net against accidental removal during instructions edit / refactor."""
+        tools = self._make_tools()
+        instructions = tools.mcp.instructions or ""
+        assert "SETUP RECOVERY" in instructions, (
+            "instructions= missing SETUP RECOVERY block — agents lose the "
+            "handshake-time discovery channel for degraded-mode UX"
+        )
+        assert "setup_via_dialog" in instructions, (
+            "instructions= must name setup_via_dialog so agents know which "
+            "tool to call on not_configured error"
+        )
+        assert "not_configured" in instructions, (
+            "instructions= must name the not_configured error code so the "
+            "agent can pattern-match it"
+        )
+
+
+class TestDegradedModeContractAdditional:
+    """Round-2 coverage: end-to-end bootstrap-then-use, lazy-property direct
+    verification, and guard scope (only ConfigurationError gets converted —
+    other exceptions propagate normally)."""
+
+    def test_bootstrap_then_use_end_to_end(self, monkeypatch, mock_config):
+        """The v0.7.0 promise visualised: server boots without profile, agent
+        sets it up via the MCP tool, next DB tool call works WITHOUT a
+        restart. Glues all three changes together (degraded-mode start, lazy
+        re-resolution, setup_via_dialog write) and proves they compose."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        config, mock_conn = mock_config
+        # Shared state simulating "is the profile configured yet" — flipped
+        # by the mocked set_password (last step of setup_via_dialog).
+        state = {"configured": False}
+
+        def lazy_provider():
+            if state["configured"]:
+                return config
+            raise ConfigurationError("Profile 'default' is not configured")
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: state.__setitem__("configured", True),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("dialog-pw", "ok"),
+        )
+        # End-to-end test stubs the connection check too — covered by
+        # dedicated TestSetupViaDialogConnectionVerification tests below.
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (True, None),
+        )
+
+        tools = RedshiftTools(lazy_provider)
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        # 1. Initial call: not configured — server didn't crash, tool returned error
+        first = list_schemas()
+        assert first.get("error") == "not_configured", (
+            f"Step 1: expected not_configured error, got {first}"
+        )
+
+        # 2. Agent calls setup_via_dialog with conversational fields
+        setup = setup_via_dialog(host='h.example.com', user='u', dbname='d')
+        assert setup["status"] == "configured", f"Step 2: setup failed: {setup}"
+
+        # 3. Same tool call now works — NO restart, lazy resolve picked up state
+        with patch('awswrangler.redshift.read_sql_query') as mock_read:
+            mock_read.return_value = pd.DataFrame({
+                'schema_name': ['public'],
+                'schema_comment': ['ok'],
+            })
+            success = list_schemas()
+        assert success.get("error") != "not_configured", (
+            f"Step 3: lazy resolve should have picked up new profile, got {success}"
+        )
+        assert "schemas" in success or "items" in success, (
+            f"Step 3: expected schemas in response, got keys: {list(success.keys())}"
+        )
+
+    def test_config_property_is_lazy_not_cached(self):
+        """Each access to `tools.config` invokes the provider afresh — no
+        process-internal cache. This is what makes lazy re-resolution
+        actually pick up new keychain writes (no cache to invalidate)."""
+        call_count = [0]
+        sentinel = object()
+
+        def provider():
+            call_count[0] += 1
+            return sentinel
+
+        tools = RedshiftTools(provider)
+
+        assert tools.config is sentinel
+        assert tools.config is sentinel
+        assert tools.config is sentinel
+        assert call_count[0] == 3, (
+            f"@property config should call provider on every access "
+            f"(got {call_count[0]} calls for 3 accesses — caching has crept in)"
+        )
+
+    def test_guarded_does_not_catch_non_configuration_errors(self, mock_config):
+        """@_guarded converts ConfigurationError to not_configured response.
+        Other exceptions (validation, DB errors, etc.) MUST propagate
+        unchanged so FastMCP can surface them through normal error handling.
+        Catches the bug where someone widens the except clause to bare
+        Exception, hiding real failures behind a misleading not_configured
+        response."""
+        config, mock_conn = mock_config
+        tools = RedshiftTools(lambda: config)
+
+        execute_sql = _get_tool_fn(tools, 'execute_sql')
+
+        # validate_read_only_sql raises plain ValueError (not ConfigurationError)
+        # → must propagate, NOT get caught by @_guarded
+        with pytest.raises(ValueError, match="SELECT and WITH"):
+            execute_sql(sql_statement="DROP TABLE users")
+
+
+class TestServerStartup:
+    """v0.7.0 degraded-mode contract at the server entry point: server.main()
+    must NOT raise when no profile is configured."""
+
+    def test_server_main_does_not_crash_when_no_profile(self, monkeypatch, tmp_path):
+        """The keystone test: invoke server.main() with an empty XDG config
+        dir + stubbed mcp_server.run(). Pre-v0.7.0 this raised
+        ValueError("Profile 'default' is not configured...") and exited with
+        traceback. Post-v0.7.0 it must enter the stdio loop. A failure here
+        means someone re-introduced upfront resolve_connection_params() in
+        main()."""
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))  # empty config dir
+        monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+        monkeypatch.setattr("sys.argv", ["redshift-comment-mcp"])
+
+        # Stub mcp_server.run() so this test doesn't enter the actual stdio
+        # blocking loop. FastMCP's .run method is replaced at class level →
+        # any instance the server creates uses the stub.
+        run_invocations = []
+        from fastmcp import FastMCP
+        monkeypatch.setattr(
+            FastMCP,
+            "run",
+            lambda self, *args, **kwargs: run_invocations.append(self),
+        )
+
+        from redshift_comment_mcp import server as server_module
+
+        # The assertion is the call itself — it must NOT raise.
+        server_module.main()
+
+        # And mcp_server.run() should have been entered exactly once, proving
+        # the server reached the stdio-loop step instead of bailing early.
+        assert len(run_invocations) == 1, (
+            f"mcp_server.run() invoked {len(run_invocations)} times "
+            f"(expected exactly 1 — server should reach the stdio loop even "
+            f"without a configured profile)"
+        )
+
+
+# ===== Polish round-3: connection verification + get_setup_status =====
+#
+# These tests cover the additional safety net (test connection after
+# keychain write) and the new read-only status tool.
+
+
+class TestSetupViaDialogConnectionVerification:
+    """setup_via_dialog now tests the Redshift connection after writing the
+    profile + password. This catches "wrote successfully but connection
+    fails" silent lies (typo'd host / VPN not connected / wrong password /
+    paused cluster) BEFORE the agent declares setup done."""
+
+    def _make_tools(self):
+        from redshift_comment_mcp.config import ConfigurationError
+        def provider():
+            raise ConfigurationError("not yet")
+        return RedshiftTools(provider)
+
+    def _setup_common_mocks(self, monkeypatch, dialog_returns=("pw", "ok")):
+        """Stub the chain up to the connection-test step."""
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: dialog_returns,
+        )
+
+    def test_connection_test_passes_returns_configured_with_tested_flag(self, monkeypatch):
+        self._setup_common_mocks(monkeypatch)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (True, None),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "configured"
+        assert result["tested"] is True
+        assert "succeeded" in result["message"].lower()
+
+    def test_connection_test_fails_returns_configured_but_connection_failed(self, monkeypatch, caplog):
+        """The keystone safety: profile fields and password were saved, but
+        the connection test caught a mismatch. Agent should NOT declare
+        setup done; should re-prompt user.
+
+        Also verifies M3 polish — connection-test failure is logged
+        server-side at WARNING level (not just surfaced in the response)
+        so an operator looking at server.log later can correlate."""
+        import logging as _logging
+        self._setup_common_mocks(monkeypatch)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (False, "Connection timed out (host unreachable)"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        with caplog.at_level(_logging.WARNING, logger='redshift_comment_mcp.redshift_tools'):
+            result = setup_via_dialog(host='wrong.example.com', user='u', dbname='d')
+
+        assert result["status"] == "configured_but_connection_failed"
+        assert result["tested"] is False
+        assert "timed out" in result["connection_error"]
+        # Message must include diagnostic hints the agent can relay to user
+        assert "VPN" in result["message"] or "host" in result["message"].lower()
+        # Profile name preserved so agent knows which one to re-setup
+        assert result["profile"] == "default"
+        # M3: server-side WARNING log must include profile + cluster coords
+        # + the underlying connection error, so operators can debug
+        warning_records = [r for r in caplog.records if r.levelno == _logging.WARNING]
+        assert len(warning_records) >= 1, (
+            "connection-test failure must produce a server-side WARNING log "
+            "(was missing pre-round-7); operator-side debugging relied on "
+            "this entry"
+        )
+        log_text = " ".join(r.getMessage() for r in warning_records)
+        assert "default" in log_text  # profile name
+        assert "wrong.example.com" in log_text  # cluster host
+        assert "timed out" in log_text.lower()  # underlying error
+
+    def test_connection_test_args_include_resolved_values(self, monkeypatch):
+        """Verify _test_redshift_connection is called with the actual
+        host/port/user/password/dbname the tool received — guards against
+        accidentally passing wrong args (e.g. dropping port, swapping
+        user/dbname order)."""
+        self._setup_common_mocks(monkeypatch, dialog_returns=("the-password", "ok"))
+        captured = {}
+        def capture(host, port, user, password, dbname):
+            captured.update(host=host, port=port, user=user,
+                            password=password, dbname=dbname)
+            return (True, None)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection', capture,
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+        setup_via_dialog(host='h.example.com', user='alice',
+                         dbname='analytics', port=5430)
+
+        assert captured == {
+            'host': 'h.example.com',
+            'port': 5430,
+            'user': 'alice',
+            'password': 'the-password',
+            'dbname': 'analytics',
+        }
+
+
+class TestGetSetupStatusTool:
+    """The read-only setup-status tool. Safe to call at session start;
+    returns non-secrets only; agents use it to decide whether to call
+    setup_via_dialog proactively."""
+
+    def _make_tools(self):
+        from redshift_comment_mcp.config import ConfigurationError
+        def provider():
+            raise ConfigurationError("doesn't matter — get_setup_status doesn't touch the provider")
+        return RedshiftTools(provider)
+
+    def test_get_setup_status_unconfigured_returns_false_with_next_step(self, monkeypatch):
+        """Fresh install case: no config.toml entry, no keychain."""
+        monkeypatch.setattr('redshift_comment_mcp.config.read_profile',
+                            lambda name: None)
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: None)
+
+        tools = self._make_tools()
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+
+        assert result["profile"] == "default"
+        assert result["configured"] is False
+        assert result["has_fields"] is False
+        assert result["has_password"] is False
+        # Non-secret fields absent when has_fields=False
+        assert "host" not in result
+        assert "user" not in result
+        # Agent guidance for next step
+        assert "next_step" in result
+        assert "setup_via_dialog" in result["next_step"]
+
+    def test_get_setup_status_fields_only_no_password(self, monkeypatch):
+        """Edge case: config.toml has the profile but keychain entry was
+        deleted (e.g. via `delete-profile` then re-add of fields only)."""
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.read_profile',
+            lambda name: {'host': 'h', 'port': 5439, 'user': 'u', 'dbname': 'd'},
+        )
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: None)
+
+        tools = self._make_tools()
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+
+        assert result["configured"] is False  # NOT fully configured
+        assert result["has_fields"] is True
+        assert result["has_password"] is False
+        # Non-secret fields exposed
+        assert result["host"] == 'h'
+        assert result["user"] == 'u'
+        # next_step adapts to this partial state
+        assert "password" in result["next_step"].lower()
+
+    def test_get_setup_status_fully_configured(self, monkeypatch):
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.read_profile',
+            lambda name: {'host': 'h.example.com', 'port': 5439,
+                          'user': 'alice', 'dbname': 'analytics'},
+        )
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: 'some-password')
+
+        tools = self._make_tools()
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status(profile='default')
+
+        assert result["configured"] is True
+        assert result["has_fields"] is True
+        assert result["has_password"] is True
+        assert result["host"] == 'h.example.com'
+        assert result["user"] == 'alice'
+        # No next_step when already configured
+        assert "next_step" not in result
+
+    def test_get_setup_status_never_returns_password_value(self, monkeypatch):
+        """Hard security invariant: even when has_password=True, the actual
+        password string MUST NEVER appear anywhere in the response. Catches
+        a future careless refactor where someone adds the password to the
+        response by accident."""
+        secret = "super-secret-password-do-not-leak"
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.read_profile',
+            lambda name: {'host': 'h', 'port': 5439, 'user': 'u', 'dbname': 'd'},
+        )
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: secret)
+
+        tools = self._make_tools()
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+
+        # Scan all string values in the response for the secret — catches
+        # accidental inclusion in any field (host, message, next_step, etc).
+        import json
+        serialized = json.dumps(result)
+        assert secret not in serialized, (
+            "get_setup_status leaked the password value in the response — "
+            "this is a security regression"
+        )
+
+    def test_get_setup_status_works_in_degraded_mode(self, monkeypatch):
+        """get_setup_status must work even when the lazy provider raises
+        ConfigurationError — that's literally what makes it useful at
+        session start (no profile yet)."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def failing_provider():
+            raise ConfigurationError("not yet configured")
+
+        monkeypatch.setattr('redshift_comment_mcp.config.read_profile',
+                            lambda name: None)
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: None)
+
+        tools = RedshiftTools(failing_provider)
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        # Must NOT raise; must NOT return not_configured error
+        result = get_setup_status()
+        assert "error" not in result, (
+            "get_setup_status should not be guarded by @_guarded — it "
+            "needs to work when the provider raises (its whole point)"
+        )
+        assert result["configured"] is False

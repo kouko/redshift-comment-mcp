@@ -38,7 +38,7 @@ SQL は繰り返しが多すぎる。
 
 ## 含まれているもの
 
-### MCP ツール（11 個、[`src/redshift_comment_mcp/`](src/redshift_comment_mcp/) で定義）
+### MCP ツール（13 個、[`src/redshift_comment_mcp/`](src/redshift_comment_mcp/) で定義）
 
 | グループ | ツール |
 |---|---|
@@ -46,6 +46,7 @@ SQL は繰り返しが多すぎる。
 | Search（ヒット数順） | `search_schemas` · `search_tables` · `search_columns` |
 | コメント取得 | `get_schema_comment` · `get_table_comment` · `get_column_comment` · `get_all_column_comments` |
 | クエリ | `execute_sql`（SELECT / WITH のみ） |
+| セットアップ（v0.7.0〜） | `setup_via_dialog` — セッション内でプロファイルをブートストラップ。パスワードは OS ネイティブダイアログで収集し、MCP wire には一切流れない；成功宣言前に接続テストも実施 · `get_setup_status` — 読み取り専用の設定状態チェック。セッション開始時に安全に呼び出せ、パスワード値は決して返さない |
 
 list / search はすべてページング対応。コメントを読んでから名前を信じる
 よう LLM を促す `WARNING` 文字列が明示的に埋め込まれています。
@@ -139,22 +140,38 @@ Code プラグインを既に使っているなら、`/redshift-setup` がまっ
 他に便利なサブコマンド：`set-password`、`delete-profile`。
 `uvx redshift-comment-mcp --help` を参照。
 
-**コードエージェントによるブートストラップ**（Bash ツールがあるあらゆる
-MCP クライアント、Claude Code 不要）：非対話の `set-fields` +
-`set-password --dialog` を組み合わせる。`--dialog` フラグは OS ネイティブ
-のパスワードダイアログ（macOS は `osascript`、Linux は `zenity`）を起動
-し、パスワードはチャット / stdout に一切現れません：
+**コードエージェントによるブートストラップ**（任意の MCP クライアント、
+v0.7.0 〜）：推奨パスはインバンドの MCP ツール `setup_via_dialog` —
+Bash ツール不要、MCP クライアント再起動不要、パスワードはチャットに
+一切現れません：
+
+```
+agent が任意の DB ツールを呼ぶ        → {"error": "not_configured", "next_step": "Call setup_via_dialog..."}
+agent がユーザーに host / user / dbname を聞く（これらは機密ではない）
+agent が MCP ツール setup_via_dialog(host=..., user=..., dbname=...) を呼ぶ
+                                     → サーバー側で OS ダイアログ起動（macOS osascript / Linux zenity）
+                                     → ユーザーがダイアログに直接パスワードを入力
+                                     → サーバーが config.toml + keychain に書き込む
+                                     → {"status": "configured", ...}
+agent が DB ツールを再試行           → 動作（lazy resolve；再起動不要）
+```
+
+サーバーはプロファイル未設定でも **デグレードモード** で起動します ——
+DB ツールは構造化された `not_configured` エラーを返し、その中で
+`setup_via_dialog` を案内するので、エージェントはツール呼び出しの
+結果から復旧パスを直接見られます（MCP クライアントのログファイルを
+読みに行く必要はありません）。セットアップ後の次回ツール呼び出しで
+lazy resolution が新プロファイルを拾います。
+
+**ヘッドレス / GUI 無しホスト**（`osascript` も `zenity` も無い場合）
+**のフォールバック**：Bash + CLI 経由で `--stdin` を使うパスに落ちます：
 
 ```bash
 uvx redshift-comment-mcp set-fields --profile default \
     --host H --port P --user U --dbname D
-uvx redshift-comment-mcp set-password --profile default --dialog
+echo "$PASSWORD" | uvx redshift-comment-mcp set-password \
+    --profile default --stdin
 ```
-
-エージェントはユーザーに host / user / dbname を対話で聞き取り、上記
-2 つのコマンドを実行します。パスワード入力はシステムダイアログ内で
-完結します。ヘッドレス / GUI 無しの環境では `--stdin` で 1 行
-（末尾改行なし）パイプしてください。
 
 **ステップ 2 — シングルプロファイル。** `claude_desktop_config.json`
 （またはクライアントの相当ファイル）に：

@@ -68,12 +68,45 @@ def cmd_setup(args: argparse.Namespace) -> int:
     return cmd_test_connection(args)
 
 
+def _test_redshift_connection(
+    host: str, port: int, user: str, password: str, dbname: str,
+) -> tuple[bool, str | None]:
+    """Smoke-test a Redshift connection. Returns ``(success, error_message)``.
+
+    Catches host typos / wrong port / VPN-not-connected / firewall block /
+    wrong password / paused-cluster early. Used by both the CLI's
+    ``test-connection`` subcommand and the ``setup_via_dialog`` MCP tool
+    to verify a freshly-written profile actually connects BEFORE
+    declaring success — turns silent ``configured`` lies into actionable
+    ``configured_but_connection_failed`` feedback.
+    """
+    try:
+        import redshift_connector
+    except ImportError:
+        return False, "redshift-connector library is not installed"
+    try:
+        conn = redshift_connector.connect(
+            host=host, port=port, user=user, password=password, database=dbname,
+        )
+        try:
+            conn.cursor().execute("SELECT 1")
+        finally:
+            conn.close()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
 def _collect_password_via_dialog(profile_name: str) -> tuple[str | None, str]:
     """Collect password via OS-native dialog without exposing to chat / stdout.
 
     Returns ``(password, reason)``:
       - ``("the-password", "ok")`` on success
-      - ``(None, "cancelled")`` if user closed / cancelled the dialog
+      - ``(None, "cancelled")`` if user clicked Cancel on the dialog
+      - ``(None, "permission_denied")`` if macOS blocked Apple Events
+        (Claude Desktop / Cursor / etc. lacks Automation > System Events
+        permission — most common osascript failure, distinct from a user
+        cancel because the dialog never appeared)
       - ``(None, "unavailable")`` if no dialog tool is installed
       - ``(None, "unsupported")`` if the platform has no supported dialog path
 
@@ -86,13 +119,15 @@ def _collect_password_via_dialog(profile_name: str) -> tuple[str | None, str]:
     """
     if sys.platform == "darwin":
         # macOS — native osascript dialog. "with hidden answer" masks the
-        # typed value. stderr is discarded so a Cocoa permission/cancel
-        # error doesn't leak user-visible state.
+        # typed value. stderr captured (not discarded) so we can detect
+        # permission denial separately from user cancel. Title includes
+        # the profile name so users running multiple MCP clients (Claude
+        # Desktop + Cursor + ...) can disambiguate which one popped this.
         script = (
             f'tell application "System Events" to display dialog '
             f'"Redshift password for profile \\"{profile_name}\\":" '
             f'default answer "" with hidden answer '
-            f'with title "Redshift MCP Setup" '
+            f'with title "Redshift MCP Setup — profile \\"{profile_name}\\"" '
             f'buttons {{"Cancel", "Save"}} default button "Save"'
         )
         try:
@@ -104,9 +139,32 @@ def _collect_password_via_dialog(profile_name: str) -> tuple[str | None, str]:
             )
         except FileNotFoundError:
             return None, "unavailable"
-        if result.returncode != 0:
-            return None, "cancelled"
-        return result.stdout.rstrip("\n"), "ok"
+        if result.returncode == 0:
+            return result.stdout.rstrip("\n"), "ok"
+        # osascript non-zero exit — distinguish permission denial from cancel.
+        # macOS error -1743 ("Not authorized to send Apple events") fires when
+        # the parent app (Claude Desktop / Cursor / etc.) hasn't been granted
+        # Automation > System Events permission in System Settings → Privacy
+        # & Security → Automation. The dialog never even appears; the agent
+        # should NOT treat this as "user cancelled" because that would
+        # suggest a blind retry without fixing the underlying permission,
+        # producing a hang loop.
+        #
+        # Detection: prefer the numeric code (locale-stable across macOS
+        # localisations), with case-insensitive English-text fallback for
+        # both American ("authorized") and British ("authorised") spelling.
+        # Format confirmed against discussions.apple.com / Late Night
+        # Software forum threads — see PR #34's commit message for refs.
+        stderr_lower = (result.stderr or "").lower()
+        if (
+            "-1743" in (result.stderr or "")
+            or "not authorized to send apple events" in stderr_lower
+            or "not authorised to send apple events" in stderr_lower
+        ):
+            return None, "permission_denied"
+        # Other non-zero: most likely user clicked Cancel (osascript exits
+        # 1 with "execution error: User canceled. (-128)" on user cancel).
+        return None, "cancelled"
 
     if sys.platform.startswith("linux"):
         # Linux desktop — zenity. Exit code 1 = cancelled, 127 = not installed.
@@ -145,6 +203,18 @@ def cmd_set_password(args: argparse.Namespace) -> int:
         password, reason = _collect_password_via_dialog(name)
         if reason == "cancelled":
             print("Password dialog cancelled. No change.", file=sys.stderr)
+            return 2
+        if reason == "permission_denied":
+            print(
+                "macOS blocked the password dialog (Automation > System "
+                "Events permission denied). Fix in System Settings → "
+                "Privacy & Security → Automation → enable System Events "
+                "for the app running this command. Or run "
+                "`tccutil reset AppleEvents` from terminal to force a "
+                "fresh permission prompt. Alternatively, use `--stdin` "
+                "to pipe the password.",
+                file=sys.stderr,
+            )
             return 2
         if reason == "unavailable":
             print(
