@@ -71,7 +71,13 @@ jobs:
         TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
       run: |
         echo "🚀 Publishing to PyPI..."
-        twine upload dist/* --verbose
+        # --skip-existing for idempotent re-runs (same rationale as
+        # test-publish.yml — see comment there). Even though PyPI's
+        # publish path is only meant to fire once per `released` event,
+        # workflow_dispatch + accidental re-runs would otherwise fail
+        # with a 400 duplicate-version error and surface as a misleading
+        # "release broken" badge on the GH Release page.
+        twine upload --skip-existing dist/* --verbose
         echo "✅ Published to PyPI successfully!"
     
     - name: Verify PyPI publication
