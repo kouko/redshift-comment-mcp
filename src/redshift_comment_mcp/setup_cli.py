@@ -3,19 +3,35 @@
 Subcommands (invoked as ``redshift-comment-mcp <subcommand>``):
 
 - ``setup [--profile NAME]``        — full Q&A for one profile
-- ``set-password [--profile NAME]`` — only update the password
+- ``set-password [--profile NAME] [--stdin | --dialog]``
+                                     — update password.
+                                     Default = interactive ``getpass`` prompt.
+                                     ``--stdin``: read one line from stdin
+                                     (scripted / CI use; never logs to argv).
+                                     ``--dialog``: OS-native password dialog
+                                     (macOS ``osascript``, Linux ``zenity``);
+                                     password never enters chat / stdout.
 - ``test-connection [--profile NAME]`` — verify a profile can connect
 - ``list-profiles``                  — list all configured profiles
 - ``delete-profile --profile NAME``  — remove a profile + its keyring entry
+- ``set-fields --profile NAME --host H --port P --user U --dbname D``
+                                     — non-interactive write of the 4
+                                     non-secret fields (agent / scripted use).
 
 Subcommands route through ``main()`` in this module; the bare command
 ``redshift-comment-mcp`` (with no subcommand) starts the MCP server in
 ``server.py``.
+
+Code-agent bootstrap pipeline (no Claude Code plugin required)::
+
+    redshift-comment-mcp set-fields --profile X --host H --port P --user U --dbname D
+    redshift-comment-mcp set-password --profile X --dialog
 """
 from __future__ import annotations
 
 import argparse
 import getpass
+import subprocess
 import sys
 
 from . import config
@@ -52,6 +68,69 @@ def cmd_setup(args: argparse.Namespace) -> int:
     return cmd_test_connection(args)
 
 
+def _collect_password_via_dialog(profile_name: str) -> tuple[str | None, str]:
+    """Collect password via OS-native dialog without exposing to chat / stdout.
+
+    Returns ``(password, reason)``:
+      - ``("the-password", "ok")`` on success
+      - ``(None, "cancelled")`` if user closed / cancelled the dialog
+      - ``(None, "unavailable")`` if no dialog tool is installed
+      - ``(None, "unsupported")`` if the platform has no supported dialog path
+
+    Mirrors the security discipline of ``skills/redshift-setup/references/
+    password-macos.md`` / ``password-zenity.md``: the password value is
+    captured into a local Python string via ``subprocess.run(capture_output=
+    True)`` and never reaches the caller's stdout. The caller is responsible
+    for passing it directly to ``config.set_password()`` and deleting the
+    reference immediately.
+    """
+    if sys.platform == "darwin":
+        # macOS — native osascript dialog. "with hidden answer" masks the
+        # typed value. stderr is discarded so a Cocoa permission/cancel
+        # error doesn't leak user-visible state.
+        script = (
+            f'tell application "System Events" to display dialog '
+            f'"Redshift password for profile \\"{profile_name}\\":" '
+            f'default answer "" with hidden answer '
+            f'with title "Redshift MCP Setup" '
+            f'buttons {{"Cancel", "Save"}} default button "Save"'
+        )
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script, "-e", "text returned of result"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return None, "unavailable"
+        if result.returncode != 0:
+            return None, "cancelled"
+        return result.stdout.rstrip("\n"), "ok"
+
+    if sys.platform.startswith("linux"):
+        # Linux desktop — zenity. Exit code 1 = cancelled, 127 = not installed.
+        try:
+            result = subprocess.run(
+                [
+                    "zenity",
+                    "--password",
+                    "--title=Redshift MCP Setup",
+                    f"--text=Redshift password for profile \"{profile_name}\":",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+        except FileNotFoundError:
+            return None, "unavailable"
+        if result.returncode == 0:
+            return result.stdout.rstrip("\n"), "ok"
+        return None, "cancelled"
+
+    return None, "unsupported"
+
+
 def cmd_set_password(args: argparse.Namespace) -> int:
     name = args.profile
     if not config.read_profile(name):
@@ -61,10 +140,50 @@ def cmd_set_password(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
-    password = getpass.getpass(f"DB password for profile '{name}' (input hidden): ")
-    if not password:
-        print("Password cannot be empty. Aborting.", file=sys.stderr)
-        return 2
+
+    if args.dialog:
+        password, reason = _collect_password_via_dialog(name)
+        if reason == "cancelled":
+            print("Password dialog cancelled. No change.", file=sys.stderr)
+            return 2
+        if reason == "unavailable":
+            print(
+                "No supported password dialog tool found "
+                "(macOS needs `osascript`, Linux needs `zenity`). "
+                "Use `--stdin` to pipe the password, or omit both flags "
+                "for an interactive terminal prompt.",
+                file=sys.stderr,
+            )
+            return 2
+        if reason == "unsupported":
+            print(
+                f"`--dialog` is not supported on platform '{sys.platform}'. "
+                f"Use `--stdin` to pipe the password, or omit both flags "
+                f"for an interactive terminal prompt.",
+                file=sys.stderr,
+            )
+            return 2
+        if not password:
+            print("Password from dialog is empty. Aborting.", file=sys.stderr)
+            return 2
+    elif args.stdin:
+        # Non-interactive: scripted use + code-agent automation when no GUI
+        # is available. Caller pipes one line of password text via stdin so
+        # the password never lands in argv (visible to `ps`) or shell
+        # history. Prefer `--dialog` on GUI hosts.
+        password = sys.stdin.readline().rstrip("\n")
+        if not password:
+            print(
+                "Password from --stdin is empty. Aborting "
+                "(pass exactly one line of password text via stdin).",
+                file=sys.stderr,
+            )
+            return 2
+    else:
+        password = getpass.getpass(f"DB password for profile '{name}' (input hidden): ")
+        if not password:
+            print("Password cannot be empty. Aborting.", file=sys.stderr)
+            return 2
     config.set_password(name, password)
     print(f"✓ Updated password for profile '{name}'.")
     return 0
@@ -203,6 +322,24 @@ def main(argv: list[str] | None = None) -> int:
 
     spw = sub.add_parser("set-password", help="Update the password for an existing profile.")
     spw.add_argument("--profile", default="default")
+    spw_pwsrc = spw.add_mutually_exclusive_group()
+    spw_pwsrc.add_argument(
+        "--stdin",
+        action="store_true",
+        help=(
+            "Read password from stdin (one line) instead of an interactive "
+            "prompt. For scripted / CI use; never logs password to argv."
+        ),
+    )
+    spw_pwsrc.add_argument(
+        "--dialog",
+        action="store_true",
+        help=(
+            "Collect password via OS-native dialog (macOS osascript / "
+            "Linux zenity). Password value never enters chat / stdout. "
+            "Recommended for code-agent setup pipelines."
+        ),
+    )
     spw.set_defaults(func=cmd_set_password)
 
     stc = sub.add_parser("test-connection", help="Verify a profile can connect.")

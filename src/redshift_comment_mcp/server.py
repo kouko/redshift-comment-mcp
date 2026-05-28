@@ -33,10 +33,12 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
       ``~/.config/redshift-comment-mcp/config.toml``, password from OS
       keychain.
 
-    Raises ``ValueError`` with a ``/redshift-comment-mcp:redshift-setup``-
-    pointing message if the profile is missing or has no keychain password,
-    so a fresh install with no profile yet surfaces a helpful next step
-    rather than a cryptic stack trace.
+    Raises ``ValueError`` with a dual-path message — pointing at both
+    ``/redshift-comment-mcp:redshift-setup`` (Claude Code skill) and
+    ``redshift-comment-mcp setup`` (CLI, e.g. ``uvx redshift-comment-mcp
+    setup``) — if the profile is missing or has no keychain password.
+    Surfaces a helpful next step regardless of whether the caller has
+    the Claude Code plugin installed.
     """
     inline_complete = bool(args.host and args.user and args.dbname)
     if inline_complete:
@@ -62,13 +64,27 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
             raise ValueError(
                 f"Profile '{profile_name}' is not configured. "
                 f"Existing profiles: {', '.join(existing)}. "
-                f"Run /redshift-comment-mcp:redshift-switch-profile to pick one, "
-                f"or /redshift-comment-mcp:redshift-setup to add a new profile."
+                f"To switch: /redshift-comment-mcp:redshift-switch-profile (Claude Code), "
+                f"or pass `--profile <name>` to redshift-comment-mcp / set "
+                f"`REDSHIFT_COMMENT_PROFILE=<name>` env var. "
+                f"To add a new profile: /redshift-comment-mcp:redshift-setup (Claude Code), "
+                f"or `redshift-comment-mcp setup --profile <name>` (terminal), "
+                f"or code-agent pipeline `set-fields ... && set-password --dialog`."
             )
         raise ValueError(
-            f"Profile '{profile_name}' is not configured. "
-            f"Run /redshift-comment-mcp:redshift-setup in chat to set up "
-            f"your Redshift connection (no terminal commands needed)."
+            f"Profile '{profile_name}' is not configured. Configure via one of:"
+            f"  - Claude Code: /redshift-comment-mcp:redshift-setup in chat "
+            f"(password collected via system dialog, never enters chat). "
+            f"  - Code agent (any MCP client with Bash): "
+            f"`redshift-comment-mcp set-fields --profile {profile_name} "
+            f"--host H --port P --user U --dbname D` "
+            f"then `redshift-comment-mcp set-password --profile {profile_name} --dialog` "
+            f"— the `--dialog` flag launches an OS-native password prompt "
+            f"(macOS osascript / Linux zenity) so the password never enters "
+            f"chat / stdout. Ask the user for host/user/dbname interactively; "
+            f"never invent them. "
+            f"  - Human in terminal: `uvx redshift-comment-mcp setup --profile {profile_name}` "
+            f"(full interactive Q&A)."
         )
     password = cfg.get_password(profile_name)
     if not password:

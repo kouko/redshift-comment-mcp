@@ -139,6 +139,23 @@ Code プラグインを既に使っているなら、`/redshift-setup` がまっ
 他に便利なサブコマンド：`set-password`、`delete-profile`。
 `uvx redshift-comment-mcp --help` を参照。
 
+**コードエージェントによるブートストラップ**（Bash ツールがあるあらゆる
+MCP クライアント、Claude Code 不要）：非対話の `set-fields` +
+`set-password --dialog` を組み合わせる。`--dialog` フラグは OS ネイティブ
+のパスワードダイアログ（macOS は `osascript`、Linux は `zenity`）を起動
+し、パスワードはチャット / stdout に一切現れません：
+
+```bash
+uvx redshift-comment-mcp set-fields --profile default \
+    --host H --port P --user U --dbname D
+uvx redshift-comment-mcp set-password --profile default --dialog
+```
+
+エージェントはユーザーに host / user / dbname を対話で聞き取り、上記
+2 つのコマンドを実行します。パスワード入力はシステムダイアログ内で
+完結します。ヘッドレス / GUI 無しの環境では `--stdin` で 1 行
+（末尾改行なし）パイプしてください。
+
 **ステップ 2 — シングルプロファイル。** `claude_desktop_config.json`
 （またはクライアントの相当ファイル）に：
 
