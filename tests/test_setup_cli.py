@@ -274,3 +274,138 @@ def test_set_password_empty_returns_2(tmp_xdg, fake_keyring, monkeypatch, capsys
     rc = setup_cli.main(["set-password", "--profile", "default"])
     assert rc == 2
     assert "cannot be empty" in capsys.readouterr().err
+
+
+# ===== set-password --stdin =====
+
+
+def test_set_password_stdin_reads_one_line_updates_keychain(
+    tmp_xdg, fake_keyring, monkeypatch, capsys
+):
+    """Caller pipes password via stdin → keychain. No interactive prompt."""
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    import io
+    monkeypatch.setattr("sys.stdin", io.StringIO("piped-secret\n"))
+
+    rc = setup_cli.main(["set-password", "--profile", "default", "--stdin"])
+    assert rc == 0
+    assert config.get_password("default") == "piped-secret"
+    assert "Updated password" in capsys.readouterr().out
+
+
+def test_set_password_stdin_empty_returns_2(tmp_xdg, fake_keyring, monkeypatch, capsys):
+    """Empty stdin must error so an agent doesn't silently store an empty password."""
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    import io
+    monkeypatch.setattr("sys.stdin", io.StringIO(""))
+
+    rc = setup_cli.main(["set-password", "--profile", "default", "--stdin"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--stdin" in err and "empty" in err
+
+
+# ===== set-password --dialog =====
+
+
+def _mock_subprocess_run(returncode: int, stdout: str = "", raise_=None):
+    """Build a subprocess.run replacement that returns a fake CompletedProcess
+    (or raises) so dialog paths can be exercised without launching osascript /
+    zenity in tests."""
+    def _run(*_args, **_kwargs):
+        if raise_ is not None:
+            raise raise_
+        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+    return _run
+
+
+def test_set_password_dialog_macos_happy_path(tmp_xdg, fake_keyring, monkeypatch, capsys):
+    """macOS osascript dialog returns the typed password on stdout (captured
+    by subprocess.run); CLI writes it to keychain without echoing."""
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(
+        "redshift_comment_mcp.setup_cli.subprocess.run",
+        _mock_subprocess_run(returncode=0, stdout="dialog-secret\n"),
+    )
+
+    rc = setup_cli.main(["set-password", "--profile", "default", "--dialog"])
+    assert rc == 0
+    assert config.get_password("default") == "dialog-secret"
+    out = capsys.readouterr().out
+    assert "Updated password" in out
+    assert "dialog-secret" not in out  # password must never reach stdout
+
+
+def test_set_password_dialog_linux_zenity_happy_path(
+    tmp_xdg, fake_keyring, monkeypatch, capsys
+):
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    monkeypatch.setattr("sys.platform", "linux")
+    monkeypatch.setattr(
+        "redshift_comment_mcp.setup_cli.subprocess.run",
+        _mock_subprocess_run(returncode=0, stdout="zenity-secret\n"),
+    )
+
+    rc = setup_cli.main(["set-password", "--profile", "default", "--dialog"])
+    assert rc == 0
+    assert config.get_password("default") == "zenity-secret"
+
+
+def test_set_password_dialog_cancelled_returns_2(
+    tmp_xdg, fake_keyring, monkeypatch, capsys
+):
+    """User clicks Cancel → dialog returncode != 0 → CLI exits 2, no write."""
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(
+        "redshift_comment_mcp.setup_cli.subprocess.run",
+        _mock_subprocess_run(returncode=1, stdout=""),
+    )
+
+    rc = setup_cli.main(["set-password", "--profile", "default", "--dialog"])
+    assert rc == 2
+    assert config.get_password("default") is None
+    assert "cancelled" in capsys.readouterr().err.lower()
+
+
+def test_set_password_dialog_tool_unavailable_returns_2(
+    tmp_xdg, fake_keyring, monkeypatch, capsys
+):
+    """osascript / zenity not installed → CLI exits 2 with a clear fallback hint."""
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(
+        "redshift_comment_mcp.setup_cli.subprocess.run",
+        _mock_subprocess_run(returncode=0, raise_=FileNotFoundError("osascript")),
+    )
+
+    rc = setup_cli.main(["set-password", "--profile", "default", "--dialog"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "--stdin" in err  # fallback hint
+    assert "osascript" in err or "zenity" in err
+
+
+def test_set_password_dialog_unsupported_platform_returns_2(
+    tmp_xdg, fake_keyring, monkeypatch, capsys
+):
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    monkeypatch.setattr("sys.platform", "win32")
+
+    rc = setup_cli.main(["set-password", "--profile", "default", "--dialog"])
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "win32" in err
+    assert "--stdin" in err  # fallback hint
+
+
+def test_set_password_stdin_and_dialog_are_mutually_exclusive(
+    tmp_xdg, fake_keyring, capsys
+):
+    """argparse mutually_exclusive_group: --stdin and --dialog can't co-occur."""
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    with pytest.raises(SystemExit) as excinfo:
+        setup_cli.main(["set-password", "--profile", "default", "--stdin", "--dialog"])
+    assert excinfo.value.code == 2
+    assert "not allowed with argument" in capsys.readouterr().err

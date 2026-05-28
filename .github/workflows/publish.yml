@@ -2,7 +2,14 @@ name: Publish to PyPI
 
 on:
   release:
-    types: [published]
+    # `published` fires once when a release / pre-release is first published;
+    # `released` fires when an existing pre-release is promoted to a full
+    # release (i.e. user flips "Set as a pre-release" off via UI or
+    # `gh release edit --prerelease=false`). Without `released`, the
+    # Pre-release → Release promotion path never triggers this workflow
+    # and PyPI silently stays stuck on the previous version — see git log
+    # for the v0.5.0 → v0.6.0 incident.
+    types: [published, released]
   workflow_dispatch:  # 允許手動觸發
 
 jobs:

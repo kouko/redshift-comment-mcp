@@ -139,6 +139,22 @@ the exact same files; no duplicate setup needed.
 Other useful subcommands: `set-password`, `delete-profile`. See
 `uvx redshift-comment-mcp --help`.
 
+**For code-agent bootstrap** (any MCP client with a Bash tool, no Claude
+Code required): use the non-interactive `set-fields` + `set-password
+--dialog` pair so the password is collected via an OS-native dialog
+(macOS `osascript` / Linux `zenity`) and never enters chat / stdout:
+
+```bash
+uvx redshift-comment-mcp set-fields --profile default \
+    --host H --port P --user U --dbname D
+uvx redshift-comment-mcp set-password --profile default --dialog
+```
+
+The agent asks the user for host/user/dbname conversationally, then runs
+the two commands; password entry happens entirely in the system dialog.
+For headless / non-GUI hosts, use `set-password --stdin` to pipe the
+password instead (one line, no trailing newline).
+
 **Step 2 — single profile.** In `claude_desktop_config.json` (or your
 client's equivalent):
 

@@ -5,7 +5,9 @@ comes from, what error message a fresh install sees — was 0% covered
 before the D2 refactor. This file pins down the resolution priority
 (CLI flag > REDSHIFT_COMMENT_PROFILE env > active-profile pointer file >
 ``"default"``) and the user-facing error messages that point a stuck
-user back at ``/redshift-comment-mcp:redshift-setup``.
+user back at both ``/redshift-comment-mcp:redshift-setup`` (Claude
+Code skill) and ``redshift-comment-mcp setup`` (CLI fallback for
+uvx-only / non-Claude-Code installs).
 """
 from __future__ import annotations
 
@@ -159,10 +161,13 @@ def test_profile_mode_cli_flag_beats_env_and_file(tmp_xdg, fake_keyring, monkeyp
     assert server.resolve_connection_params(args)[0] == "prod.example.com"
 
 
-# ===== profile mode error messages point at the skill =====
+# ===== profile mode error messages point at both skill and CLI =====
 
 
-def test_profile_not_configured_error_points_at_skill(tmp_xdg, fake_keyring, monkeypatch):
+def test_profile_not_configured_error_offers_three_paths(tmp_xdg, fake_keyring, monkeypatch):
+    """Error must surface all three setup paths so any caller can recover:
+    Claude Code skill, code-agent pipeline (set-fields + set-password
+    --dialog), and human terminal (uvx redshift-comment-mcp setup)."""
     monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
     args = _ns()
     with pytest.raises(ValueError) as excinfo:
@@ -170,7 +175,16 @@ def test_profile_not_configured_error_points_at_skill(tmp_xdg, fake_keyring, mon
     msg = str(excinfo.value)
     assert "default" in msg, "Error should name the profile"
     assert "/redshift-comment-mcp:redshift-setup" in msg, (
-        "Error should point at the skill, not the legacy uvx CLI command"
+        "Path 1 — Claude Code skill — should be mentioned"
+    )
+    assert "set-fields" in msg and "--dialog" in msg, (
+        "Path 2 — code-agent pipeline (set-fields + set-password --dialog) — "
+        "should be mentioned so non-Claude-Code agents can bootstrap without "
+        "the password entering chat"
+    )
+    assert "redshift-comment-mcp setup" in msg, (
+        "Path 3 — human terminal (uvx redshift-comment-mcp setup) — should "
+        "be mentioned for users running the setup themselves interactively"
     )
 
 

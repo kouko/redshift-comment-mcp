@@ -132,6 +132,21 @@ service `redshift-comment-mcp` 底下的 OS keychain entry —— 是
 其他常用 subcommand：`set-password`、`delete-profile`。執行
 `uvx redshift-comment-mcp --help` 看完整列表。
 
+**Code agent 自動 bootstrap**（任何有 Bash tool 的 MCP client，不需要
+Claude Code）：用非互動的 `set-fields` + `set-password --dialog` 組合。
+`--dialog` flag 會跳 OS 原生密碼對話框（macOS 用 `osascript`、Linux
+用 `zenity`），**密碼從不進 chat / stdout**：
+
+```bash
+uvx redshift-comment-mcp set-fields --profile default \
+    --host H --port P --user U --dbname D
+uvx redshift-comment-mcp set-password --profile default --dialog
+```
+
+agent 用對話跟使用者要 host / user / dbname、然後跑這兩個命令；密碼
+輸入完全發生在系統對話框內。在 headless / 無 GUI 環境，改用
+`set-password --stdin` pipe 進去（一行，末尾不要換行）。
+
 **步驟 2 —— 單一 profile。** 在 `claude_desktop_config.json`（或你的
 client 對應檔案）：
 
