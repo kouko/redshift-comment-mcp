@@ -106,6 +106,90 @@ The plugin runs from the cloned repo source via
 `uv run --project ${CLAUDE_PLUGIN_ROOT}` — PyPI release is NOT a
 prerequisite for plugin updates.
 
+### Setting up with `uvx` — Claude Desktop / generic MCP client
+
+The Claude Code plugin's `uv run --project ${CLAUDE_PLUGIN_ROOT}` form
+is specific to Claude Code. For any other MCP client (Claude Desktop,
+generic stdio MCP clients), the equivalent launch is
+`uvx redshift-comment-mcp` against the PyPI release.
+
+**Step 1 — set up a profile via the CLI.** `redshift-comment-mcp`
+ships the same Q&A flow that the Claude Code plugin's `/redshift-setup`
+uses, exposed as subcommands:
+
+```bash
+# interactive Q&A — writes config.toml + stores password in OS keychain
+uvx redshift-comment-mcp setup
+
+# or a named profile (for multi-cluster setups)
+uvx redshift-comment-mcp setup --profile prod
+
+# verify
+uvx redshift-comment-mcp test-connection --profile prod
+uvx redshift-comment-mcp list-profiles
+```
+
+The files it writes — `~/.config/redshift-comment-mcp/config.toml` +
+OS keychain entry under service `redshift-comment-mcp` — are per-user,
+not per-client. Run setup once and every MCP client that launches
+`uvx redshift-comment-mcp` afterwards reads the same profile data. If
+you already have Claude Code with the plugin, `/redshift-setup` writes
+the exact same files; no duplicate setup needed.
+
+Other useful subcommands: `set-password`, `delete-profile`. See
+`uvx redshift-comment-mcp --help`.
+
+**Step 2 — single profile.** In `claude_desktop_config.json` (or your
+client's equivalent):
+
+```json
+{
+  "mcpServers": {
+    "redshift-comment": {
+      "command": "uvx",
+      "args": ["redshift-comment-mcp"]
+    }
+  }
+}
+```
+
+The server resolves which profile to use via this chain (most explicit
+wins): `--profile` CLI flag > `REDSHIFT_COMMENT_PROFILE` env var >
+`active-profile` pointer file > implicit fallback (lone profile rescue
+/ `default`).
+
+**Step 3 — multi-cluster.** One MCP server entry per profile, override
+the pointer file via `--profile`:
+
+```json
+{
+  "mcpServers": {
+    "redshift-prod": {
+      "command": "uvx",
+      "args": ["redshift-comment-mcp", "--profile", "prod"]
+    },
+    "redshift-stg": {
+      "command": "uvx",
+      "args": ["redshift-comment-mcp", "--profile", "stg"]
+    }
+  }
+}
+```
+
+Each entry runs as a separate MCP server; tools appear in the client
+under their respective server names.
+
+**Tip — `uv tool install` for faster startup.** `uvx` fetches and
+spawns on every invocation (~2s after the first cache warmup). If
+you'd rather pay the install cost once:
+
+```bash
+uv tool install redshift-comment-mcp
+```
+
+then point `"command"` at `redshift-comment-mcp` directly with no
+`uvx` wrapper.
+
 ## Where things live
 
 ```
