@@ -1,11 +1,58 @@
+import functools
 import logging
 import re
 import awswrangler as wr
 from fastmcp import FastMCP
-from typing import Dict, Any, Optional
+from typing import Any, Callable, Dict, Optional
+from .config import ConfigurationError
 from .connection import RedshiftConnectionConfig
 
 logger = logging.getLogger(__name__)
+
+
+def _not_configured_error(exc: ConfigurationError) -> Dict[str, Any]:
+    """Structured response surfaced to the agent when a DB tool is invoked
+    on a server without a configured profile (degraded-mode contract).
+
+    Replaces the pre-v0.7.0 behavior of letting the ConfigurationError
+    propagate up out of ``main()`` and crash the server before MCP wire even
+    came up. Now the server boots regardless; each tool catches the error
+    via ``@_guarded`` and returns this dict so the agent sees the setup
+    pipeline in its tool-call result, not in a hard-to-reach client log.
+    """
+    return {
+        "error": "not_configured",
+        "message": str(exc),
+        "next_step": (
+            "Call the `setup_via_dialog` MCP tool to bootstrap a profile "
+            "from within this session (host/port/user/dbname go via tool "
+            "args; password collected via OS-native dialog server-side and "
+            "never crosses the MCP wire). Alternatively, have the user run "
+            "`uvx redshift-comment-mcp setup` in a terminal. After setup, "
+            "retry this tool — no MCP client restart needed (lazy resolve)."
+        ),
+    }
+
+
+def _guarded(tool_fn):
+    """Decorator: convert ConfigurationError into a structured tool response.
+
+    Stack with ``@self.mcp.tool`` immediately above:
+
+        @self.mcp.tool
+        @_guarded
+        def list_schemas(...): ...
+
+    Other exceptions propagate to FastMCP for normal error handling — only
+    "no profile yet" gets the in-band degraded-mode response.
+    """
+    @functools.wraps(tool_fn)
+    def wrapper(*args, **kwargs):
+        try:
+            return tool_fn(*args, **kwargs)
+        except ConfigurationError as e:
+            return _not_configured_error(e)
+    return wrapper
 
 # 分頁設定
 DEFAULT_MAX_ITEMS = 50  # 預設最大回傳筆數（超過時自動截斷）
@@ -260,8 +307,19 @@ class RedshiftTools:
     Provides a set of tools for interacting with Redshift databases to support guided data exploration.
     Uses a connect/disconnect pattern for each operation to ensure maximum robustness.
     """
-    def __init__(self, connection_config: RedshiftConnectionConfig):
-        self.config = connection_config
+    def __init__(self, config_provider: Callable[[], RedshiftConnectionConfig]):
+        """Construct a tool provider with a *lazy* connection-config resolver.
+
+        ``config_provider`` is called on every DB tool invocation (via the
+        ``config`` property below). It re-reads config.toml + keychain each
+        time, so a profile newly written by ``setup_via_dialog`` /
+        ``setup`` CLI is picked up on the next tool call without restarting
+        the MCP client. If the provider raises ``ConfigurationError``, the
+        ``@_guarded`` decorator on each tool turns it into a structured
+        ``{"error": "not_configured", ...}`` response — the server itself
+        never crashes for missing-profile.
+        """
+        self._config_provider = config_provider
         self.mcp = FastMCP(
             name="Redshift Comment MCP",
             instructions="""
@@ -309,9 +367,44 @@ paraphrase, summarize, or hide the query. Users need direct visibility
 into what runs against their database. The metadata tools (list_* /
 search_* / get_*) use fixed catalog templates and do not carry these
 fields; their semantic API is the contract.
+
+SETUP RECOVERY (degraded-mode contract, since v0.7.0): The server can
+boot without a configured profile. If any DB tool returns
+`{"error": "not_configured", ...}`, the profile / keychain are missing.
+DO NOT keep retrying — read the `next_step` field and act:
+
+  1. Ask the user for host / port / user / dbname conversationally
+     (these are NOT secrets; OK to discuss in chat).
+  2. Call the `setup_via_dialog` MCP tool with those args. The tool
+     writes config.toml fields and then launches an OS-native password
+     dialog server-side. The password value never crosses the MCP wire.
+  3. On `{"status": "configured", ...}`, retry the original DB tool —
+     lazy resolution picks up the new profile without an MCP client
+     restart.
+  4. If `setup_via_dialog` returns dialog_unavailable / platform_
+     unsupported (no GUI), have the user run
+     `redshift-comment-mcp set-password --profile X --stdin` from a
+     terminal instead.
+
+Never invent host/user/dbname values. Never pass the password as a
+tool argument or shell argument — the system dialog or stdin pipe are
+the only chat-leak-free paths.
 """
         )
         self._setup_tools()
+
+    @property
+    def config(self) -> RedshiftConnectionConfig:
+        """Lazy-resolved current connection config.
+
+        Each access invokes ``self._config_provider()``, which re-runs
+        ``resolve_connection_params`` against current CLI args + on-disk
+        state (config.toml + active-profile pointer file + keychain).
+        Raises ``ConfigurationError`` when no profile is configured —
+        caught by ``@_guarded`` on each tool so the server returns a
+        structured response instead of crashing.
+        """
+        return self._config_provider()
 
     def _setup_tools(self):
         """設定所有 MCP 工具"""
@@ -319,6 +412,7 @@ fields; their semantic API is the contract.
         # ========== 列表工具 ==========
 
         @self.mcp.tool
+        @_guarded
         def list_schemas(limit: Optional[int] = None, offset: int = 0, include_comments: bool = True) -> Dict[str, Any]:
             """List schema names. include_comments defaults to True (cheap — schema count is small)."""
             if include_comments:
@@ -364,6 +458,7 @@ fields; their semantic API is the contract.
             return result
 
         @self.mcp.tool
+        @_guarded
         def list_tables(schema_name: str, limit: Optional[int] = None, offset: int = 0, include_comments: bool = False, include_parent_comments: bool = True) -> Dict[str, Any]:
             """List tables in a schema. Pass include_comments=True to include table comments inline; include_parent_comments (default True) also returns the parent schema's comment."""
             if not schema_name or not schema_name.isidentifier():
@@ -457,6 +552,7 @@ fields; their semantic API is the contract.
             return result
 
         @self.mcp.tool
+        @_guarded
         def list_columns(schema_name: str, table_name: str, limit: Optional[int] = None, offset: int = 0, include_comments: bool = False, include_parent_comments: bool = True) -> Dict[str, Any]:
             """List columns (name, type, nullable) in a table. Pass include_comments=True to include column comments inline; include_parent_comments (default True) also returns the parent table's comment."""
             if not schema_name.isidentifier() or not table_name.isidentifier():
@@ -552,6 +648,7 @@ fields; their semantic API is the contract.
         # ========== 搜尋工具 ==========
 
         @self.mcp.tool
+        @_guarded
         def search_schemas(keywords: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
             """Search schemas by keywords (space-separated, OR logic) over schema name and comment."""
             # 解析關鍵字
@@ -618,6 +715,7 @@ fields; their semantic API is the contract.
             return result
 
         @self.mcp.tool
+        @_guarded
         def search_tables(keywords: str, schema_name: Optional[str] = None, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
             """Search tables by keywords (space-separated, OR logic) over table name and comment.
 
@@ -713,6 +811,7 @@ fields; their semantic API is the contract.
             return result
 
         @self.mcp.tool
+        @_guarded
         def search_columns(keywords: str, schema_name: str, table_name: Optional[str] = None, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
             """Search columns by keywords (space-separated, OR logic) over column name and comment.
 
@@ -819,6 +918,7 @@ fields; their semantic API is the contract.
         # ========== 註解查詢工具 ==========
 
         @self.mcp.tool
+        @_guarded
         def get_schema_comment(schema_name: str) -> Dict[str, Any]:
             """Get the authoritative comment for a schema — defines its true business purpose; trust it over the schema name."""
             if not schema_name or not schema_name.isidentifier():
@@ -843,6 +943,7 @@ fields; their semantic API is the contract.
             }
 
         @self.mcp.tool
+        @_guarded
         def get_table_comment(schema_name: str, table_name: str) -> Dict[str, Any]:
             """Get the authoritative comment for a table — defines what data it actually contains; trust it over the table name."""
             if not schema_name.isidentifier() or not table_name.isidentifier():
@@ -869,6 +970,7 @@ fields; their semantic API is the contract.
             }
 
         @self.mcp.tool
+        @_guarded
         def get_column_comment(schema_name: str, table_name: str, column_name: str) -> Dict[str, Any]:
             """Get the authoritative comment for a column — defines its business meaning and calculation logic; trust it over the column name."""
             if not schema_name.isidentifier() or not table_name.isidentifier():
@@ -899,6 +1001,7 @@ fields; their semantic API is the contract.
             }
 
         @self.mcp.tool
+        @_guarded
         def get_all_column_comments(schema_name: str, table_name: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
             """Get authoritative comments for ALL columns in a table at once. Each comment overrides the column name."""
             if not schema_name.isidentifier() or not table_name.isidentifier():
@@ -953,12 +1056,18 @@ fields; their semantic API is the contract.
         # ========== SQL 執行工具 ==========
 
         @self.mcp.tool
+        @_guarded
         def execute_sql(sql_statement: str, limit: Optional[int] = None, offset: int = 0) -> Dict[str, Any]:
             """Execute a read-only SQL query (SELECT/WITH only). Result rows are paginated via limit/offset."""
             validate_read_only_sql(sql_statement)
 
+            # Hoist config access out of the try/except below so ConfigurationError
+            # (raised by the lazy provider when no profile is set) propagates up to
+            # @_guarded instead of getting rewrapped as a generic SQL error.
+            config = self.config
+
             try:
-                with self.config.get_connection() as conn:
+                with config.get_connection() as conn:
                     df = wr.redshift.read_sql_query(sql_statement, con=conn)
                     records = df.to_dict(orient='records')
                     columns = list(df.columns)
@@ -989,6 +1098,128 @@ fields; their semantic API is the contract.
             except Exception as e:
                 logger.error(f"SQL execution failed: {sql_statement}", exc_info=True)
                 raise ValueError(f"SQL execution error. Please check your syntax. Original error: {e}")
+
+        # ========== Setup tool (control plane — works WITHOUT a configured profile) ==========
+
+        @self.mcp.tool
+        def setup_via_dialog(
+            host: str,
+            user: str,
+            dbname: str,
+            profile: str = "default",
+            port: int = 5439,
+        ) -> Dict[str, Any]:
+            """Bootstrap (or update) a Redshift connection profile from inside an MCP session.
+
+            Use when DB tools (list_schemas etc.) return ``{"error": "not_configured"}``,
+            or to add a new profile / re-key an existing one. Ask the user for
+            host / port / user / dbname conversationally — these are not secret —
+            then call this tool. The password is collected via an OS-native
+            dialog (macOS osascript / Linux zenity) launched server-side; it
+            **never crosses the MCP wire, never appears in chat or tool args**.
+
+            Outcomes (return shape):
+              - ``{"status": "configured", ...}`` — profile written, password in
+                keychain. Lazy resolve picks it up on next DB tool call; no
+                restart needed.
+              - ``{"status": "dialog_cancelled" | "dialog_unavailable" |
+                   "platform_unsupported" | "empty_password", ...}`` — profile
+                fields saved but no password set; the message field tells the
+                agent / user what to do next (often: run
+                ``redshift-comment-mcp set-password --profile X --stdin`` from
+                a terminal).
+
+            For headless environments without a GUI, prefer the CLI pair
+            ``set-fields`` + ``set-password --stdin`` instead.
+            """
+            import sys as _sys
+            from . import config as cfg
+            from .setup_cli import _collect_password_via_dialog
+
+            if not all([host, user, dbname]):
+                return {
+                    "error": "missing_field",
+                    "message": "host, user, and dbname are all required.",
+                }
+
+            try:
+                cfg.write_profile(profile, host=host, port=port, user=user, dbname=dbname)
+            except Exception as e:
+                logger.error(f"setup_via_dialog: write_profile failed: {e}", exc_info=True)
+                return {"error": "write_profile_failed", "message": str(e)}
+
+            password, reason = _collect_password_via_dialog(profile)
+
+            if reason == "cancelled":
+                return {
+                    "status": "dialog_cancelled",
+                    "profile": profile,
+                    "message": (
+                        f"Password dialog was cancelled. Profile fields for "
+                        f"'{profile}' are saved to config.toml but no password "
+                        f"is set. Retry setup_via_dialog, or have the user run "
+                        f"`redshift-comment-mcp set-password --profile "
+                        f"{profile} --dialog` later."
+                    ),
+                }
+            if reason == "unavailable":
+                return {
+                    "status": "dialog_unavailable",
+                    "profile": profile,
+                    "platform": _sys.platform,
+                    "message": (
+                        f"No supported dialog tool installed (macOS needs "
+                        f"`osascript`, Linux needs `zenity`). Profile fields "
+                        f"for '{profile}' are saved; have the user pipe the "
+                        f"password via `redshift-comment-mcp set-password "
+                        f"--profile {profile} --stdin` from a terminal."
+                    ),
+                }
+            if reason == "unsupported":
+                return {
+                    "status": "platform_unsupported",
+                    "profile": profile,
+                    "platform": _sys.platform,
+                    "message": (
+                        f"Password dialog is not supported on platform "
+                        f"'{_sys.platform}' (only macOS and Linux are wired). "
+                        f"Profile fields for '{profile}' are saved; use the "
+                        f"`set-password --stdin` CLI subcommand to set the "
+                        f"password via stdin pipe."
+                    ),
+                }
+            if not password:
+                return {
+                    "status": "empty_password",
+                    "profile": profile,
+                    "message": (
+                        f"Password dialog returned an empty string. "
+                        f"Profile fields for '{profile}' are saved; retry "
+                        f"setup_via_dialog or run set-password manually."
+                    ),
+                }
+
+            try:
+                cfg.set_password(profile, password)
+            except Exception as e:
+                logger.error(f"setup_via_dialog: set_password failed: {e}", exc_info=True)
+                return {"error": "keychain_write_failed", "message": str(e)}
+
+            return {
+                "status": "configured",
+                "profile": profile,
+                "host": host,
+                "port": port,
+                "user": user,
+                "dbname": dbname,
+                "message": (
+                    f"Profile '{profile}' configured. Fields written to "
+                    f"~/.config/redshift-comment-mcp/config.toml, password "
+                    f"stored in OS keychain. Retry any DB tool now — lazy "
+                    f"resolution will pick up the new profile on next call "
+                    f"without restarting the MCP client."
+                ),
+            }
 
     def get_server(self):
         """取得配置好的 MCP 伺服器"""

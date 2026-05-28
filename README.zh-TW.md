@@ -34,7 +34,7 @@ manifest 涵蓋面太窄、Web GUI 太慢、手刻 SQL 太重複。
 
 ## 你能拿到什麼
 
-### MCP tools（11 支，定義在 [`src/redshift_comment_mcp/`](src/redshift_comment_mcp/)）
+### MCP tools（12 支，定義在 [`src/redshift_comment_mcp/`](src/redshift_comment_mcp/)）
 
 | 群組 | Tools |
 |---|---|
@@ -42,6 +42,7 @@ manifest 涵蓋面太窄、Web GUI 太慢、手刻 SQL 太重複。
 | Search（依命中關鍵字數排序） | `search_schemas` · `search_tables` · `search_columns` |
 | 註解擷取 | `get_schema_comment` · `get_table_comment` · `get_column_comment` · `get_all_column_comments` |
 | Query | `execute_sql`（只接受 SELECT / WITH） |
+| Setup（v0.7.0 起） | `setup_via_dialog` —— 在 session 內 bootstrap profile；密碼用 OS 原生對話框收集，**完全不過 MCP wire** |
 
 每支 list / search 都有分頁；明確的 `WARNING` 字串會推 LLM 先讀註解
 再相信名字。
@@ -132,20 +133,36 @@ service `redshift-comment-mcp` 底下的 OS keychain entry —— 是
 其他常用 subcommand：`set-password`、`delete-profile`。執行
 `uvx redshift-comment-mcp --help` 看完整列表。
 
-**Code agent 自動 bootstrap**（任何有 Bash tool 的 MCP client，不需要
-Claude Code）：用非互動的 `set-fields` + `set-password --dialog` 組合。
-`--dialog` flag 會跳 OS 原生密碼對話框（macOS 用 `osascript`、Linux
-用 `zenity`），**密碼從不進 chat / stdout**：
+**Code agent 自動 bootstrap**（任何 MCP client，v0.7.0 起）：首選路徑
+是 in-band MCP tool `setup_via_dialog` —— 不用 Bash tool、不用重啟
+MCP client、密碼**完全不入 chat**：
+
+```
+agent 呼任何 DB tool              → {"error": "not_configured", "next_step": "Call setup_via_dialog..."}
+agent 跟使用者要 host / user / dbname（這些不是 secret）
+agent 呼 MCP tool setup_via_dialog(host=..., user=..., dbname=...)
+                                  → server 端跳 OS 對話框（macOS osascript / Linux zenity）
+                                  → 使用者直接在對話框輸入密碼
+                                  → server 寫 config.toml + keychain
+                                  → {"status": "configured", ...}
+agent 重試 DB tool                → 成功（lazy resolve；不需要重啟）
+```
+
+Server 即使**沒有 profile** 也會以 **degraded mode 啟動** —— DB tool
+回傳結構化的 `not_configured` 錯誤，指向 `setup_via_dialog`，所以
+agent 可以直接從自己的 tool-call 結果看到復原路徑（不用去翻 MCP client
+的 log 檔）。setup 完之後下一次 tool call 由 lazy resolution 撿到
+新 profile。
+
+**Headless / 無 GUI host 的 fallback**（沒 `osascript` 也沒 `zenity`）：
+退回到 Bash + CLI 路徑、用 `--stdin` 代替對話框：
 
 ```bash
 uvx redshift-comment-mcp set-fields --profile default \
     --host H --port P --user U --dbname D
-uvx redshift-comment-mcp set-password --profile default --dialog
+echo "$PASSWORD" | uvx redshift-comment-mcp set-password \
+    --profile default --stdin
 ```
-
-agent 用對話跟使用者要 host / user / dbname、然後跑這兩個命令；密碼
-輸入完全發生在系統對話框內。在 headless / 無 GUI 環境，改用
-`set-password --stdin` pipe 進去（一行，末尾不要換行）。
 
 **步驟 2 —— 單一 profile。** 在 `claude_desktop_config.json`（或你的
 client 對應檔案）：

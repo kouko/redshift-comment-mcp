@@ -54,7 +54,7 @@ def test_connection_management(mock_config):
     config, mock_conn = mock_config
     
     # 建立工具實例
-    redshift_tools = RedshiftTools(config)
+    redshift_tools = RedshiftTools(lambda: config)
     
     # 驗證 FastMCP 實例被建立
     assert redshift_tools.mcp is not None
@@ -74,7 +74,7 @@ def test_list_schemas_with_connection(mock_read_sql, mock_config):
     mock_read_sql.return_value = mock_df
     
     # 建立工具實例 - 這會觸發工具註冊
-    redshift_tools = RedshiftTools(config)
+    redshift_tools = RedshiftTools(lambda: config)
     
     # 驗證伺服器建立成功
     mcp_server = redshift_tools.get_server()
@@ -153,7 +153,7 @@ def test_redshift_tools_initialization():
     config = MagicMock()
     
     # 建立工具實例
-    redshift_tools = RedshiftTools(config)
+    redshift_tools = RedshiftTools(lambda: config)
     
     # 驗證屬性設定
     assert redshift_tools.config == config
@@ -247,7 +247,7 @@ class TestListToolsExecution:
         mock_df = pd.DataFrame({'schema_name': ['public', 'sales', 'analytics']})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         # 取得註冊的工具函數
         list_schemas = _get_tool_fn(tools, 'list_schemas')
 
@@ -269,7 +269,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_schemas = _get_tool_fn(tools, 'list_schemas')
 
         result = list_schemas(include_comments=True)
@@ -292,7 +292,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_schemas = _get_tool_fn(tools, 'list_schemas')
 
         result = list_schemas(include_comments=True)
@@ -313,7 +313,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_comments=False)
@@ -337,7 +337,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_comments=True)
@@ -361,7 +361,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_comments=True)
@@ -380,7 +380,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.return_value = tables_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
 
         result = list_tables(schema_name='sales', include_parent_comments=False)
@@ -405,7 +405,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [table_df, columns_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_comments=False)
@@ -430,7 +430,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [table_df, columns_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_comments=True)
@@ -456,7 +456,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.side_effect = [table_df, columns_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_comments=True)
@@ -476,7 +476,7 @@ class TestListToolsExecution:
         })
         mock_read_sql.return_value = columns_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_columns = _get_tool_fn(tools, 'list_columns')
 
         result = list_columns(schema_name='sales', table_name='orders', include_parent_comments=False)
@@ -505,7 +505,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_schemas = _get_tool_fn(tools, 'search_schemas')
 
         result = search_schemas(keywords='sales 銷售')
@@ -521,7 +521,7 @@ class TestSearchTools:
     def test_search_schemas_empty_keywords(self, mock_config):
         """測試 search_schemas 空關鍵字驗證"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         search_schemas = _get_tool_fn(tools, 'search_schemas')
 
@@ -539,7 +539,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_schemas = _get_tool_fn(tools, 'search_schemas')
 
         result = search_schemas(keywords='public')
@@ -560,7 +560,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_schemas = _get_tool_fn(tools, 'search_schemas')
 
         # 搜尋 "sales data" - sales_data 應該命中兩個關鍵字
@@ -586,7 +586,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_tables = _get_tool_fn(tools, 'search_tables')
 
         # 搜尋 "order items" - order_items 應該命中兩個關鍵字
@@ -611,7 +611,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         # 搜尋 "total amount" - total_amount 應該命中兩個關鍵字
@@ -635,7 +635,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_tables = _get_tool_fn(tools, 'search_tables')
 
         result = search_tables(keywords='order 訂單', schema_name='sales')
@@ -647,7 +647,7 @@ class TestSearchTools:
     def test_search_tables_empty_keywords(self, mock_config):
         """測試 search_tables 空關鍵字驗證"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         search_tables = _get_tool_fn(tools, 'search_tables')
 
@@ -657,7 +657,7 @@ class TestSearchTools:
     def test_search_tables_invalid_schema(self, mock_config):
         """測試 search_tables 無效 schema 名稱"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         search_tables = _get_tool_fn(tools, 'search_tables')
 
@@ -678,7 +678,7 @@ class TestSearchTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         result = search_columns(keywords='customer', schema_name='sales', table_name='orders')
@@ -691,7 +691,7 @@ class TestSearchTools:
     def test_search_columns_invalid_table(self, mock_config):
         """測試 search_columns 無效 table 名稱"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         search_columns = _get_tool_fn(tools, 'search_columns')
 
@@ -712,7 +712,7 @@ class TestCommentQueryTools:
         mock_df = pd.DataFrame({'schema_comment': ['This is the sales schema']})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_schema_comment = _get_tool_fn(tools, 'get_schema_comment')
 
         result = get_schema_comment(schema_name='sales')
@@ -728,7 +728,7 @@ class TestCommentQueryTools:
         mock_df = pd.DataFrame(columns=['schema_comment'])  # 空的 DataFrame
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_schema_comment = _get_tool_fn(tools, 'get_schema_comment')
 
         with pytest.raises(ValueError, match="not found"):
@@ -742,7 +742,7 @@ class TestCommentQueryTools:
         mock_df = pd.DataFrame({'table_comment': ['Contains order records']})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_table_comment = _get_tool_fn(tools, 'get_table_comment')
 
         result = get_table_comment(schema_name='sales', table_name='orders')
@@ -762,7 +762,7 @@ class TestCommentQueryTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_column_comment = _get_tool_fn(tools, 'get_column_comment')
 
         result = get_column_comment(schema_name='sales', table_name='orders', column_name='id')
@@ -786,7 +786,7 @@ class TestCommentQueryTools:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_all_column_comments = _get_tool_fn(tools, 'get_all_column_comments')
 
         result = get_all_column_comments(schema_name='sales', table_name='orders')
@@ -812,7 +812,7 @@ class TestExecuteSQL:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
 
         result = execute_sql(sql_statement='SELECT * FROM users')
@@ -829,7 +829,7 @@ class TestExecuteSQL:
         mock_df = pd.DataFrame({'count': [10]})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
 
         result = execute_sql(sql_statement='WITH cte AS (SELECT * FROM users) SELECT count(*) FROM cte')
@@ -839,7 +839,7 @@ class TestExecuteSQL:
     def test_execute_sql_dangerous_drop(self, mock_config):
         """測試拒絕 DROP 語句"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         execute_sql = _get_tool_fn(tools, 'execute_sql')
 
@@ -849,7 +849,7 @@ class TestExecuteSQL:
     def test_execute_sql_dangerous_delete(self, mock_config):
         """測試拒絕包含 DELETE 的查詢"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         execute_sql = _get_tool_fn(tools, 'execute_sql')
 
@@ -860,7 +860,7 @@ class TestExecuteSQL:
     def test_execute_sql_invalid_start(self, mock_config):
         """測試拒絕非 SELECT/WITH 開頭的查詢"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         execute_sql = _get_tool_fn(tools, 'execute_sql')
 
@@ -880,7 +880,7 @@ class TestExecuteSQL:
         """擋掉 v0.3.x 後新增的關鍵字（MERGE / GRANT / REVOKE / COPY / UNLOAD），
         含 CTE 偽裝（SELECT 開頭但 DML/admin 動作藏在後段）。"""
         config, _ = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         with pytest.raises(ValueError, match=keyword):
             execute_sql(sql_statement=sql)
@@ -890,7 +890,7 @@ class TestExecuteSQL:
         """BOM 等不可見字元在 SQL 前不應誤觸 startswith 檢查。"""
         config, _ = mock_config
         mock_read_sql.return_value = pd.DataFrame({'x': [1]})
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         # 各種會出現在傳輸層或編輯器複製的不可見前綴
         for prefix in ('﻿', '​', ' ', '⁠'):
@@ -955,7 +955,7 @@ class TestErrorHandling:
     def test_list_tables_invalid_schema(self, mock_config):
         """測試 list_tables 無效 schema 名稱"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         list_tables = _get_tool_fn(tools, 'list_tables')
 
@@ -965,7 +965,7 @@ class TestErrorHandling:
     def test_list_columns_invalid_table(self, mock_config):
         """測試 list_columns 無效 table 名稱"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         list_columns = _get_tool_fn(tools, 'list_columns')
 
@@ -975,7 +975,7 @@ class TestErrorHandling:
     def test_get_column_comment_invalid_names(self, mock_config):
         """測試 get_column_comment 無效名稱"""
         config, mock_conn = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
 
         get_column_comment = _get_tool_fn(tools, 'get_column_comment')
 
@@ -1069,7 +1069,7 @@ class TestListTablesIntegrationWithCapAndHint:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
         result = list_tables(schema_name='big')
 
@@ -1088,7 +1088,7 @@ class TestListTablesIntegrationWithCapAndHint:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
         result = list_tables(schema_name='small')
 
@@ -1106,7 +1106,7 @@ class TestListTablesIntegrationWithCapAndHint:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
         result = list_tables(schema_name='s', include_comments=True)
 
@@ -1126,7 +1126,7 @@ class TestListTablesIntegrationWithCapAndHint:
         })
         mock_read_sql.side_effect = [schema_df, tables_df]
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_tables = _get_tool_fn(tools, 'list_tables')
         result = list_tables(schema_name='s', include_comments=True)
 
@@ -1144,7 +1144,7 @@ class TestSingleGetterDoesNotTruncate:
         mock_df = pd.DataFrame({'table_comment': [long_comment]})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_table_comment = _get_tool_fn(tools, 'get_table_comment')
         result = get_table_comment(schema_name='s', table_name='t')
 
@@ -1159,7 +1159,7 @@ class TestSingleGetterDoesNotTruncate:
         mock_df = pd.DataFrame({'data_type': ['varchar'], 'column_comment': [long_comment]})
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         get_column_comment = _get_tool_fn(tools, 'get_column_comment')
         result = get_column_comment(schema_name='s', table_name='t', column_name='c')
 
@@ -1186,7 +1186,7 @@ class TestSearchToolsCrossScope:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_tables = _get_tool_fn(tools, 'search_tables')
 
         # No schema_name argument
@@ -1211,7 +1211,7 @@ class TestSearchToolsCrossScope:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_tables = _get_tool_fn(tools, 'search_tables')
 
         result = search_tables(keywords='order', schema_name='sales')
@@ -1222,7 +1222,7 @@ class TestSearchToolsCrossScope:
     def test_search_tables_invalid_schema_when_provided(self, mock_config):
         """Invalid schema_name still raises (only the None case is permitted to skip filter)."""
         config, _ = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_tables = _get_tool_fn(tools, 'search_tables')
 
         with pytest.raises(ValueError, match="Invalid schema name"):
@@ -1248,7 +1248,7 @@ class TestSearchToolsCrossScope:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         # Omit table_name: schema-wide search
@@ -1276,7 +1276,7 @@ class TestSearchToolsCrossScope:
         })
         mock_read_sql.return_value = mock_df
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         result = search_columns(keywords='customer', schema_name='sales', table_name='orders')
@@ -1288,7 +1288,7 @@ class TestSearchToolsCrossScope:
     def test_search_columns_invalid_table_when_provided(self, mock_config):
         """Invalid table_name still raises (only the None case skips the filter)."""
         config, _ = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         with pytest.raises(ValueError, match="Invalid table name"):
@@ -1298,7 +1298,7 @@ class TestSearchToolsCrossScope:
         """schema_name remains required even though table_name is now optional —
         cluster-wide column search would be too expensive on the leader node."""
         config, _ = mock_config
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         search_columns = _get_tool_fn(tools, 'search_columns')
 
         with pytest.raises(ValueError, match="Invalid schema name"):
@@ -1319,7 +1319,7 @@ class TestExecuteSqlTransparency:
         config, _ = mock_config
         mock_read_sql.return_value = pd.DataFrame({'x': [1]})
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         result = execute_sql(sql_statement="SELECT 1 AS x")
 
@@ -1332,7 +1332,7 @@ class TestExecuteSqlTransparency:
         config, _ = mock_config
         mock_read_sql.return_value = pd.DataFrame({'x': [1]})
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         result = execute_sql(sql_statement="SELECT 1 AS x")
 
@@ -1351,7 +1351,7 @@ class TestExecuteSqlTransparency:
         config, _ = mock_config
         mock_read_sql.return_value = pd.DataFrame({'a': [1, 2], 'b': [3, 4]})
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         execute_sql = _get_tool_fn(tools, 'execute_sql')
         result = execute_sql(sql_statement="SELECT a, b FROM t")
 
@@ -1372,7 +1372,7 @@ class TestExecuteSqlTransparency:
             'schema_name': ['public'], 'schema_comment': [None],
         })
 
-        tools = RedshiftTools(config)
+        tools = RedshiftTools(lambda: config)
         list_schemas = _get_tool_fn(tools, 'list_schemas')
         search_schemas = _get_tool_fn(tools, 'search_schemas')
         get_schema_comment = _get_tool_fn(tools, 'get_schema_comment')
@@ -1395,3 +1395,220 @@ class TestExecuteSqlTransparency:
         r = get_schema_comment(schema_name="public")
         assert "_executed_sql" not in r
         assert "_user_facing_message" not in r
+
+
+# ===== Degraded-mode startup (v0.7.0): no profile yet =====
+#
+# The server boots regardless of profile state. DB tools return a structured
+# not_configured error rather than letting the ConfigurationError crash
+# the process. The setup_via_dialog tool can bootstrap a profile in-session
+# without the password ever crossing the MCP wire.
+
+
+class TestDegradedModeContract:
+    """v0.7.0: server starts without profile; DB tools return error JSON."""
+
+    def test_db_tool_returns_not_configured_when_provider_raises(self):
+        """ConfigurationError from the lazy provider becomes a structured
+        tool response, not a propagating exception. This is the core
+        degraded-mode behavior — the server never crashes on missing profile."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def failing_provider():
+            raise ConfigurationError(
+                "Profile 'default' is not configured. Configure via one of: ..."
+            )
+
+        tools = RedshiftTools(failing_provider)
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
+
+        result = list_schemas()
+
+        assert result["error"] == "not_configured"
+        assert "default" in result["message"]
+        assert "setup_via_dialog" in result["next_step"]
+
+    def test_every_db_tool_handles_not_configured(self):
+        """All 11 DB tools should propagate the not_configured pattern.
+        Catches the case where a new tool is added without @_guarded."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def failing_provider():
+            raise ConfigurationError("not configured")
+
+        tools = RedshiftTools(failing_provider)
+
+        # Tools that take no required args, or where we can pass minimal stubs
+        cases = [
+            ('list_schemas', {}),
+            ('list_tables', {'schema_name': 'x'}),
+            ('list_columns', {'schema_name': 'x', 'table_name': 'y'}),
+            ('search_schemas', {'keywords': 'k'}),
+            ('search_tables', {'keywords': 'k', 'schema_name': 'x'}),
+            ('search_columns', {'keywords': 'k', 'schema_name': 'x'}),
+            ('get_schema_comment', {'schema_name': 'x'}),
+            ('get_table_comment', {'schema_name': 'x', 'table_name': 'y'}),
+            ('get_column_comment', {'schema_name': 'x', 'table_name': 'y', 'column_name': 'z'}),
+            ('get_all_column_comments', {'schema_name': 'x', 'table_name': 'y'}),
+            ('execute_sql', {'sql_statement': 'SELECT 1'}),
+        ]
+        for tool_name, kwargs in cases:
+            fn = _get_tool_fn(tools, tool_name)
+            result = fn(**kwargs)
+            assert isinstance(result, dict), f"{tool_name} returned non-dict: {type(result)}"
+            assert result.get("error") == "not_configured", (
+                f"{tool_name} did not return not_configured (got: {result})"
+            )
+
+    def test_lazy_re_resolution_picks_up_new_config(self, mock_config):
+        """Provider is called per tool invocation, so config changes between
+        calls take effect without restart. First call raises (not configured),
+        second call returns a usable config → tool succeeds."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        config, mock_conn = mock_config
+        states = [ConfigurationError("first call: not configured"), config]
+        call_count = {'n': 0}
+
+        def stateful_provider():
+            idx = call_count['n']
+            call_count['n'] += 1
+            v = states[idx]
+            if isinstance(v, Exception):
+                raise v
+            return v
+
+        tools = RedshiftTools(stateful_provider)
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
+
+        # First call: not configured
+        result1 = list_schemas()
+        assert result1.get("error") == "not_configured"
+
+        # Second call: provider now returns good config → tool runs
+        with patch('awswrangler.redshift.read_sql_query') as mock_read:
+            mock_read.return_value = pd.DataFrame({
+                'schema_name': ['public'],
+                'schema_comment': ['ok'],
+            })
+            result2 = list_schemas()
+        assert "schemas" in result2 or "items" in result2 or not isinstance(result2.get("error"), str), (
+            f"Second call should have succeeded but got: {result2}"
+        )
+        assert call_count['n'] == 2  # provider called once per tool invocation
+
+
+# ===== setup_via_dialog MCP tool (v0.7.0) =====
+
+
+class TestSetupViaDialogTool:
+    """In-band profile bootstrap via MCP tool. Password collection happens
+    via OS-native dialog server-side; never crosses MCP wire."""
+
+    def _make_tools(self, provider=None):
+        """Build a RedshiftTools instance with a no-op provider by default
+        (setup_via_dialog doesn't need the provider to succeed)."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        if provider is None:
+            def provider():
+                raise ConfigurationError("not yet")
+        return RedshiftTools(provider)
+
+    def test_setup_via_dialog_works_without_configured_profile(self, monkeypatch):
+        """setup_via_dialog is the bootstrap tool — it MUST NOT be gated by
+        the @_guarded decorator (it has to run before a profile exists)."""
+        write_calls = []
+        set_pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: set_pw_calls.append((name, pw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("dialog-secret", "ok"),
+        )
+
+        tools = self._make_tools()  # provider raises ConfigurationError
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='h.example.com',
+            user='alice',
+            dbname='analytics',
+            profile='prod',
+            port=5439,
+        )
+
+        assert result["status"] == "configured", f"got: {result}"
+        assert result["profile"] == "prod"
+        assert write_calls == [
+            ('prod', {'host': 'h.example.com', 'port': 5439,
+                      'user': 'alice', 'dbname': 'analytics'}),
+        ]
+        assert set_pw_calls == [('prod', 'dialog-secret')]
+
+    def test_setup_via_dialog_dialog_cancelled_status(self, monkeypatch):
+        """User clicked Cancel → profile fields are still written (recoverable
+        state) but no password is set."""
+        write_calls = []
+        set_pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: set_pw_calls.append((name, pw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: (None, "cancelled"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "dialog_cancelled"
+        assert len(write_calls) == 1  # fields were written
+        assert len(set_pw_calls) == 0  # password was NOT written
+
+    def test_setup_via_dialog_dialog_unavailable_hints_stdin(self, monkeypatch):
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: (None, "unavailable"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "dialog_unavailable"
+        assert "--stdin" in result["message"]
+
+    def test_setup_via_dialog_missing_field_returns_error(self, monkeypatch):
+        """Empty host/user/dbname → reject without touching config or keychain."""
+        write_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='', user='u', dbname='d')
+
+        assert result["error"] == "missing_field"
+        assert len(write_calls) == 0  # nothing was written

@@ -62,7 +62,7 @@ def live_redshift_tools():
         password=password,
         dbname=profile["dbname"],
     )
-    return RedshiftTools(config)
+    return RedshiftTools(lambda: config)
 
 
 @pytest.fixture(scope="module")
