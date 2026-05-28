@@ -26,7 +26,18 @@ PLUGIN_JSON = REPO_ROOT / ".claude-plugin" / "plugin.json"
 NO_README_SKILLS = {"redshift-setup", "redshift-switch-profile"}
 
 # Identifiers that look like a skill / plugin name but aren't a skill dir.
-NON_SKILL_VALID_NAMES = {"redshift-comment-mcp"}
+# - redshift-comment-mcp: the plugin / PyPI package name itself
+# - redshift-comment: canonical MCP server entry key (per .claude-plugin/plugin.json)
+# - redshift-prod / redshift-stg: documentation example entry names in README
+#   "Setting up with `uvx`" multi-cluster snippet (not real skill names; if a
+#   skill with these names is ever added, drop them from here so the test can
+#   guard the real skill ref again).
+NON_SKILL_VALID_NAMES = {
+    "redshift-comment-mcp",
+    "redshift-comment",
+    "redshift-prod",
+    "redshift-stg",
+}
 
 
 def _skill_dirs():
