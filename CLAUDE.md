@@ -37,6 +37,43 @@ introduced which feature) and risks shipping unbumped code if the bump
 PR slips. The only acceptable exception: chore PRs that have no
 user-visible effect.
 
+## Release publishing (MUST)
+
+Bumping the two version fields is **not** shipping. The plugin path
+(`claude plugin install`) runs from cloned-repo source, so it sees the
+bump the moment the PR merges. The PyPI path (used by Claude Desktop +
+other MCP clients via `uvx redshift-comment-mcp`) only updates when
+these three steps run after the bump PR merges to `main`:
+
+1. Tag the merge commit and push the tag:
+   ```bash
+   git tag vX.Y.Z       # e.g. v0.5.0 — must match plugin.json + fallback_version
+   git push origin vX.Y.Z
+   ```
+2. **GitHub Releases → Create release from `vX.Y.Z` → ✅ check "Set as a
+   pre-release" → Publish.** This triggers
+   [.github/workflows/test-publish.yml](.github/workflows/test-publish.yml)
+   → TestPyPI smoke test. Wait for the workflow run to go green.
+3. **Edit the same release → ❌ uncheck "Set as a pre-release" →
+   Update.** This triggers
+   [.github/workflows/publish.yml](.github/workflows/publish.yml) →
+   PyPI live.
+
+Verify after step 3:
+```bash
+curl -s https://pypi.org/pypi/redshift-comment-mcp/X.Y.Z/json | jq .info.version
+```
+
+Skipping these steps silently desyncs the two distribution channels —
+exactly what happened between v0.3.0 and v0.5.0 (plugin shipped, PyPI
+stuck two minor versions behind). Full SOP, manual `workflow_dispatch`
+fallback, and troubleshooting:
+[.github/DEPLOYMENT.md](.github/DEPLOYMENT.md).
+
+**PyPI uploads are irreversible.** Once `vX.Y.Z` exists on PyPI, you
+cannot re-upload that version (even after `yank`). The pre-release →
+TestPyPI dry-run in step 2 is what protects you; don't skip it.
+
 ## Tests live in three tiers
 
 - `tests/` — unit, runs by default
