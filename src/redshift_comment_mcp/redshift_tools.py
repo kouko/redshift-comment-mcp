@@ -396,6 +396,11 @@ Either way, the bootstrap flow is:
        setup_via_dialog again with corrections (overwrites).
      - `dialog_cancelled` / `empty_password` — profile incomplete;
        ask the user whether they meant to cancel; usually retry.
+     - `permission_denied` (macOS only) — Apple Events blocked. The
+       dialog never appeared; the MCP-client app lacks Automation >
+       System Events permission. Do NOT retry blindly — tell the user
+       to enable it (System Settings → Privacy & Security → Automation)
+       OR fall back to `set-password --stdin` from a terminal.
      - `dialog_unavailable` / `platform_unsupported` (no GUI tool) —
        the dialog path is unusable on this host; tell the user to
        run `redshift-comment-mcp set-password --profile X --stdin`
@@ -1177,6 +1182,29 @@ the only chat-leak-free paths.
                         f"(and abandon Redshift setup) or hit Cancel by "
                         f"accident; default to retrying setup_via_dialog "
                         f"if no clear cancellation signal was given."
+                    ),
+                }
+            if reason == "permission_denied":
+                return {
+                    "status": "permission_denied",
+                    "profile": profile,
+                    "platform": _sys.platform,
+                    "message": (
+                        f"macOS blocked the password dialog. The app "
+                        f"running the MCP server (Claude Desktop / Cursor "
+                        f"/ etc.) doesn't have `Automation > System Events` "
+                        f"permission, so the dialog never appeared — this "
+                        f"is NOT a user cancellation. Profile '{profile}' "
+                        f"fields are saved but password is not set. Tell "
+                        f"the user: open System Settings → Privacy & "
+                        f"Security → Automation → find the app entry → "
+                        f"enable `System Events`, then call setup_via_dialog "
+                        f"again. If no permission entry exists yet, run "
+                        f"`tccutil reset AppleEvents` from a terminal to "
+                        f"force a fresh permission prompt on next attempt. "
+                        f"Fallback: have the user pipe the password via "
+                        f"`redshift-comment-mcp set-password --profile "
+                        f"{profile} --stdin` from a terminal."
                     ),
                 }
             if reason == "unavailable":

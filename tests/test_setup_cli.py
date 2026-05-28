@@ -308,14 +308,15 @@ def test_set_password_stdin_empty_returns_2(tmp_xdg, fake_keyring, monkeypatch, 
 # ===== set-password --dialog =====
 
 
-def _mock_subprocess_run(returncode: int, stdout: str = "", raise_=None):
+def _mock_subprocess_run(returncode: int, stdout: str = "", stderr: str = "", raise_=None):
     """Build a subprocess.run replacement that returns a fake CompletedProcess
     (or raises) so dialog paths can be exercised without launching osascript /
-    zenity in tests."""
+    zenity in tests. ``stderr`` is needed to drive macOS permission-denied
+    detection (which reads osascript's stderr for the -1743 code)."""
     def _run(*_args, **_kwargs):
         if raise_ is not None:
             raise raise_
-        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr="")
+        return types.SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
     return _run
 
 
@@ -409,3 +410,85 @@ def test_set_password_stdin_and_dialog_are_mutually_exclusive(
         setup_cli.main(["set-password", "--profile", "default", "--stdin", "--dialog"])
     assert excinfo.value.code == 2
     assert "not allowed with argument" in capsys.readouterr().err
+
+
+# ===== macOS Apple-Events permission denial detection =====
+#
+# osascript returns exit code != 0 for both user-cancel AND
+# Automation-permission-denied (-1743). Pre-v0.7.0-polish these were
+# conflated as "cancelled". The helper now reads stderr to distinguish them
+# so the agent can give the user actionable advice (System Settings →
+# Privacy & Security → Automation) instead of just "you cancelled".
+
+
+@pytest.mark.parametrize("stderr_text", [
+    "execution error: System Events got an error: ... (-1743)",
+    "Not authorized to send Apple events to System Events. (-1743)",
+    "execution error: redshift-comment-mcp is not allowed to send Apple events.",
+])
+def test_collect_password_via_dialog_detects_permission_denied(stderr_text, monkeypatch):
+    """The helper must classify osascript's -1743 / 'not allowed to send
+    Apple events' stderr as `permission_denied`, NOT `cancelled`. Both
+    numeric code and English text variants exist depending on macOS
+    version; parametrize over the realistic stderr shapes."""
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(
+        "redshift_comment_mcp.setup_cli.subprocess.run",
+        _mock_subprocess_run(returncode=1, stdout="", stderr=stderr_text),
+    )
+
+    pw, reason = setup_cli._collect_password_via_dialog("default")
+
+    assert pw is None
+    assert reason == "permission_denied", (
+        f"stderr={stderr_text!r} should have been classified as "
+        f"permission_denied (got {reason!r})"
+    )
+
+
+def test_collect_password_via_dialog_distinguishes_cancel_from_permission(monkeypatch):
+    """Plain user-cancel still returns `cancelled` — the stderr lacks the
+    -1743 / Apple-events tell so the permission heuristic doesn't fire."""
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(
+        "redshift_comment_mcp.setup_cli.subprocess.run",
+        _mock_subprocess_run(
+            returncode=1, stdout="",
+            stderr="execution error: User canceled. (-128)",
+        ),
+    )
+
+    pw, reason = setup_cli._collect_password_via_dialog("default")
+
+    assert pw is None
+    assert reason == "cancelled"
+
+
+def test_set_password_dialog_permission_denied_returns_2_with_tcc_hint(
+    tmp_xdg, fake_keyring, monkeypatch, capsys
+):
+    """CLI level: `set-password --dialog` surfaces the permission_denied
+    case with an actionable hint (System Settings + tccutil reset) so a
+    terminal user can fix the underlying permission without guessing."""
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(
+        "redshift_comment_mcp.setup_cli.subprocess.run",
+        _mock_subprocess_run(
+            returncode=1, stdout="",
+            stderr="execution error: ... (-1743)",
+        ),
+    )
+
+    rc = setup_cli.main(["set-password", "--profile", "default", "--dialog"])
+
+    assert rc == 2
+    err = capsys.readouterr().err
+    assert "blocked" in err.lower() or "permission" in err.lower(), (
+        f"err should call out the permission block; got: {err!r}"
+    )
+    # Concrete next-step hints
+    assert "System Settings" in err or "Privacy" in err
+    assert "tccutil reset AppleEvents" in err or "Automation" in err
+    # Don't conflate with cancellation
+    assert "cancelled" not in err.lower()

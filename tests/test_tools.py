@@ -1603,6 +1603,49 @@ class TestSetupViaDialogTool:
         assert result["status"] == "dialog_unavailable"
         assert "--stdin" in result["message"]
 
+    def test_setup_via_dialog_permission_denied_status_carries_actionable_message(
+        self, monkeypatch
+    ):
+        """macOS Apple-Events permission denial returns a distinct
+        `permission_denied` status (NOT dialog_cancelled). The message
+        must give the agent actionable user instructions: open System
+        Settings → Privacy & Security → Automation, or run tccutil reset.
+        Without this distinction the agent would say "you cancelled the
+        dialog?" when actually the dialog never appeared."""
+        write_calls = []
+        set_pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: write_calls.append((name, kw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: set_pw_calls.append((name, pw)),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: (None, "permission_denied"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "permission_denied"
+        # Profile fields saved (recoverable state — same as cancelled)
+        assert len(write_calls) == 1
+        # Password NOT written
+        assert len(set_pw_calls) == 0
+        # Message must include the macOS-specific recovery path
+        msg = result["message"]
+        assert "Automation" in msg or "System Events" in msg
+        assert "System Settings" in msg or "Privacy" in msg
+        # Must NOT mislead agent into treating this as user cancellation
+        assert "cancelled" not in msg.lower()
+        # Fallback also mentioned for users who can't or won't grant permission
+        assert "--stdin" in msg
+
     def test_setup_via_dialog_missing_field_returns_error(self, monkeypatch):
         """Empty host/user/dbname → reject without touching config or keychain."""
         write_calls = []

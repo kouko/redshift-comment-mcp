@@ -102,7 +102,11 @@ def _collect_password_via_dialog(profile_name: str) -> tuple[str | None, str]:
 
     Returns ``(password, reason)``:
       - ``("the-password", "ok")`` on success
-      - ``(None, "cancelled")`` if user closed / cancelled the dialog
+      - ``(None, "cancelled")`` if user clicked Cancel on the dialog
+      - ``(None, "permission_denied")`` if macOS blocked Apple Events
+        (Claude Desktop / Cursor / etc. lacks Automation > System Events
+        permission — most common osascript failure, distinct from a user
+        cancel because the dialog never appeared)
       - ``(None, "unavailable")`` if no dialog tool is installed
       - ``(None, "unsupported")`` if the platform has no supported dialog path
 
@@ -115,8 +119,8 @@ def _collect_password_via_dialog(profile_name: str) -> tuple[str | None, str]:
     """
     if sys.platform == "darwin":
         # macOS — native osascript dialog. "with hidden answer" masks the
-        # typed value. stderr is discarded so a Cocoa permission/cancel
-        # error doesn't leak user-visible state.
+        # typed value. stderr captured (not discarded) so we can detect
+        # permission denial separately from user cancel.
         script = (
             f'tell application "System Events" to display dialog '
             f'"Redshift password for profile \\"{profile_name}\\":" '
@@ -133,9 +137,22 @@ def _collect_password_via_dialog(profile_name: str) -> tuple[str | None, str]:
             )
         except FileNotFoundError:
             return None, "unavailable"
-        if result.returncode != 0:
-            return None, "cancelled"
-        return result.stdout.rstrip("\n"), "ok"
+        if result.returncode == 0:
+            return result.stdout.rstrip("\n"), "ok"
+        # osascript non-zero exit — distinguish permission denial from cancel.
+        # macOS error -1743 ("not allowed to send Apple events") fires when
+        # the parent app (Claude Desktop / Cursor / etc.) hasn't been
+        # granted Automation > System Events permission in System Settings.
+        # The dialog never even appears; the agent should NOT treat this as
+        # "user cancelled" because that would suggest re-trying without
+        # fixing the underlying permission, leading to a hang loop.
+        stderr = (result.stderr or "")
+        if "-1743" in stderr or "not allowed to send Apple events" in stderr:
+            return None, "permission_denied"
+        # Other non-zero: most likely user clicked Cancel (also -128 /
+        # "User canceled." text in stderr, but easier to identify by
+        # exclusion of the permission case).
+        return None, "cancelled"
 
     if sys.platform.startswith("linux"):
         # Linux desktop — zenity. Exit code 1 = cancelled, 127 = not installed.
@@ -174,6 +191,18 @@ def cmd_set_password(args: argparse.Namespace) -> int:
         password, reason = _collect_password_via_dialog(name)
         if reason == "cancelled":
             print("Password dialog cancelled. No change.", file=sys.stderr)
+            return 2
+        if reason == "permission_denied":
+            print(
+                "macOS blocked the password dialog (Automation > System "
+                "Events permission denied). Fix in System Settings → "
+                "Privacy & Security → Automation → enable System Events "
+                "for the app running this command. Or run "
+                "`tccutil reset AppleEvents` from terminal to force a "
+                "fresh permission prompt. Alternatively, use `--stdin` "
+                "to pipe the password.",
+                file=sys.stderr,
+            )
             return 2
         if reason == "unavailable":
             print(
