@@ -1718,9 +1718,16 @@ class TestSetupViaDialogTool:
         """write_profile raises (e.g. config dir not writable) → tool exits
         with a clear error BEFORE touching the dialog. Defensive: catches
         disk-permission issues without prompting the user for password
-        for nothing."""
+        for nothing.
+
+        Per CWE-209 (round-5 polish): the raw str(e) MUST NOT appear in
+        the response message — the exception class name IS exposed (as
+        a separate field, useful for diagnosis), but the message text
+        is sanitized."""
+        secret_marker = "SUPER_SENSITIVE_PATH_/Users/private/.aws/credentials"
         def failing_write(name, **kw):
-            raise PermissionError("config dir not writable")
+            # Simulate an exception whose str() contains sensitive context
+            raise PermissionError(secret_marker)
         monkeypatch.setattr('redshift_comment_mcp.config.write_profile', failing_write)
         # Dialog should not even be called — assert via tripwire:
         dialog_calls = []
@@ -1735,20 +1742,36 @@ class TestSetupViaDialogTool:
         result = setup_via_dialog(host='h', user='u', dbname='d')
 
         assert result["error"] == "write_profile_failed"
-        assert "not writable" in result["message"]
+        assert result["exception_class"] == "PermissionError"
+        # CWE-209: response MUST NOT carry raw exception text
+        import json
+        serialized = json.dumps(result)
+        assert secret_marker not in serialized, (
+            "write_profile_failed response leaked raw exception text — "
+            "CWE-209 regression"
+        )
+        # ...but should still be agent-actionable
+        assert "config" in result["message"].lower() or "filesystem" in result["message"].lower()
         assert dialog_calls == []  # tripwire: dialog was NOT invoked
 
     def test_setup_via_dialog_keychain_write_failed_returns_error(self, monkeypatch):
         """set_password raises (e.g. keychain locked / access denied) AFTER
         write_profile succeeded → tool returns keychain_write_failed. The
         config.toml entry is left behind (recoverable: user can re-key via
-        set-password --dialog later)."""
+        set-password --dialog later).
+
+        Per CWE-209 (round-5): raw str(e) is NOT in the response message —
+        only the exception class name + a sanitized hint."""
+        password_marker = "the-actual-password-this-must-never-leak"
         monkeypatch.setattr(
             'redshift_comment_mcp.config.write_profile',
             lambda name, **kw: None,
         )
         def failing_set(name, pw):
-            raise RuntimeError("keychain locked")
+            # Simulate a hypothetical buggy backend that includes the
+            # password in its exception args. The sanitisation logic must
+            # prevent this from reaching the MCP response regardless.
+            raise RuntimeError(f"backend rejected password {password_marker!r}")
         monkeypatch.setattr('redshift_comment_mcp.config.set_password', failing_set)
         monkeypatch.setattr(
             'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
@@ -1761,7 +1784,49 @@ class TestSetupViaDialogTool:
         result = setup_via_dialog(host='h', user='u', dbname='d')
 
         assert result["error"] == "keychain_write_failed"
-        assert "locked" in result["message"]
+        assert result["exception_class"] == "RuntimeError"
+        # Hard security invariant: password must NEVER reach the response
+        import json
+        serialized = json.dumps(result)
+        assert password_marker not in serialized, (
+            "keychain_write_failed response leaked the password value "
+            "via the exception args — CWE-209 + LLM02:2025 regression"
+        )
+        # ...but message remains actionable
+        assert "--stdin" in result["message"]
+
+    def test_setup_via_dialog_keychain_specific_exception_hints(self, monkeypatch):
+        """Snyk guidance: catch specific keyring exception types where
+        possible. setup_via_dialog maps known exception class names to
+        tailored hint sentences so the agent sees a more useful diagnosis
+        than the generic fallback ("Underlying keychain write failed.")."""
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("pw", "ok"),
+        )
+
+        # Build a fake KeyringLocked exception class — what real keyring
+        # would raise on a locked backend. setup_via_dialog inspects
+        # type(e).__name__, so a class named KeyringLocked is enough.
+        class KeyringLocked(Exception):
+            pass
+
+        def failing_set(name, pw):
+            raise KeyringLocked()
+        monkeypatch.setattr('redshift_comment_mcp.config.set_password', failing_set)
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["exception_class"] == "KeyringLocked"
+        # Tailored hint, not the generic fallback
+        assert "locked" in result["message"].lower()
+        assert "unlock" in result["message"].lower()
 
     def test_setup_via_dialog_overwrites_existing_profile(self, monkeypatch):
         """Calling setup_via_dialog with an existing profile name should

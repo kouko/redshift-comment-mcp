@@ -120,12 +120,14 @@ def _collect_password_via_dialog(profile_name: str) -> tuple[str | None, str]:
     if sys.platform == "darwin":
         # macOS — native osascript dialog. "with hidden answer" masks the
         # typed value. stderr captured (not discarded) so we can detect
-        # permission denial separately from user cancel.
+        # permission denial separately from user cancel. Title includes
+        # the profile name so users running multiple MCP clients (Claude
+        # Desktop + Cursor + ...) can disambiguate which one popped this.
         script = (
             f'tell application "System Events" to display dialog '
             f'"Redshift password for profile \\"{profile_name}\\":" '
             f'default answer "" with hidden answer '
-            f'with title "Redshift MCP Setup" '
+            f'with title "Redshift MCP Setup — profile \\"{profile_name}\\"" '
             f'buttons {{"Cancel", "Save"}} default button "Save"'
         )
         try:
@@ -140,18 +142,28 @@ def _collect_password_via_dialog(profile_name: str) -> tuple[str | None, str]:
         if result.returncode == 0:
             return result.stdout.rstrip("\n"), "ok"
         # osascript non-zero exit — distinguish permission denial from cancel.
-        # macOS error -1743 ("not allowed to send Apple events") fires when
-        # the parent app (Claude Desktop / Cursor / etc.) hasn't been
-        # granted Automation > System Events permission in System Settings.
-        # The dialog never even appears; the agent should NOT treat this as
-        # "user cancelled" because that would suggest re-trying without
-        # fixing the underlying permission, leading to a hang loop.
-        stderr = (result.stderr or "")
-        if "-1743" in stderr or "not allowed to send Apple events" in stderr:
+        # macOS error -1743 ("Not authorized to send Apple events") fires when
+        # the parent app (Claude Desktop / Cursor / etc.) hasn't been granted
+        # Automation > System Events permission in System Settings → Privacy
+        # & Security → Automation. The dialog never even appears; the agent
+        # should NOT treat this as "user cancelled" because that would
+        # suggest a blind retry without fixing the underlying permission,
+        # producing a hang loop.
+        #
+        # Detection: prefer the numeric code (locale-stable across macOS
+        # localisations), with case-insensitive English-text fallback for
+        # both American ("authorized") and British ("authorised") spelling.
+        # Format confirmed against discussions.apple.com / Late Night
+        # Software forum threads — see PR #34's commit message for refs.
+        stderr_lower = (result.stderr or "").lower()
+        if (
+            "-1743" in (result.stderr or "")
+            or "not authorized to send apple events" in stderr_lower
+            or "not authorised to send apple events" in stderr_lower
+        ):
             return None, "permission_denied"
-        # Other non-zero: most likely user clicked Cancel (also -128 /
-        # "User canceled." text in stderr, but easier to identify by
-        # exclusion of the permission case).
+        # Other non-zero: most likely user clicked Cancel (osascript exits
+        # 1 with "execution error: User canceled. (-128)" on user cancel).
         return None, "cancelled"
 
     if sys.platform.startswith("linux"):

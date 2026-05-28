@@ -422,15 +422,29 @@ def test_set_password_stdin_and_dialog_are_mutually_exclusive(
 
 
 @pytest.mark.parametrize("stderr_text", [
-    "execution error: System Events got an error: ... (-1743)",
-    "Not authorized to send Apple events to System Events. (-1743)",
-    "execution error: redshift-comment-mcp is not allowed to send Apple events.",
+    # Canonical format from Apple's osascript on macOS 10.14+; both
+    # numeric code AND English text confirmed via Apple Community thread
+    # and Late Night Software forum.
+    "execution error: Not authorized to send Apple events to System Events. (-1743)",
+    # British spelling variant — same numeric code, different word
+    "execution error: Not authorised to send Apple events to System Events. (-1743)",
+    # Older / locale variant: numeric code without the standard English
+    # prose (some non-en locales may emit translated text + the number)
+    "実行エラー: System Events ... (-1743)",
+    # Edge: just the numeric code in some context
+    "Some prefix (-1743) suffix",
+    # Edge: case variation — lowercase "not authorized"
+    "execution error: not authorized to send apple events.",
 ])
 def test_collect_password_via_dialog_detects_permission_denied(stderr_text, monkeypatch):
-    """The helper must classify osascript's -1743 / 'not allowed to send
-    Apple events' stderr as `permission_denied`, NOT `cancelled`. Both
-    numeric code and English text variants exist depending on macOS
-    version; parametrize over the realistic stderr shapes."""
+    """The helper must classify osascript's -1743 stderr as
+    `permission_denied`, NOT `cancelled`. Detection covers (a) the numeric
+    code (locale-stable across all macOS localisations) and (b) the
+    English text in both American and British spellings, case-insensitive.
+
+    Test cases derived from real-world osascript output documented in the
+    macOS Apple Events ecosystem (Apple Community / Late Night Software
+    forum) — see PR #34 commit message for source URLs."""
     monkeypatch.setattr("sys.platform", "darwin")
     monkeypatch.setattr(
         "redshift_comment_mcp.setup_cli.subprocess.run",

@@ -1120,6 +1120,24 @@ the only chat-leak-free paths.
                 raise ValueError(f"SQL execution error. Please check your syntax. Original error: {e}")
 
         # ========== Setup tool (control plane — works WITHOUT a configured profile) ==========
+        #
+        # `setup_via_dialog` and `get_setup_status` below INTENTIONALLY skip
+        # the `@_guarded` decorator that wraps every DB tool above. The
+        # decorator converts `ConfigurationError` → not_configured response,
+        # but these two tools must be USABLE when no profile is configured
+        # yet — that's literally their job. Wrapping them in @_guarded would
+        # make them refuse to run in the very state where they're needed.
+        # Adding the decorator here is a regression that the existing
+        # behavioral tests (test_setup_via_dialog_works_without_configured_
+        # profile, test_get_setup_status_works_in_degraded_mode) catch.
+        #
+        # Forward look: the MCP 2026-07-28 RC introduces `Elicitation` —
+        # a primitive for servers to request direct user input via the
+        # client's native UI. Once GA'd (and FastMCP exposes it), the
+        # subprocess+osascript dialog hack here becomes obsolete: server
+        # can request a password through the protocol and the client
+        # presents a native secure input widget. Until then, this is the
+        # chat-leak-free path that works with current MCP spec.
 
         @self.mcp.tool
         def setup_via_dialog(
@@ -1165,8 +1183,26 @@ the only chat-leak-free paths.
             try:
                 cfg.write_profile(profile, host=host, port=port, user=user, dbname=dbname)
             except Exception as e:
+                # Per CWE-209 / OWASP Error Handling Cheat Sheet: log the
+                # full exception server-side, but return only the exception
+                # CLASS to the client. The class name is diagnostic-useful
+                # (PermissionError vs OSError vs ...) without including any
+                # exception args, which could in theory carry sensitive
+                # info (file paths, environment values, etc.).
                 logger.error(f"setup_via_dialog: write_profile failed: {e}", exc_info=True)
-                return {"error": "write_profile_failed", "message": str(e)}
+                return {
+                    "error": "write_profile_failed",
+                    "exception_class": type(e).__name__,
+                    "message": (
+                        f"Failed to write profile fields to config.toml "
+                        f"(exception class: {type(e).__name__}). The "
+                        f"underlying error was logged server-side with "
+                        f"full detail; it is not included in this response "
+                        f"to avoid leaking sensitive context through the "
+                        f"MCP wire. Most likely causes: config directory "
+                        f"not writable, disk full, or filesystem error."
+                    ),
+                }
 
             password, reason = _collect_password_via_dialog(profile)
 
@@ -1256,8 +1292,37 @@ the only chat-leak-free paths.
             try:
                 cfg.set_password(profile, password)
             except Exception as e:
+                # Same CWE-209 discipline as write_profile_failed above: log
+                # full exception server-side, return only the exception
+                # class name + a sanitized message. Keychain backends are
+                # third-party (macOS Security framework, gnome-keyring,
+                # KWallet, etc.) and their exception args' contents are
+                # outside our control — assume they may carry context we
+                # don't want crossing the MCP wire.
                 logger.error(f"setup_via_dialog: set_password failed: {e}", exc_info=True)
-                return {"error": "keychain_write_failed", "message": str(e)}
+                # Surface specific keyring exceptions when recognisable
+                # (per Snyk guidance: catch keyring.errors.PasswordSetError
+                # / KeyringLocked separately for more actionable diagnosis).
+                exc_class = type(e).__name__
+                hint = {
+                    "PasswordSetError": "Keychain rejected the write (locked, missing entitlement, or backend refused).",
+                    "KeyringLocked": "OS keychain is currently locked; unlock it and retry.",
+                    "InitError": "Keyring backend failed to initialize on this host.",
+                    "NoKeyringError": "No keyring backend is available on this host.",
+                }.get(exc_class, "Underlying keychain write failed.")
+                return {
+                    "error": "keychain_write_failed",
+                    "exception_class": exc_class,
+                    "message": (
+                        f"{hint} Profile '{profile}' fields were saved to "
+                        f"config.toml but the password was NOT stored. The "
+                        f"underlying error was logged server-side with full "
+                        f"detail; it is not included here per chat-leak "
+                        f"hygiene. Have the user pipe the password via "
+                        f"`redshift-comment-mcp set-password --profile "
+                        f"{profile} --stdin` from a terminal as a fallback."
+                    ),
+                }
 
             # Verify the freshly-written profile actually connects to Redshift
             # before declaring success. Catches typos / VPN-not-connected /
