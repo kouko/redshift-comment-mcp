@@ -50,7 +50,8 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
         password = args.password or os.getenv('REDSHIFT_PASSWORD')
         if not password:
             raise ConfigurationError(
-                "必須透過 --password 參數或 REDSHIFT_PASSWORD 環境變數提供密碼。"
+                "Inline mode requires a password — provide --password CLI "
+                "flag or REDSHIFT_PASSWORD env var."
             )
         return args.host, args.port, args.user, password, args.dbname
 
@@ -64,39 +65,61 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
         #   switch (typo in name, or post-upgrade multi-profile with no
         #   "default" and no pointer file). List them so the user can
         #   spot the right name without re-running setup.
+        #
+        # Both messages use real "\n" between bullet items so they render
+        # as multi-line when shown to the user. Concatenated f-strings
+        # without explicit "\n" would render as a single run-on line.
         existing = cfg.list_profiles()
         if existing:
             raise ConfigurationError(
-                f"Profile '{profile_name}' is not configured. "
-                f"Existing profiles: {', '.join(existing)}. "
-                f"To switch: /redshift-comment-mcp:redshift-switch-profile (Claude Code), "
-                f"or pass `--profile <name>` to redshift-comment-mcp / set "
-                f"`REDSHIFT_COMMENT_PROFILE=<name>` env var. "
-                f"To add a new profile: /redshift-comment-mcp:redshift-setup (Claude Code), "
-                f"or `redshift-comment-mcp setup --profile <name>` (terminal), "
-                f"or code-agent pipeline `set-fields ... && set-password --dialog`."
+                f"Profile '{profile_name}' is not configured.\n"
+                f"Existing profiles: {', '.join(existing)}.\n"
+                f"To switch to an existing profile:\n"
+                f"  - Claude Code: /redshift-comment-mcp:redshift-switch-profile\n"
+                f"  - Terminal: pass `--profile <name>` to redshift-comment-mcp, "
+                f"or set `REDSHIFT_COMMENT_PROFILE=<name>` env var\n"
+                f"To add a new profile:\n"
+                f"  - Claude Code: /redshift-comment-mcp:redshift-setup\n"
+                f"  - In-band MCP tool: call `setup_via_dialog(host=..., "
+                f"user=..., dbname=...)` — password collected via OS dialog "
+                f"server-side, never crosses MCP wire / chat\n"
+                f"  - Terminal: `uvx redshift-comment-mcp setup --profile <name>`\n"
+                f"  - Code-agent Bash pipeline: `set-fields ... && set-password --dialog`"
             )
         raise ConfigurationError(
-            f"Profile '{profile_name}' is not configured. Configure via one of:"
+            f"Profile '{profile_name}' is not configured. Configure via one of:\n"
             f"  - Claude Code: /redshift-comment-mcp:redshift-setup in chat "
-            f"(password collected via system dialog, never enters chat). "
+            f"(password collected via system dialog, never enters chat).\n"
+            f"  - In-band MCP tool: call `setup_via_dialog(host=..., "
+            f"user=..., dbname=...)` — runs the same dialog mechanism inside "
+            f"this MCP session; password never crosses MCP wire / chat / "
+            f"tool args.\n"
             f"  - Code agent (any MCP client with Bash): "
             f"`redshift-comment-mcp set-fields --profile {profile_name} "
-            f"--host H --port P --user U --dbname D` "
-            f"then `redshift-comment-mcp set-password --profile {profile_name} --dialog` "
-            f"— the `--dialog` flag launches an OS-native password prompt "
-            f"(macOS osascript / Linux zenity) so the password never enters "
-            f"chat / stdout. Ask the user for host/user/dbname interactively; "
-            f"never invent them. "
-            f"  - Human in terminal: `uvx redshift-comment-mcp setup --profile {profile_name}` "
-            f"(full interactive Q&A)."
+            f"--host H --port P --user U --dbname D` then "
+            f"`redshift-comment-mcp set-password --profile {profile_name} --dialog` "
+            f"(the `--dialog` flag launches an OS-native password prompt; "
+            f"`--stdin` is the headless fallback).\n"
+            f"  - Human in terminal: `uvx redshift-comment-mcp setup "
+            f"--profile {profile_name}` (full interactive Q&A).\n"
+            f"Ask the user for host/user/dbname interactively; never invent "
+            f"them. Never pass the password as a tool argument or shell "
+            f"argument."
         )
     password = cfg.get_password(profile_name)
     if not password:
         raise ConfigurationError(
             f"Password missing from keychain for profile '{profile_name}'. "
-            f"Run /redshift-comment-mcp:redshift-setup to re-enter, or "
-            f"`redshift-comment-mcp set-password --profile {profile_name}` from a terminal."
+            f"Re-key via one of:\n"
+            f"  - Claude Code: /redshift-comment-mcp:redshift-setup\n"
+            f"  - In-band MCP tool: call `setup_via_dialog(host=..., "
+            f"user=..., dbname=...)` with the existing or new values to "
+            f"overwrite (call `get_setup_status` first if you need the "
+            f"existing field values).\n"
+            f"  - Terminal: `redshift-comment-mcp set-password --profile "
+            f"{profile_name} --dialog` (OS dialog) or `--stdin` (headless "
+            f"pipe). DO NOT use the no-flag interactive `set-password` form "
+            f"from an agent — getpass reads from /dev/tty, not stdin."
         )
     return profile["host"], profile["port"], profile["user"], password, profile["dbname"]
 

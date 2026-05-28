@@ -1428,6 +1428,32 @@ class TestDegradedModeContract:
         assert "default" in result["message"]
         assert "setup_via_dialog" in result["next_step"]
 
+    def test_not_configured_response_schema_matches_setup_via_dialog_errors(self):
+        """Schema consistency: not_configured response must carry the same
+        `exception_class` field as setup_via_dialog's error responses
+        (write_profile_failed / keychain_write_failed). Without this, agents
+        have to special-case different error-response shapes from related
+        tools — schema discipline that round-6 polish brought in."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def failing_provider():
+            raise ConfigurationError("anything")
+
+        tools = RedshiftTools(failing_provider)
+        list_schemas = _get_tool_fn(tools, 'list_schemas')
+        result = list_schemas()
+
+        # Required fields for the unified error-response schema:
+        assert "error" in result
+        assert "exception_class" in result, (
+            "not_configured response missing exception_class field — "
+            "schema diverges from setup_via_dialog's error responses"
+        )
+        assert result["exception_class"] == "ConfigurationError"
+        assert "message" in result
+        # not_configured-specific:
+        assert "next_step" in result
+
     def test_every_db_tool_handles_not_configured(self):
         """All 11 DB tools should propagate the not_configured pattern.
         Catches the case where a new tool is added without @_guarded."""
@@ -1462,40 +1488,51 @@ class TestDegradedModeContract:
 
     def test_lazy_re_resolution_picks_up_new_config(self, mock_config):
         """Provider is called per tool invocation, so config changes between
-        calls take effect without restart. First call raises (not configured),
-        second call returns a usable config → tool succeeds."""
+        calls take effect without restart. First call: state says
+        unconfigured, provider raises, tool returns not_configured. Flip
+        state. Second call: provider returns valid config, tool runs.
+
+        State-based provider (vs. list-of-states indexed by call count)
+        is robust to tools that access ``self.config`` more than once per
+        invocation — the property invocations all see the same external
+        state instead of marching off the end of a list."""
         from redshift_comment_mcp.config import ConfigurationError
 
         config, mock_conn = mock_config
-        states = [ConfigurationError("first call: not configured"), config]
-        call_count = {'n': 0}
+        state = {"configured": False}
 
         def stateful_provider():
-            idx = call_count['n']
-            call_count['n'] += 1
-            v = states[idx]
-            if isinstance(v, Exception):
-                raise v
-            return v
+            if state["configured"]:
+                return config
+            raise ConfigurationError("provider says: not configured yet")
 
         tools = RedshiftTools(stateful_provider)
         list_schemas = _get_tool_fn(tools, 'list_schemas')
 
-        # First call: not configured
+        # 1st call: state is unconfigured → tool returns not_configured
         result1 = list_schemas()
         assert result1.get("error") == "not_configured"
 
-        # Second call: provider now returns good config → tool runs
+        # Flip external state — simulates setup_via_dialog / CLI setup
+        # writing config.toml + keychain in between tool calls.
+        state["configured"] = True
+
+        # 2nd call: provider now returns the good config → tool runs.
+        # No reset of any indexes, no fragile call-count assertion.
         with patch('awswrangler.redshift.read_sql_query') as mock_read:
             mock_read.return_value = pd.DataFrame({
                 'schema_name': ['public'],
                 'schema_comment': ['ok'],
             })
             result2 = list_schemas()
-        assert "schemas" in result2 or "items" in result2 or not isinstance(result2.get("error"), str), (
-            f"Second call should have succeeded but got: {result2}"
+        assert result2.get("error") != "not_configured", (
+            f"Second call should have picked up the new state via lazy "
+            f"resolution, but got: {result2}"
         )
-        assert call_count['n'] == 2  # provider called once per tool invocation
+        assert "schemas" in result2 or "items" in result2, (
+            f"Second call should return schema data, got keys: "
+            f"{list(result2.keys())}"
+        )
 
 
 # ===== setup_via_dialog MCP tool (v0.7.0) =====

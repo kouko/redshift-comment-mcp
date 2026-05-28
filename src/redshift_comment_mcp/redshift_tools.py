@@ -19,17 +19,27 @@ def _not_configured_error(exc: ConfigurationError) -> Dict[str, Any]:
     came up. Now the server boots regardless; each tool catches the error
     via ``@_guarded`` and returns this dict so the agent sees the setup
     pipeline in its tool-call result, not in a hard-to-reach client log.
+
+    Schema is aligned with setup_via_dialog's error responses:
+    ``exception_class`` carries the type name for agents that want to
+    branch on it; ``message`` carries the raw exception text (this is
+    safe here because the ConfigurationError text is server-controlled
+    in resolve_connection_params — no third-party data flows into it).
     """
     return {
         "error": "not_configured",
+        "exception_class": type(exc).__name__,
         "message": str(exc),
         "next_step": (
-            "Call the `setup_via_dialog` MCP tool to bootstrap a profile "
-            "from within this session (host/port/user/dbname go via tool "
-            "args; password collected via OS-native dialog server-side and "
-            "never crosses the MCP wire). Alternatively, have the user run "
+            "1) Call `get_setup_status` to see the current state (whether "
+            "config.toml fields exist + whether a keychain password exists). "
+            "2) Call `setup_via_dialog(host=..., user=..., dbname=...)` to "
+            "bootstrap or update a profile — password collected via OS-"
+            "native dialog server-side, never crosses MCP wire / chat / "
+            "tool args. Alternatively, have the user run "
             "`uvx redshift-comment-mcp setup` in a terminal. After setup, "
-            "retry this tool — no MCP client restart needed (lazy resolve)."
+            "retry the original tool — no MCP client restart needed "
+            "(lazy resolve picks up the new profile on next call)."
         ),
     }
 
@@ -53,6 +63,112 @@ def _guarded(tool_fn):
         except ConfigurationError as e:
             return _not_configured_error(e)
     return wrapper
+
+
+# ===== setup_via_dialog response builders =====
+#
+# Each function builds a structured response for one of the dialog-collection
+# outcomes (cancelled / permission_denied / dialog_unavailable / platform_
+# unsupported / empty_password). Extracted to module level so the
+# setup_via_dialog tool body stays focused on orchestration; each builder
+# is self-contained, has only ``profile`` + ``platform`` inputs, and is
+# unit-testable independently of the larger tool flow.
+
+
+def _build_dialog_cancelled_response(profile: str, **_kw) -> Dict[str, Any]:
+    return {
+        "status": "dialog_cancelled",
+        "profile": profile,
+        "message": (
+            f"Password dialog was cancelled. Profile '{profile}' is "
+            f"INCOMPLETE — DB tools will continue to return not_configured "
+            f"until a password is set. Ask the user explicitly whether they "
+            f"intended to cancel (and abandon Redshift setup) or hit Cancel "
+            f"by accident; default to retrying setup_via_dialog if no clear "
+            f"cancellation signal was given."
+        ),
+    }
+
+
+def _build_permission_denied_response(profile: str, platform: str, **_kw) -> Dict[str, Any]:
+    return {
+        "status": "permission_denied",
+        "profile": profile,
+        "platform": platform,
+        "message": (
+            f"macOS blocked the password dialog. The app running the MCP "
+            f"server (Claude Desktop / Cursor / etc.) doesn't have "
+            f"`Automation > System Events` permission, so the dialog never "
+            f"appeared — this is NOT a user cancellation. Profile "
+            f"'{profile}' fields are saved but password is not set. Tell "
+            f"the user: open System Settings → Privacy & Security → "
+            f"Automation → find the app entry → enable `System Events`, "
+            f"then call setup_via_dialog again. If no permission entry "
+            f"exists yet, run `tccutil reset AppleEvents` from a terminal "
+            f"to force a fresh permission prompt on next attempt. Fallback: "
+            f"have the user pipe the password via "
+            f"`redshift-comment-mcp set-password --profile {profile} "
+            f"--stdin` from a terminal."
+        ),
+    }
+
+
+def _build_dialog_unavailable_response(profile: str, platform: str, **_kw) -> Dict[str, Any]:
+    return {
+        "status": "dialog_unavailable",
+        "profile": profile,
+        "platform": platform,
+        "message": (
+            f"No supported dialog tool found on this host (macOS needs "
+            f"`osascript`, Linux needs `zenity`). Profile fields for "
+            f"'{profile}' are saved but no password is set. Tell the user "
+            f"the dialog isn't available and instruct them to run this in "
+            f"a terminal themselves: `redshift-comment-mcp set-password "
+            f"--profile {profile} --stdin` (piping the password). DO NOT "
+            f"pass the password as a tool argument or shell argument — "
+            f"that leaks it to chat / process args / shell history."
+        ),
+    }
+
+
+def _build_platform_unsupported_response(profile: str, platform: str, **_kw) -> Dict[str, Any]:
+    return {
+        "status": "platform_unsupported",
+        "profile": profile,
+        "platform": platform,
+        "message": (
+            f"Password dialog is not supported on platform '{platform}' "
+            f"(only macOS and Linux are wired). Profile fields for "
+            f"'{profile}' are saved but no password is set. Tell the user "
+            f"to set the password from their terminal: "
+            f"`redshift-comment-mcp set-password --profile {profile} "
+            f"--stdin` (pipe the password via stdin)."
+        ),
+    }
+
+
+def _build_empty_password_response(profile: str, **_kw) -> Dict[str, Any]:
+    return {
+        "status": "empty_password",
+        "profile": profile,
+        "message": (
+            f"Password dialog returned an empty string — likely the user "
+            f"clicked OK without typing, or the dialog failed to render. "
+            f"Profile '{profile}' is INCOMPLETE. Ask the user to retry "
+            f"and call setup_via_dialog again with the same arguments."
+        ),
+    }
+
+
+# Dispatch table for setup_via_dialog's 4 ``reason``-based failure paths
+# returned by ``_collect_password_via_dialog``. The 5th case (``ok`` but
+# empty password) is checked separately because it isn't keyed by reason.
+_DIALOG_FAILURE_BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
+    "cancelled": _build_dialog_cancelled_response,
+    "permission_denied": _build_permission_denied_response,
+    "unavailable": _build_dialog_unavailable_response,
+    "unsupported": _build_platform_unsupported_response,
+}
 
 # 分頁設定
 DEFAULT_MAX_ITEMS = 50  # 預設最大回傳筆數（超過時自動截斷）
@@ -1206,88 +1322,16 @@ the only chat-leak-free paths.
 
             password, reason = _collect_password_via_dialog(profile)
 
-            if reason == "cancelled":
-                return {
-                    "status": "dialog_cancelled",
-                    "profile": profile,
-                    "message": (
-                        f"Password dialog was cancelled. Profile '{profile}' "
-                        f"is INCOMPLETE — DB tools will continue to return "
-                        f"not_configured until a password is set. Ask the "
-                        f"user explicitly whether they intended to cancel "
-                        f"(and abandon Redshift setup) or hit Cancel by "
-                        f"accident; default to retrying setup_via_dialog "
-                        f"if no clear cancellation signal was given."
-                    ),
-                }
-            if reason == "permission_denied":
-                return {
-                    "status": "permission_denied",
-                    "profile": profile,
-                    "platform": _sys.platform,
-                    "message": (
-                        f"macOS blocked the password dialog. The app "
-                        f"running the MCP server (Claude Desktop / Cursor "
-                        f"/ etc.) doesn't have `Automation > System Events` "
-                        f"permission, so the dialog never appeared — this "
-                        f"is NOT a user cancellation. Profile '{profile}' "
-                        f"fields are saved but password is not set. Tell "
-                        f"the user: open System Settings → Privacy & "
-                        f"Security → Automation → find the app entry → "
-                        f"enable `System Events`, then call setup_via_dialog "
-                        f"again. If no permission entry exists yet, run "
-                        f"`tccutil reset AppleEvents` from a terminal to "
-                        f"force a fresh permission prompt on next attempt. "
-                        f"Fallback: have the user pipe the password via "
-                        f"`redshift-comment-mcp set-password --profile "
-                        f"{profile} --stdin` from a terminal."
-                    ),
-                }
-            if reason == "unavailable":
-                return {
-                    "status": "dialog_unavailable",
-                    "profile": profile,
-                    "platform": _sys.platform,
-                    "message": (
-                        f"No supported dialog tool found on this host "
-                        f"(macOS needs `osascript`, Linux needs `zenity`). "
-                        f"Profile fields for '{profile}' are saved but no "
-                        f"password is set. Tell the user the dialog isn't "
-                        f"available and instruct them to run this in a "
-                        f"terminal themselves: `redshift-comment-mcp "
-                        f"set-password --profile {profile} --stdin` (piping "
-                        f"the password). DO NOT pass the password as a tool "
-                        f"argument or shell argument — that leaks it to "
-                        f"chat / process args / shell history."
-                    ),
-                }
-            if reason == "unsupported":
-                return {
-                    "status": "platform_unsupported",
-                    "profile": profile,
-                    "platform": _sys.platform,
-                    "message": (
-                        f"Password dialog is not supported on platform "
-                        f"'{_sys.platform}' (only macOS and Linux are "
-                        f"wired). Profile fields for '{profile}' are saved "
-                        f"but no password is set. Tell the user to set the "
-                        f"password from their terminal: `redshift-comment-"
-                        f"mcp set-password --profile {profile} --stdin` "
-                        f"(pipe the password via stdin)."
-                    ),
-                }
+            # 4 reason-keyed failure paths dispatch to module-level builders
+            # (see _DIALOG_FAILURE_BUILDERS). The 5th case ("ok" reason but
+            # empty password — user clicked OK without typing) is checked
+            # separately because it's keyed by password emptiness, not reason.
+            if reason in _DIALOG_FAILURE_BUILDERS:
+                return _DIALOG_FAILURE_BUILDERS[reason](
+                    profile=profile, platform=_sys.platform,
+                )
             if not password:
-                return {
-                    "status": "empty_password",
-                    "profile": profile,
-                    "message": (
-                        f"Password dialog returned an empty string — likely "
-                        f"the user clicked OK without typing, or the dialog "
-                        f"failed to render. Profile '{profile}' is "
-                        f"INCOMPLETE. Ask the user to retry and call "
-                        f"setup_via_dialog again with the same arguments."
-                    ),
-                }
+                return _build_empty_password_response(profile=profile)
 
             try:
                 cfg.set_password(profile, password)
