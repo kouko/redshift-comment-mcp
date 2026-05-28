@@ -1532,6 +1532,12 @@ class TestSetupViaDialogTool:
             'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
             lambda profile: ("dialog-secret", "ok"),
         )
+        # Stub the post-write connection test to simulate a reachable cluster
+        # — keeps this test hermetic (no real Redshift attempt).
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (True, None),
+        )
 
         tools = self._make_tools()  # provider raises ConfigurationError
         setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
@@ -1732,6 +1738,10 @@ class TestSetupViaDialogTool:
             'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
             lambda profile: ("pw", "ok"),
         )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (True, None),
+        )
 
         tools = self._make_tools()
         setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
@@ -1798,6 +1808,12 @@ class TestDegradedModeContractAdditional:
         monkeypatch.setattr(
             'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
             lambda profile: ("dialog-pw", "ok"),
+        )
+        # End-to-end test stubs the connection check too — covered by
+        # dedicated TestSetupViaDialogConnectionVerification tests below.
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (True, None),
         )
 
         tools = RedshiftTools(lazy_provider)
@@ -1905,3 +1921,237 @@ class TestServerStartup:
             f"(expected exactly 1 — server should reach the stdio loop even "
             f"without a configured profile)"
         )
+
+
+# ===== Polish round-3: connection verification + get_setup_status =====
+#
+# These tests cover the additional safety net (test connection after
+# keychain write) and the new read-only status tool.
+
+
+class TestSetupViaDialogConnectionVerification:
+    """setup_via_dialog now tests the Redshift connection after writing the
+    profile + password. This catches "wrote successfully but connection
+    fails" silent lies (typo'd host / VPN not connected / wrong password /
+    paused cluster) BEFORE the agent declares setup done."""
+
+    def _make_tools(self):
+        from redshift_comment_mcp.config import ConfigurationError
+        def provider():
+            raise ConfigurationError("not yet")
+        return RedshiftTools(provider)
+
+    def _setup_common_mocks(self, monkeypatch, dialog_returns=("pw", "ok")):
+        """Stub the chain up to the connection-test step."""
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: dialog_returns,
+        )
+
+    def test_connection_test_passes_returns_configured_with_tested_flag(self, monkeypatch):
+        self._setup_common_mocks(monkeypatch)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (True, None),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["status"] == "configured"
+        assert result["tested"] is True
+        assert "succeeded" in result["message"].lower()
+
+    def test_connection_test_fails_returns_configured_but_connection_failed(self, monkeypatch):
+        """The keystone safety: profile fields and password were saved, but
+        the connection test caught a mismatch. Agent should NOT declare
+        setup done; should re-prompt user."""
+        self._setup_common_mocks(monkeypatch)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (False, "Connection timed out (host unreachable)"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='wrong.example.com', user='u', dbname='d')
+
+        assert result["status"] == "configured_but_connection_failed"
+        assert result["tested"] is False
+        assert "timed out" in result["connection_error"]
+        # Message must include diagnostic hints the agent can relay to user
+        assert "VPN" in result["message"] or "host" in result["message"].lower()
+        # Profile name preserved so agent knows which one to re-setup
+        assert result["profile"] == "default"
+
+    def test_connection_test_args_include_resolved_values(self, monkeypatch):
+        """Verify _test_redshift_connection is called with the actual
+        host/port/user/password/dbname the tool received — guards against
+        accidentally passing wrong args (e.g. dropping port, swapping
+        user/dbname order)."""
+        self._setup_common_mocks(monkeypatch, dialog_returns=("the-password", "ok"))
+        captured = {}
+        def capture(host, port, user, password, dbname):
+            captured.update(host=host, port=port, user=user,
+                            password=password, dbname=dbname)
+            return (True, None)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection', capture,
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+        setup_via_dialog(host='h.example.com', user='alice',
+                         dbname='analytics', port=5430)
+
+        assert captured == {
+            'host': 'h.example.com',
+            'port': 5430,
+            'user': 'alice',
+            'password': 'the-password',
+            'dbname': 'analytics',
+        }
+
+
+class TestGetSetupStatusTool:
+    """The read-only setup-status tool. Safe to call at session start;
+    returns non-secrets only; agents use it to decide whether to call
+    setup_via_dialog proactively."""
+
+    def _make_tools(self):
+        from redshift_comment_mcp.config import ConfigurationError
+        def provider():
+            raise ConfigurationError("doesn't matter — get_setup_status doesn't touch the provider")
+        return RedshiftTools(provider)
+
+    def test_get_setup_status_unconfigured_returns_false_with_next_step(self, monkeypatch):
+        """Fresh install case: no config.toml entry, no keychain."""
+        monkeypatch.setattr('redshift_comment_mcp.config.read_profile',
+                            lambda name: None)
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: None)
+
+        tools = self._make_tools()
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+
+        assert result["profile"] == "default"
+        assert result["configured"] is False
+        assert result["has_fields"] is False
+        assert result["has_password"] is False
+        # Non-secret fields absent when has_fields=False
+        assert "host" not in result
+        assert "user" not in result
+        # Agent guidance for next step
+        assert "next_step" in result
+        assert "setup_via_dialog" in result["next_step"]
+
+    def test_get_setup_status_fields_only_no_password(self, monkeypatch):
+        """Edge case: config.toml has the profile but keychain entry was
+        deleted (e.g. via `delete-profile` then re-add of fields only)."""
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.read_profile',
+            lambda name: {'host': 'h', 'port': 5439, 'user': 'u', 'dbname': 'd'},
+        )
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: None)
+
+        tools = self._make_tools()
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+
+        assert result["configured"] is False  # NOT fully configured
+        assert result["has_fields"] is True
+        assert result["has_password"] is False
+        # Non-secret fields exposed
+        assert result["host"] == 'h'
+        assert result["user"] == 'u'
+        # next_step adapts to this partial state
+        assert "password" in result["next_step"].lower()
+
+    def test_get_setup_status_fully_configured(self, monkeypatch):
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.read_profile',
+            lambda name: {'host': 'h.example.com', 'port': 5439,
+                          'user': 'alice', 'dbname': 'analytics'},
+        )
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: 'some-password')
+
+        tools = self._make_tools()
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status(profile='default')
+
+        assert result["configured"] is True
+        assert result["has_fields"] is True
+        assert result["has_password"] is True
+        assert result["host"] == 'h.example.com'
+        assert result["user"] == 'alice'
+        # No next_step when already configured
+        assert "next_step" not in result
+
+    def test_get_setup_status_never_returns_password_value(self, monkeypatch):
+        """Hard security invariant: even when has_password=True, the actual
+        password string MUST NEVER appear anywhere in the response. Catches
+        a future careless refactor where someone adds the password to the
+        response by accident."""
+        secret = "super-secret-password-do-not-leak"
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.read_profile',
+            lambda name: {'host': 'h', 'port': 5439, 'user': 'u', 'dbname': 'd'},
+        )
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: secret)
+
+        tools = self._make_tools()
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+
+        # Scan all string values in the response for the secret — catches
+        # accidental inclusion in any field (host, message, next_step, etc).
+        import json
+        serialized = json.dumps(result)
+        assert secret not in serialized, (
+            "get_setup_status leaked the password value in the response — "
+            "this is a security regression"
+        )
+
+    def test_get_setup_status_works_in_degraded_mode(self, monkeypatch):
+        """get_setup_status must work even when the lazy provider raises
+        ConfigurationError — that's literally what makes it useful at
+        session start (no profile yet)."""
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def failing_provider():
+            raise ConfigurationError("not yet configured")
+
+        monkeypatch.setattr('redshift_comment_mcp.config.read_profile',
+                            lambda name: None)
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: None)
+
+        tools = RedshiftTools(failing_provider)
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        # Must NOT raise; must NOT return not_configured error
+        result = get_setup_status()
+        assert "error" not in result, (
+            "get_setup_status should not be guarded by @_guarded — it "
+            "needs to work when the provider raises (its whole point)"
+        )
+        assert result["configured"] is False

@@ -38,7 +38,7 @@ full charter.
 
 ## What you get
 
-### MCP tools (12, defined in [`src/redshift_comment_mcp/`](src/redshift_comment_mcp/))
+### MCP tools (13, defined in [`src/redshift_comment_mcp/`](src/redshift_comment_mcp/))
 
 | Group | Tools |
 |---|---|
@@ -46,7 +46,7 @@ full charter.
 | Search (hit-count ranked) | `search_schemas` · `search_tables` · `search_columns` |
 | Comment retrieval | `get_schema_comment` · `get_table_comment` · `get_column_comment` · `get_all_column_comments` |
 | Query | `execute_sql` (SELECT / WITH only) |
-| Setup (since v0.7.0) | `setup_via_dialog` — in-band profile bootstrap; OS-native password dialog, never crosses MCP wire |
+| Setup (since v0.7.0) | `setup_via_dialog` — in-band profile bootstrap; OS-native password dialog, never crosses MCP wire; tests connection before declaring success · `get_setup_status` — read-only configuration check; safe to call at session start; never returns password value |
 
 Pagination on every list / search; explicit `WARNING` strings nudging
 the LLM to read comments before trusting names.

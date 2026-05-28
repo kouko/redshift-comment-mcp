@@ -68,6 +68,35 @@ def cmd_setup(args: argparse.Namespace) -> int:
     return cmd_test_connection(args)
 
 
+def _test_redshift_connection(
+    host: str, port: int, user: str, password: str, dbname: str,
+) -> tuple[bool, str | None]:
+    """Smoke-test a Redshift connection. Returns ``(success, error_message)``.
+
+    Catches host typos / wrong port / VPN-not-connected / firewall block /
+    wrong password / paused-cluster early. Used by both the CLI's
+    ``test-connection`` subcommand and the ``setup_via_dialog`` MCP tool
+    to verify a freshly-written profile actually connects BEFORE
+    declaring success — turns silent ``configured`` lies into actionable
+    ``configured_but_connection_failed`` feedback.
+    """
+    try:
+        import redshift_connector
+    except ImportError:
+        return False, "redshift-connector library is not installed"
+    try:
+        conn = redshift_connector.connect(
+            host=host, port=port, user=user, password=password, database=dbname,
+        )
+        try:
+            conn.cursor().execute("SELECT 1")
+        finally:
+            conn.close()
+        return True, None
+    except Exception as e:
+        return False, str(e)
+
+
 def _collect_password_via_dialog(profile_name: str) -> tuple[str | None, str]:
     """Collect password via OS-native dialog without exposing to chat / stdout.
 

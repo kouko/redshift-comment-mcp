@@ -369,22 +369,37 @@ search_* / get_*) use fixed catalog templates and do not carry these
 fields; their semantic API is the contract.
 
 SETUP RECOVERY (degraded-mode contract, since v0.7.0): The server can
-boot without a configured profile. If any DB tool returns
-`{"error": "not_configured", ...}`, the profile / keychain are missing.
-DO NOT keep retrying — read the `next_step` field and act:
+boot without a configured profile. Two entry points:
+
+  - PROACTIVE: call `get_setup_status` at session start to check whether
+    a profile is configured. Safe to call any time, returns
+    non-secrets only. If `configured=false`, follow `next_step`.
+  - REACTIVE: any DB tool returns `{"error": "not_configured", ...}` —
+    read the `next_step` field and follow it.
+
+Either way, the bootstrap flow is:
 
   1. Ask the user for host / port / user / dbname conversationally
      (these are NOT secrets; OK to discuss in chat).
-  2. Call the `setup_via_dialog` MCP tool with those args. The tool
-     writes config.toml fields and then launches an OS-native password
-     dialog server-side. The password value never crosses the MCP wire.
-  3. On `{"status": "configured", ...}`, retry the original DB tool —
-     lazy resolution picks up the new profile without an MCP client
-     restart.
-  4. If `setup_via_dialog` returns dialog_unavailable / platform_
-     unsupported (no GUI), have the user run
-     `redshift-comment-mcp set-password --profile X --stdin` from a
-     terminal instead.
+  2. Call `setup_via_dialog` with those args. It writes config.toml
+     fields, launches an OS-native password dialog server-side
+     (macOS osascript / Linux zenity), and **tests the connection
+     against Redshift** before declaring success. The password value
+     never crosses the MCP wire.
+  3. Interpret the response status:
+     - `configured` (with `tested: true`) — retry the original DB
+       tool, lazy resolution picks up the new profile without restart.
+     - `configured_but_connection_failed` — fields/password were
+       saved but Redshift connect failed. Read `connection_error`
+       (likely host typo / VPN not connected / wrong password /
+       paused cluster), ask the user to verify, then call
+       setup_via_dialog again with corrections (overwrites).
+     - `dialog_cancelled` / `empty_password` — profile incomplete;
+       ask the user whether they meant to cancel; usually retry.
+     - `dialog_unavailable` / `platform_unsupported` (no GUI tool) —
+       the dialog path is unusable on this host; tell the user to
+       run `redshift-comment-mcp set-password --profile X --stdin`
+       from a terminal. DO NOT pass the password as a tool argument.
 
 Never invent host/user/dbname values. Never pass the password as a
 tool argument or shell argument — the system dialog or stdin pipe are
@@ -1155,11 +1170,13 @@ the only chat-leak-free paths.
                     "status": "dialog_cancelled",
                     "profile": profile,
                     "message": (
-                        f"Password dialog was cancelled. Profile fields for "
-                        f"'{profile}' are saved to config.toml but no password "
-                        f"is set. Retry setup_via_dialog, or have the user run "
-                        f"`redshift-comment-mcp set-password --profile "
-                        f"{profile} --dialog` later."
+                        f"Password dialog was cancelled. Profile '{profile}' "
+                        f"is INCOMPLETE — DB tools will continue to return "
+                        f"not_configured until a password is set. Ask the "
+                        f"user explicitly whether they intended to cancel "
+                        f"(and abandon Redshift setup) or hit Cancel by "
+                        f"accident; default to retrying setup_via_dialog "
+                        f"if no clear cancellation signal was given."
                     ),
                 }
             if reason == "unavailable":
@@ -1168,11 +1185,16 @@ the only chat-leak-free paths.
                     "profile": profile,
                     "platform": _sys.platform,
                     "message": (
-                        f"No supported dialog tool installed (macOS needs "
-                        f"`osascript`, Linux needs `zenity`). Profile fields "
-                        f"for '{profile}' are saved; have the user pipe the "
-                        f"password via `redshift-comment-mcp set-password "
-                        f"--profile {profile} --stdin` from a terminal."
+                        f"No supported dialog tool found on this host "
+                        f"(macOS needs `osascript`, Linux needs `zenity`). "
+                        f"Profile fields for '{profile}' are saved but no "
+                        f"password is set. Tell the user the dialog isn't "
+                        f"available and instruct them to run this in a "
+                        f"terminal themselves: `redshift-comment-mcp "
+                        f"set-password --profile {profile} --stdin` (piping "
+                        f"the password). DO NOT pass the password as a tool "
+                        f"argument or shell argument — that leaks it to "
+                        f"chat / process args / shell history."
                     ),
                 }
             if reason == "unsupported":
@@ -1182,10 +1204,12 @@ the only chat-leak-free paths.
                     "platform": _sys.platform,
                     "message": (
                         f"Password dialog is not supported on platform "
-                        f"'{_sys.platform}' (only macOS and Linux are wired). "
-                        f"Profile fields for '{profile}' are saved; use the "
-                        f"`set-password --stdin` CLI subcommand to set the "
-                        f"password via stdin pipe."
+                        f"'{_sys.platform}' (only macOS and Linux are "
+                        f"wired). Profile fields for '{profile}' are saved "
+                        f"but no password is set. Tell the user to set the "
+                        f"password from their terminal: `redshift-comment-"
+                        f"mcp set-password --profile {profile} --stdin` "
+                        f"(pipe the password via stdin)."
                     ),
                 }
             if not password:
@@ -1193,9 +1217,11 @@ the only chat-leak-free paths.
                     "status": "empty_password",
                     "profile": profile,
                     "message": (
-                        f"Password dialog returned an empty string. "
-                        f"Profile fields for '{profile}' are saved; retry "
-                        f"setup_via_dialog or run set-password manually."
+                        f"Password dialog returned an empty string — likely "
+                        f"the user clicked OK without typing, or the dialog "
+                        f"failed to render. Profile '{profile}' is "
+                        f"INCOMPLETE. Ask the user to retry and call "
+                        f"setup_via_dialog again with the same arguments."
                     ),
                 }
 
@@ -1205,6 +1231,37 @@ the only chat-leak-free paths.
                 logger.error(f"setup_via_dialog: set_password failed: {e}", exc_info=True)
                 return {"error": "keychain_write_failed", "message": str(e)}
 
+            # Verify the freshly-written profile actually connects to Redshift
+            # before declaring success. Catches typos / VPN-not-connected /
+            # firewall / wrong password / paused-cluster early so the agent
+            # doesn't claim "configured" then immediately fail on the next
+            # DB tool call.
+            from .setup_cli import _test_redshift_connection
+            ok, conn_err = _test_redshift_connection(host, port, user, password, dbname)
+
+            if not ok:
+                return {
+                    "status": "configured_but_connection_failed",
+                    "profile": profile,
+                    "host": host,
+                    "port": port,
+                    "user": user,
+                    "dbname": dbname,
+                    "tested": False,
+                    "connection_error": conn_err,
+                    "message": (
+                        f"Profile '{profile}' fields and password were "
+                        f"saved, but the test connection to Redshift "
+                        f"FAILED. The most likely causes: wrong host (typo "
+                        f"or VPN not connected), wrong port, wrong "
+                        f"user/password, firewall block, or the cluster "
+                        f"is paused. Verify the values with the user and "
+                        f"call setup_via_dialog again with corrections "
+                        f"(it will overwrite). Connection error attached "
+                        f"in `connection_error` field."
+                    ),
+                }
+
             return {
                 "status": "configured",
                 "profile": profile,
@@ -1212,14 +1269,80 @@ the only chat-leak-free paths.
                 "port": port,
                 "user": user,
                 "dbname": dbname,
+                "tested": True,
                 "message": (
-                    f"Profile '{profile}' configured. Fields written to "
-                    f"~/.config/redshift-comment-mcp/config.toml, password "
-                    f"stored in OS keychain. Retry any DB tool now — lazy "
-                    f"resolution will pick up the new profile on next call "
-                    f"without restarting the MCP client."
+                    f"Profile '{profile}' configured AND test connection "
+                    f"succeeded. Fields written to ~/.config/redshift-"
+                    f"comment-mcp/config.toml, password stored in OS "
+                    f"keychain, SELECT 1 against Redshift returned OK. "
+                    f"Retry any DB tool now — lazy resolution will pick "
+                    f"up the new profile on next call without restarting "
+                    f"the MCP client."
                 ),
             }
+
+        @self.mcp.tool
+        def get_setup_status(profile: str = "default") -> Dict[str, Any]:
+            """Read-only check of whether a profile is configured. Safe to
+            call at any time including the very start of a session — does
+            not touch Redshift, does not return any secrets.
+
+            Use at session start to decide proactively whether to call
+            ``setup_via_dialog`` (before triggering any DB tool's
+            not_configured error path), or to verify a setup_via_dialog
+            call succeeded from a fresh angle.
+
+            Returns:
+              - ``profile`` — the queried profile name
+              - ``configured`` — bool, equivalent to has_fields && has_password
+              - ``has_fields`` — whether config.toml has this profile's
+                non-secret fields (host / port / user / dbname)
+              - ``has_password`` — whether the OS keychain has a password
+                for this profile (NEVER returns the password itself)
+              - ``host`` / ``port`` / ``user`` / ``dbname`` — present only
+                when has_fields=True (these are non-secret)
+              - ``next_step`` — present only when configured=False;
+                actionable hint pointing at setup_via_dialog
+            """
+            from . import config as cfg
+
+            profile_data = cfg.read_profile(profile)
+            has_fields = profile_data is not None
+            has_password = cfg.get_password(profile) is not None
+
+            result: Dict[str, Any] = {
+                "profile": profile,
+                "configured": has_fields and has_password,
+                "has_fields": has_fields,
+                "has_password": has_password,
+            }
+
+            if has_fields:
+                # Non-secret — safe to expose. Lets the agent show the user
+                # what's currently set up vs. what they're about to overwrite.
+                result["host"] = profile_data["host"]
+                result["port"] = profile_data["port"]
+                result["user"] = profile_data["user"]
+                result["dbname"] = profile_data["dbname"]
+
+            if not result["configured"]:
+                if not has_fields:
+                    result["next_step"] = (
+                        f"Profile '{profile}' has no config.toml entry. "
+                        f"Call setup_via_dialog(host=..., user=..., "
+                        f"dbname=...) to provision it. Ask the user for "
+                        f"host/user/dbname conversationally — these are "
+                        f"not secrets."
+                    )
+                else:
+                    result["next_step"] = (
+                        f"Profile '{profile}' has fields but no password "
+                        f"in keychain. Call setup_via_dialog with the "
+                        f"existing values (or different ones to overwrite) "
+                        f"— the dialog will collect a password and store it."
+                    )
+
+            return result
 
     def get_server(self):
         """取得配置好的 MCP 伺服器"""

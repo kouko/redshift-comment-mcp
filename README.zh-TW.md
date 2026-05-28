@@ -34,7 +34,7 @@ manifest 涵蓋面太窄、Web GUI 太慢、手刻 SQL 太重複。
 
 ## 你能拿到什麼
 
-### MCP tools（12 支，定義在 [`src/redshift_comment_mcp/`](src/redshift_comment_mcp/)）
+### MCP tools（13 支，定義在 [`src/redshift_comment_mcp/`](src/redshift_comment_mcp/)）
 
 | 群組 | Tools |
 |---|---|
@@ -42,7 +42,7 @@ manifest 涵蓋面太窄、Web GUI 太慢、手刻 SQL 太重複。
 | Search（依命中關鍵字數排序） | `search_schemas` · `search_tables` · `search_columns` |
 | 註解擷取 | `get_schema_comment` · `get_table_comment` · `get_column_comment` · `get_all_column_comments` |
 | Query | `execute_sql`（只接受 SELECT / WITH） |
-| Setup（v0.7.0 起） | `setup_via_dialog` —— 在 session 內 bootstrap profile；密碼用 OS 原生對話框收集，**完全不過 MCP wire** |
+| Setup（v0.7.0 起） | `setup_via_dialog` —— 在 session 內 bootstrap profile；密碼用 OS 原生對話框收集，**完全不過 MCP wire**；宣告成功前先測試連線 · `get_setup_status` —— 唯讀設定狀態檢查；session 開始時可安全呼叫；**永不回傳密碼值** |
 
 每支 list / search 都有分頁；明確的 `WARNING` 字串會推 LLM 先讀註解
 再相信名字。

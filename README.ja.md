@@ -38,7 +38,7 @@ SQL は繰り返しが多すぎる。
 
 ## 含まれているもの
 
-### MCP ツール（12 個、[`src/redshift_comment_mcp/`](src/redshift_comment_mcp/) で定義）
+### MCP ツール（13 個、[`src/redshift_comment_mcp/`](src/redshift_comment_mcp/) で定義）
 
 | グループ | ツール |
 |---|---|
@@ -46,7 +46,7 @@ SQL は繰り返しが多すぎる。
 | Search（ヒット数順） | `search_schemas` · `search_tables` · `search_columns` |
 | コメント取得 | `get_schema_comment` · `get_table_comment` · `get_column_comment` · `get_all_column_comments` |
 | クエリ | `execute_sql`（SELECT / WITH のみ） |
-| セットアップ（v0.7.0〜） | `setup_via_dialog` — セッション内でプロファイルをブートストラップ。パスワードは OS ネイティブダイアログで収集し、MCP wire には一切流れない |
+| セットアップ（v0.7.0〜） | `setup_via_dialog` — セッション内でプロファイルをブートストラップ。パスワードは OS ネイティブダイアログで収集し、MCP wire には一切流れない；成功宣言前に接続テストも実施 · `get_setup_status` — 読み取り専用の設定状態チェック。セッション開始時に安全に呼び出せ、パスワード値は決して返さない |
 
 list / search はすべてページング対応。コメントを読んでから名前を信じる
 よう LLM を促す `WARNING` 文字列が明示的に埋め込まれています。
