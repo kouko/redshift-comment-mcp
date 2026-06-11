@@ -77,8 +77,26 @@ claude plugin marketplace add kouko/redshift-comment-mcp
 
 # 2. Install the plugin
 claude plugin install redshift-comment-mcp
+```
 
-# 3. Configure a connection profile (in a Claude Code chat)
+When you **enable** the plugin, Claude Code shows a connection dialog
+asking for host / port (default 5439) / user / dbname / password. There
+are two ways to connect — pick one; both store the password in an OS
+keychain, never in chat or `settings.json`:
+
+- **Quick single connection — fill the dialog.** The password field is
+  `sensitive`, so it goes to the OS keychain; host / port / user /
+  dbname are saved to `settings.json`. That's all you need for one
+  cluster.
+- **Profiles / multi-cluster — leave the dialog blank and run
+  `/redshift-setup`.** The fields are optional; leave them blank and the
+  plugin falls back to the profile flow. `/redshift-setup` is the
+  conversational walk-through that writes a named profile (config.toml +
+  active-profile pointer + keychain), and it's the path for running more
+  than one cluster.
+
+```bash
+# In a Claude Code chat — the profile path (also the multi-cluster path)
 /redshift-setup
 ```
 
@@ -87,9 +105,9 @@ password. **The password is collected in a system dialog (macOS) or a
 zenity prompt (Linux desktop) or your own terminal (headless) — never
 in chat.** It lands directly in your OS keychain.
 
-After setup, just type any of the slash commands above. Multi-cluster?
-Add a second profile with `/redshift-setup <name>`, then switch between
-them with `/redshift-switch-profile`.
+After connecting, just type any of the slash commands above.
+Multi-cluster? Add a second profile with `/redshift-setup <name>`, then
+switch between them with `/redshift-switch-profile`.
 
 For Claude Desktop / other MCP clients / local development, scroll
 down to **Other install paths**.
@@ -98,7 +116,7 @@ down to **Other install paths**.
 
 | Scenario | How |
 |---|---|
-| Claude Code (recommended) | `claude plugin install redshift-comment-mcp` (above). Zero config — manifest no longer asks for a profile name; the MCP server reads the active-profile pointer file written by `/redshift-setup`. |
+| Claude Code (recommended) | `claude plugin install redshift-comment-mcp` (above), then **enable** it — Claude Code pops a connection dialog (host / port / user / dbname / password; password → OS keychain). Fill it for one quick connection, or leave it blank and run `/redshift-setup` instead. |
 | Claude Desktop / generic MCP client | `pip install redshift-comment-mcp` then point your client at `uvx redshift-comment-mcp` (or `--profile <name>` to override the pointer file) |
 | Local development | `git clone … && pip install -e ".[dev]"` then `python -m redshift_comment_mcp.server` |
 | Multi-cluster | `/redshift-setup <name>` per cluster + `/redshift-switch-profile` to switch |
