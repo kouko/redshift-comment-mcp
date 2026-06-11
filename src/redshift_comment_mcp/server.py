@@ -8,6 +8,41 @@ from .redshift_tools import RedshiftTools
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_PORT = 5439
+
+
+def _coerce_port(raw) -> int:
+    """argparse ``type=`` for ``--port`` that tolerates optional-userConfig debris.
+
+    A Claude Code plugin ``userConfig`` is optional: a blank port field arrives
+    as ``""`` and an unset field may arrive as the unsubstituted literal
+    ``${user_config.port}``. Plain ``type=int`` would make argparse abort with
+    ``invalid int value`` and the server would never boot. Map any
+    empty / non-numeric value to ``DEFAULT_PORT`` instead of raising; pass real
+    integer strings (and already-int values) through unchanged.
+    """
+    if isinstance(raw, int):
+        return raw
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        return DEFAULT_PORT
+
+
+def _normalize_inline(value):
+    """Return ``None`` for inline string args that aren't a real value.
+
+    Treats an empty string OR an unsubstituted ``${user_config...}`` placeholder
+    literal as "unset" so the inline-completeness check below falls through to
+    profile mode instead of mistaking the placeholder for a real host/user/dbname.
+    """
+    if not value:
+        return None
+    stripped = str(value).strip()
+    if stripped.startswith("${user_config") and stripped.endswith("}"):
+        return None
+    return value or None
+
 # Subcommands handled by setup_cli.py — delegated before server arg parsing.
 SETUP_SUBCOMMANDS = {
     "setup",
@@ -45,7 +80,15 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
     error) catch the specific subclass; legacy ``except ValueError`` still
     works.
     """
-    inline_complete = bool(args.host and args.user and args.dbname)
+    # Normalize first: an optional plugin userConfig substitutes "" for a blank
+    # field and may leave the literal ${user_config.host} when unset. Treat both
+    # as "unset" so they fall through to profile mode rather than being mistaken
+    # for a real inline host/user/dbname.
+    host = _normalize_inline(args.host)
+    user = _normalize_inline(args.user)
+    dbname = _normalize_inline(args.dbname)
+
+    inline_complete = bool(host and user and dbname)
     if inline_complete:
         password = args.password or os.getenv('REDSHIFT_PASSWORD')
         if not password:
@@ -53,7 +96,7 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
                 "Inline mode requires a password — provide --password CLI "
                 "flag or REDSHIFT_PASSWORD env var."
             )
-        return args.host, args.port, args.user, password, args.dbname
+        return host, _coerce_port(args.port), user, password, dbname
 
     from . import config as cfg
     profile_name = cfg.resolve_active_profile(args.profile)
@@ -153,7 +196,12 @@ def main():
         ),
     )
     parser.add_argument("--host", help="Redshift 主機位址 (legacy inline 模式)")
-    parser.add_argument("--port", type=int, default=5439, help="Redshift 連接埠")
+    parser.add_argument(
+        "--port",
+        type=_coerce_port,
+        default=DEFAULT_PORT,
+        help="Redshift 連接埠 (空字串 / 未替換的 userConfig 佔位符 → 預設 5439)",
+    )
     parser.add_argument("--user", help="Redshift 使用者名稱 (legacy inline 模式)")
     parser.add_argument(
         "--password",
