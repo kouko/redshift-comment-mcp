@@ -1,6 +1,6 @@
 {
   "name": "redshift-comment-mcp",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Redshift MCP server with comment-first exploration. 11 tools for schema/table/column listing, hit-count keyword search, and SELECT-only SQL. Comments are authoritative — names are unreliable. Zero-config install: run `/redshift-comment-mcp:redshift-setup` in chat after install — host / user / database via Q&A, password via system dialog (never enters chat), connection verified. Multi-cluster via `/redshift-setup <name>` then `/redshift-switch-profile`.",
   "author": {
     "name": "kouko",
