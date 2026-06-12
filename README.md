@@ -75,8 +75,11 @@ The fastest path is the Claude Code plugin.
 # 1. Register the marketplace (one-time)
 claude plugin marketplace add kouko/redshift-comment-mcp
 
-# 2. Install the plugin
+# 2. Install the plugin (ships DISABLED — opt-in, since it connects to an external service)
 claude plugin install redshift-comment-mcp
+
+# 3. Enable it — this is when the connection dialog appears
+claude plugin enable redshift-comment-mcp
 ```
 
 When you **enable** the plugin, Claude Code shows a connection dialog
