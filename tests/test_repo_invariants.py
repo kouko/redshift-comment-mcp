@@ -178,6 +178,44 @@ def test_pyproject_plugin_version_sync():
     )
 
 
+def test_mcpb_manifest_version_matches_sources(tmp_path):
+    """The generated .mcpb manifest version must match the version SSOT.
+
+    The .mcpb bundle is a 4th distribution surface. Its manifest is GENERATED
+    (scripts/generate_mcpb_manifest.py) from the root pyproject fallback_version
+    so it cannot drift. This guards that invariant: regenerating into a tmp dir
+    yields a manifest whose `version` equals BOTH the pyproject fallback_version
+    (read the same regex way as test_pyproject_plugin_version_sync) and the
+    plugin.json version.
+    """
+    import importlib.util
+
+    gen_path = REPO_ROOT / "scripts" / "generate_mcpb_manifest.py"
+    spec = importlib.util.spec_from_file_location("generate_mcpb_manifest", gen_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    module.generate(repo_root=REPO_ROOT, out_dir=tmp_path)
+    manifest = json.loads((tmp_path / "manifest.json").read_text())
+    manifest_version = manifest["version"]
+
+    pyproject_text = PYPROJECT.read_text()
+    m = re.search(r'^fallback_version\s*=\s*"([^"]+)"', pyproject_text, re.MULTILINE)
+    assert m, "fallback_version not found in pyproject.toml [tool.setuptools_scm]"
+    pyproject_version = m.group(1)
+
+    plugin_version = json.loads(PLUGIN_JSON.read_text())["version"]
+
+    assert manifest_version == pyproject_version, (
+        f"Generated .mcpb manifest version={manifest_version!r} drifted from "
+        f"pyproject.toml fallback_version={pyproject_version!r}."
+    )
+    assert manifest_version == plugin_version, (
+        f"Generated .mcpb manifest version={manifest_version!r} drifted from "
+        f"plugin.json version={plugin_version!r}."
+    )
+
+
 # ===== D2 reversed (v0.8.0): connection-field userConfig contract =====
 #
 # D2 (commit 3884f98, v0.4.0) removed userConfig because Claude Code then
