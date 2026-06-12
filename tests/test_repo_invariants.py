@@ -178,47 +178,78 @@ def test_pyproject_plugin_version_sync():
     )
 
 
-# ===== D2 zero-config-install contract =====
+# ===== D2 reversed (v0.8.0): connection-field userConfig contract =====
 #
-# Post-D2 refactor: the plugin manifest must NOT collect any user-facing
-# config (no /plugins UI form). The MCP server resolves the active profile
-# itself via env > active-profile pointer file > "default" fallback. These
-# tests guard against accidental regression — re-adding userConfig or a
-# --profile flag pinned via ${user_config.profile} would break the
-# zero-config install contract and the single-profile-first design.
+# D2 (commit 3884f98, v0.4.0) removed userConfig because Claude Code then
+# had NO secret type — a password would land plaintext in settings.json.
+# Claude Code has SINCE added `sensitive: true` (→ OS keychain), so we
+# consciously REVERSE D2 and re-add *connection-field* userConfig
+# (host/port/user/dbname + password as `sensitive`). This is intentional,
+# not a regression — see memory project_d2_userconfig_reversal and
+# docs/code-toolkit/specs/2026-06-11-plugin-userconfig.md.
+#
+# These tests now guard the REVERSED contract: userConfig MUST exist with
+# the 5 connection fields, password MUST be `sensitive`, mcpServers args
+# MUST inject the 4 non-secret fields via ${user_config.*}, and env MUST
+# inject REDSHIFT_PASSWORD. The server still resolves the profile itself,
+# so a pinned --profile flag remains forbidden.
 
 
-def test_plugin_manifest_has_no_user_config():
-    """D2 contract: zero /plugins UI form. Re-adding userConfig regresses
-    the install UX back to the pre-D2 'fill profile name in form' flow."""
+def test_plugin_manifest_has_connection_userconfig():
+    """D2 reversed: plugin.json MUST declare a connection-field userConfig.
+
+    Re-added on 2026-06-11 once Claude Code gained `sensitive: true`
+    (password → OS keychain, not plaintext settings.json). The five
+    connection fields are prompted at enable time and substituted into
+    mcpServers. See memory project_d2_userconfig_reversal."""
     plugin = json.loads(PLUGIN_JSON.read_text())
-    assert "userConfig" not in plugin, (
-        "plugin.json reintroduced userConfig — D2 design is zero-config "
-        "install. Profile selection lives in ~/.config/redshift-comment-mcp/"
-        "active-profile, written by /redshift-setup and /redshift-switch-"
-        "profile. Read README §'Other install paths' before re-adding."
+    assert "userConfig" in plugin, (
+        "plugin.json must declare a top-level userConfig block (D2 reversed "
+        "in v0.8.0). See memory project_d2_userconfig_reversal."
     )
+    user_config = plugin["userConfig"]
+    for key in ("host", "port", "user", "dbname", "password"):
+        assert key in user_config, (
+            f"userConfig missing connection field {key!r}: {sorted(user_config)}"
+        )
+    assert user_config["password"]["sensitive"] is True, (
+        "userConfig.password must set `sensitive: true` so it routes to the "
+        "OS keychain — this is the sole condition that unblocked the D2 "
+        "reversal (plaintext password in settings.json was D2's blocker)."
+    )
+    for key, field in user_config.items():
+        for prop in ("title", "description"):
+            value = field.get(prop, "")
+            assert isinstance(value, str) and value.strip(), (
+                f"userConfig.{key} must have a non-empty {prop!r} for the "
+                f"enable-time dialog; got {value!r}."
+            )
 
 
-def test_plugin_manifest_mcp_args_have_no_profile_flag():
-    """D2 contract: mcpServers args must not pin a --profile via
-    ${user_config.profile}. The server resolves profile itself."""
+def test_plugin_manifest_mcp_args_inject_userconfig_no_profile_flag():
+    """D2 reversed: mcpServers must inject the 4 non-secret connection
+    fields via ${user_config.*} and the password via env REDSHIFT_PASSWORD,
+    while still NOT pinning a --profile (server resolves profile itself)."""
     plugin = json.loads(PLUGIN_JSON.read_text())
-    args = (
-        plugin.get("mcpServers", {})
-              .get("redshift-comment", {})
-              .get("args", [])
-    )
+    server = plugin.get("mcpServers", {}).get("redshift-comment", {})
+    args = server.get("args", [])
     assert "--profile" not in args, (
         f"mcpServers.redshift-comment.args still contains --profile: {args!r}. "
-        f"D2 server resolves the active profile via env > pointer file > "
-        f"'default' fallback. Re-adding --profile re-couples the manifest "
-        f"to userConfig (which we removed). See README 'Other install paths'."
+        f"The server resolves the active profile via env > pointer file > "
+        f"'default' fallback; pinning --profile re-couples the manifest to a "
+        f"profile-name userConfig (the D2-era indirection we did NOT re-add)."
     )
-    assert not any("user_config" in a for a in args), (
-        f"mcpServers args reference user_config interpolation: {args!r}. "
-        f"userConfig was removed in D2 — these references will resolve to "
-        f"empty strings at runtime."
+    for key in ("host", "port", "user", "dbname"):
+        token = f"${{user_config.{key}}}"
+        assert token in args, (
+            f"mcpServers args must inject {token} for the {key} connection "
+            f"field; got {args!r}."
+        )
+    env = server.get("env", {})
+    assert env.get("REDSHIFT_PASSWORD") == "${user_config.password}", (
+        f"mcpServers.redshift-comment.env must inject REDSHIFT_PASSWORD from "
+        f"${{user_config.password}} (the server's inline-mode password "
+        f"channel); got env={env!r}."
     )
 
 

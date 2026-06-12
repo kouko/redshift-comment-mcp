@@ -101,6 +101,74 @@ def test_inline_mode_partial_args_falls_through_to_profile(tmp_xdg, fake_keyring
         server.resolve_connection_params(args)
 
 
+# ===== optional plugin userConfig hardening =====
+# A Claude Code plugin `userConfig` is OPTIONAL: when the user leaves a field
+# blank, Claude Code substitutes "" into `--host ${user_config.host}` etc., and
+# may even leave the literal `${user_config.port}` unsubstituted. Neither must
+# crash the server; both must be treated as "unset" so resolution falls back to
+# profile mode. The port arg is the sharpest edge — `type=int` makes `--port ""`
+# raise `invalid int value` at argparse and the server never boots.
+
+
+@pytest.mark.parametrize(
+    "raw, expected",
+    [
+        ("", 5439),                       # blank optional userConfig field
+        ("${user_config.port}", 5439),    # unsubstituted placeholder literal
+        ("not-a-number", 5439),           # any non-numeric → default, not crash
+        (None, 5439),                     # arg omitted entirely
+        ("5439", 5439),                   # real value passes through
+        ("5440", 5440),                   # real non-default value preserved
+        (5439, 5439),                     # already an int (defensive)
+    ],
+)
+def test_coerce_port_maps_blank_or_placeholder_to_default(raw, expected):
+    """The argparse `type=` coercion must never raise on userConfig debris."""
+    assert server._coerce_port(raw) == expected
+
+
+def test_coerce_port_via_argparse_does_not_crash_on_empty():
+    """Regression for the headline bug: `--port ""` must parse, not raise
+    SystemExit from argparse's `invalid int value` path."""
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=server._coerce_port, default=5439)
+    assert parser.parse_args(["--port", ""]).port == 5439
+    assert parser.parse_args(["--port", "5440"]).port == 5440
+
+
+@pytest.mark.parametrize(
+    "host, user, dbname",
+    [
+        ("", "", ""),                                  # all blank optional fields
+        ("${user_config.host}", "${user_config.user}", "${user_config.dbname}"),  # all literals
+        ("${user_config.host}", "", ""),               # mixed literal + blank
+        ("real.example.com", "", "d"),                 # one real, rest unset → still incomplete
+    ],
+)
+def test_inline_args_empty_or_placeholder_fall_back_to_profile(
+    tmp_xdg, fake_keyring, monkeypatch, host, user, dbname
+):
+    """Empty-string or unsubstituted-placeholder inline args must be treated as
+    unset, so the inline-completeness check fails and we fall through to profile
+    mode. With no profile configured, that surfaces the existing
+    /redshift-setup-pointing error — NOT a crash and NOT a bogus inline connect."""
+    monkeypatch.delenv("REDSHIFT_COMMENT_PROFILE", raising=False)
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host=host, user=user, dbname=dbname, port="")
+    with pytest.raises(ValueError, match="redshift-setup"):
+        server.resolve_connection_params(args)
+
+
+def test_inline_args_real_values_still_resolve_to_inline(tmp_xdg, fake_keyring, monkeypatch):
+    """Control: genuine full inline args (and a real --port) still take the
+    inline path unchanged — the hardening must not regress legacy inline mode."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="h.example.com", user="u", dbname="d", password="secret", port=5439)
+    assert server.resolve_connection_params(args) == (
+        "h.example.com", 5439, "u", "secret", "d"
+    )
+
+
 # ===== profile mode =====
 
 

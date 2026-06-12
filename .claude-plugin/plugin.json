@@ -1,6 +1,6 @@
 {
   "name": "redshift-comment-mcp",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "description": "Redshift MCP server with comment-first exploration. 11 tools for schema/table/column listing, hit-count keyword search, and SELECT-only SQL. Comments are authoritative — names are unreliable. Zero-config install: run `/redshift-comment-mcp:redshift-setup` in chat after install — host / user / database via Q&A, password via system dialog (never enters chat), connection verified. Multi-cluster via `/redshift-setup <name>` then `/redshift-switch-profile`.",
   "author": {
     "name": "kouko",
@@ -17,6 +17,35 @@
     "data-exploration",
     "comment-first"
   ],
+  "userConfig": {
+    "host": {
+      "type": "string",
+      "title": "Redshift Host",
+      "description": "Cluster endpoint hostname (e.g. my-cluster.abc123.us-east-1.redshift.amazonaws.com). Leave blank to use a profile configured via /redshift-setup."
+    },
+    "port": {
+      "type": "number",
+      "title": "Redshift Port",
+      "description": "Cluster port. Defaults to 5439.",
+      "default": 5439
+    },
+    "user": {
+      "type": "string",
+      "title": "Redshift User",
+      "description": "Database user to connect as. Leave blank to use a profile configured via /redshift-setup."
+    },
+    "dbname": {
+      "type": "string",
+      "title": "Redshift Database",
+      "description": "Database name to connect to. Leave blank to use a profile configured via /redshift-setup."
+    },
+    "password": {
+      "type": "string",
+      "title": "Redshift Password",
+      "description": "Database password. Stored in your OS keychain (never written to settings.json). Leave blank to use a profile password configured via /redshift-setup.",
+      "sensitive": true
+    }
+  },
   "mcpServers": {
     "redshift-comment": {
       "command": "uv",
@@ -24,8 +53,19 @@
         "run",
         "--project",
         "${CLAUDE_PLUGIN_ROOT}",
-        "redshift-comment-mcp"
-      ]
+        "redshift-comment-mcp",
+        "--host",
+        "${user_config.host}",
+        "--port",
+        "${user_config.port}",
+        "--user",
+        "${user_config.user}",
+        "--dbname",
+        "${user_config.dbname}"
+      ],
+      "env": {
+        "REDSHIFT_PASSWORD": "${user_config.password}"
+      }
     }
   }
 }
