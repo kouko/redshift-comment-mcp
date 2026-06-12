@@ -117,12 +117,28 @@ down to **Other install paths**.
 
 ## Other install paths
 
+**Two packaged artifacts — install ONE of them:**
+
+- **Claude Code plugin** — gives the 6 slash-command skills **plus** the
+  MCP server, configured via `/redshift-setup`. This is the Quick start
+  above and the recommended path for Claude Code users.
+- **`.mcpb` Desktop Extension** — gives the MCP server **plus** a GUI
+  config form in Claude Desktop, but **NOT** the skills. This is the path
+  for Claude Desktop users who want a one-click install and a connection
+  form instead of editing `claude_desktop_config.json` by hand.
+
 | Scenario | How |
 |---|---|
 | Claude Code (recommended) | `claude plugin install redshift-comment-mcp` (above), then **enable** it — Claude Code pops a connection dialog (host / port / user / dbname / password; password → OS keychain). Fill it for one quick connection, or leave it blank and run `/redshift-setup` instead. |
-| Claude Desktop / generic MCP client | `pip install redshift-comment-mcp` then point your client at `uvx redshift-comment-mcp` (or `--profile <name>` to override the pointer file) |
+| Claude Desktop (one-click) | Download the `.mcpb` from the project's [GitHub Releases](https://github.com/kouko/redshift-comment-mcp/releases) page, then install it in Claude Desktop (**Settings → Extensions**, or drag-and-drop the file). Claude Desktop shows a connection form — fill in host / port / user / dbname / password (the password is stored in the OS keychain). **Requires `uv`** (see prerequisite below). Ships the server + form, **not** the skills. |
+| Claude Desktop / generic MCP client (manual) | `pip install redshift-comment-mcp` then point your client at `uvx redshift-comment-mcp` (or `--profile <name>` to override the pointer file) |
 | Local development | `git clone … && pip install -e ".[dev]"` then `python -m redshift_comment_mcp.server` |
 | Multi-cluster | `/redshift-setup <name>` per cluster + `/redshift-switch-profile` to switch |
+
+**`.mcpb` prerequisite — `uv`.** The Desktop Extension runs on the `uv`
+runtime, so `uv` must be available on your machine before you install the
+`.mcpb` (e.g. `brew install uv` on macOS). The Claude Code plugin path
+does not need this step — Claude Code provides its own `uv`.
 
 The plugin runs from the cloned repo source via
 `uv run --project ${CLAUDE_PLUGIN_ROOT}` — PyPI release is NOT a
