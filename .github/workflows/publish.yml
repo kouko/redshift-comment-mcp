@@ -166,3 +166,38 @@ jobs:
           } else {
             console.log("No associated discussion found for this release. Skipping comment.");
           }
+
+  pack-mcpb:
+    # Runs AFTER the PyPI publish so the bundle-pinned `redshift-comment-mcp==<v>`
+    # dependency the generated manifest writes is already resolvable on PyPI by
+    # the time anyone installs the .mcpb. Gated to real releases only, matching
+    # the publish job (no pre-release bundles attached to the GH Release).
+    needs: publish
+    if: github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write  # upload .mcpb as a release asset
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: "3.12"
+
+    - name: Set up Node
+      uses: actions/setup-node@v4
+      with:
+        node-version: "20"
+
+    - name: Generate mcpb manifest + bundle files
+      run: python scripts/generate_mcpb_manifest.py
+
+    - name: Pack .mcpb bundle
+      run: npx -y @anthropic-ai/mcpb pack mcpb dist/redshift-comment-mcp.mcpb
+
+    - name: Upload .mcpb to release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: dist/*.mcpb
