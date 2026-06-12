@@ -75,8 +75,11 @@ list / search はすべてページング対応。コメントを読んでから
 # 1. マーケットプレイスを登録（初回のみ）
 claude plugin marketplace add kouko/redshift-comment-mcp
 
-# 2. プラグインをインストール
+# 2. プラグインをインストール（外部サービスに接続するため、無効状態で導入＝オプトイン）
 claude plugin install redshift-comment-mcp
+
+# 3. 有効化 — このとき接続ダイアログが出ます
+claude plugin enable redshift-comment-mcp
 ```
 
 プラグインを**有効化**すると、Claude Code が host / port（デフォルト

@@ -253,6 +253,26 @@ def test_plugin_manifest_mcp_args_inject_userconfig_no_profile_flag():
     )
 
 
+def test_plugin_manifest_default_disabled():
+    """Opt-in install: an external-service connector MUST ship
+    `defaultEnabled: false` so it installs DISABLED and the user enables it
+    deliberately — the moment the userConfig connection dialog appears.
+
+    Grounded in fail-safe defaults (disable what connects out / costs money
+    by default) and Claude Code's own guidance — `defaultEnabled: false` is
+    recommended "for plugins that connect to an external service"
+    (plugins-reference §Default enablement). The field exists since Claude
+    Code v2.1.154; older clients ignore it and install enabled (the
+    pre-existing behavior), so setting it is downside-free."""
+    plugin = json.loads(PLUGIN_JSON.read_text())
+    assert plugin.get("defaultEnabled") is False, (
+        "plugin.json must set `defaultEnabled: false` — this plugin spawns an "
+        "MCP server that connects to Redshift (an external service), so it "
+        "should install disabled and be enabled opt-in. "
+        f"Got defaultEnabled={plugin.get('defaultEnabled')!r}."
+    )
+
+
 # ===== README trilingual parity =====
 
 @pytest.mark.parametrize("skill", _skill_dirs())

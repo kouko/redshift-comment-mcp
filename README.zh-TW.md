@@ -70,8 +70,11 @@ manifest 涵蓋面太窄、Web GUI 太慢、手刻 SQL 太重複。
 # 1. 註冊 marketplace（一次性）
 claude plugin marketplace add kouko/redshift-comment-mcp
 
-# 2. 安裝 plugin
+# 2. 安裝 plugin（因為會連外部服務，預設「停用」安裝 = opt-in）
 claude plugin install redshift-comment-mcp
+
+# 3. 啟用它 —— 此時才會跳出連線對話框
+claude plugin enable redshift-comment-mcp
 ```
 
 當你**啟用** plugin 時，Claude Code 會跳出連線對話框，問你 host /
