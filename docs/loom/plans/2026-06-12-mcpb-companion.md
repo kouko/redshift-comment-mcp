@@ -1,6 +1,6 @@
 # Plan: companion .mcpb Desktop Extension (uv-type)
 
-Source brief: docs/code-toolkit/specs/2026-06-12-mcpb-companion.md
+Source brief: docs/loom/specs/2026-06-12-mcpb-companion.md
 Total tasks: 5 (SDD code) + 1 post-merge release action (Notes, human)
 Critical-path depth: 2 (≤5) — longest chain: Task 3 (generator) → Task 4/Task 5
 Execution order: parallel-where-possible (T1, T3, T5 at level 0; T2, T4 depend on T3)
@@ -42,7 +42,7 @@ only, DAG and Files-touched unchanged, re-review skipped.
 - Files touched: README.md, README.ja.md, README.zh-TW.md
 - Context paths:
   - README.md (Quick start / "Other install paths" sections)
-  - docs/code-toolkit/specs/2026-06-12-mcpb-companion.md (the settled design + naming)
+  - docs/loom/specs/2026-06-12-mcpb-companion.md (the settled design + naming)
 - Acceptance:
   - RED: diagnostic — the three READMEs lack any `.mcpb` / Desktop-extension install section.
   - GREEN: all three describe the `.mcpb` path + `uv` prereq + "install one of"; the
@@ -67,7 +67,7 @@ only, DAG and Files-touched unchanged, re-review skipped.
 - Files touched: scripts/generate_mcpb_manifest.py, tests/test_mcpb_manifest.py
 - Context paths:
   - pyproject.toml ([tool.setuptools_scm] fallback_version — the version SSOT)
-  - docs/code-toolkit/specs/2026-06-12-mcpb-companion.md (manifest shape, verified vs MANIFEST.md)
+  - docs/loom/specs/2026-06-12-mcpb-companion.md (manifest shape, verified vs MANIFEST.md)
 - Acceptance:
   - RED: tests/test_mcpb_manifest.py::test_generator_emits_valid_uv_manifest — runs the
     generator, asserts manifest_version=="0.4", name=="redshift-comment-mcp", version==root
