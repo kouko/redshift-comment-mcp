@@ -1,6 +1,6 @@
 # Plan: plugin.json userConfig (reverse D2)
 
-Source brief: docs/code-toolkit/specs/2026-06-11-plugin-userconfig.md
+Source brief: docs/loom/specs/2026-06-11-plugin-userconfig.md
 Total tasks: 4
 Critical-path depth: 2 (≤5) — longest chain: Task 2 → Task 3 (and Task 2 → Task 4)
 Execution order: parallel-where-possible (T1 ∥ T2 at level 0; then T3 ∥ T4)

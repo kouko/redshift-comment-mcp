@@ -224,7 +224,7 @@ def test_mcpb_manifest_version_matches_sources(tmp_path):
 # consciously REVERSE D2 and re-add *connection-field* userConfig
 # (host/port/user/dbname + password as `sensitive`). This is intentional,
 # not a regression — see memory project_d2_userconfig_reversal and
-# docs/code-toolkit/specs/2026-06-11-plugin-userconfig.md.
+# docs/loom/specs/2026-06-11-plugin-userconfig.md.
 #
 # These tests now guard the REVERSED contract: userConfig MUST exist with
 # the 5 connection fields, password MUST be `sensitive`, mcpServers args
