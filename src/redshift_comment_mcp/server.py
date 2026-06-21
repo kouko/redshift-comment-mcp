@@ -2,6 +2,7 @@ import os
 import sys
 import argparse
 import logging
+from typing import Optional
 from .config import ConfigurationError
 from .connection import create_redshift_config
 from .redshift_tools import RedshiftTools
@@ -54,6 +55,31 @@ SETUP_SUBCOMMANDS = {
 }
 
 
+def resolve_inline_params(
+    args: argparse.Namespace,
+) -> Optional[tuple[str, int, str, bool, str]]:
+    """Detect legacy inline mode from CLI args, password presence only.
+
+    Returns ``(host, port, user, has_password, dbname)`` when ``args.host`` /
+    ``args.user`` / ``args.dbname`` all specify a real inline value (after
+    the same optional-userConfig normalization ``resolve_connection_params``
+    applies), else ``None``.
+
+    ``has_password`` reflects presence of ``args.password`` or the
+    ``REDSHIFT_PASSWORD`` env var — it NEVER returns the secret itself. This
+    is the seam ``get_setup_status`` uses to report inline mode truthfully:
+    the status tool must know "the server can connect via inline mode" without
+    handling the password value.
+    """
+    host = _normalize_inline(args.host)
+    user = _normalize_inline(args.user)
+    dbname = _normalize_inline(args.dbname)
+    if not (host and user and dbname):
+        return None
+    has_password = bool(getattr(args, "password", None) or os.getenv("REDSHIFT_PASSWORD"))
+    return host, _coerce_port(args.port), user, has_password, dbname
+
+
 def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, str, str]:
     """Resolve ``(host, port, user, password, dbname)`` from parsed CLI args.
 
@@ -80,23 +106,21 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
     error) catch the specific subclass; legacy ``except ValueError`` still
     works.
     """
-    # Normalize first: an optional plugin userConfig substitutes "" for a blank
-    # field and may leave the literal ${user_config.host} when unset. Treat both
-    # as "unset" so they fall through to profile mode rather than being mistaken
-    # for a real inline host/user/dbname.
-    host = _normalize_inline(args.host)
-    user = _normalize_inline(args.user)
-    dbname = _normalize_inline(args.dbname)
-
-    inline_complete = bool(host and user and dbname)
-    if inline_complete:
-        password = args.password or os.getenv('REDSHIFT_PASSWORD')
-        if not password:
+    # Inline detection (incl. optional-userConfig normalization for ""/${...}
+    # placeholders) lives in resolve_inline_params so get_setup_status can reuse
+    # the exact same mode decision.
+    inline = resolve_inline_params(args)
+    if inline:
+        host, port, user, has_password, dbname = inline
+        if not has_password:
             raise ConfigurationError(
                 "Inline mode requires a password — provide --password CLI "
                 "flag or REDSHIFT_PASSWORD env var."
             )
-        return host, _coerce_port(args.port), user, password, dbname
+        # Re-derive the password value here: resolve_inline_params deliberately
+        # returns only presence (has_password bool), never the secret.
+        password = args.password or os.getenv('REDSHIFT_PASSWORD')
+        return host, port, user, password, dbname
 
     from . import config as cfg
     profile_name = cfg.resolve_active_profile(args.profile)
@@ -235,7 +259,12 @@ def main():
         )
 
     logger.info("MCP 伺服器啟動中（degraded-mode 啟動 — profile 在第一次 tool 呼叫時 lazy resolve）")
-    redshift_tools = RedshiftTools(lazy_config_provider)
+    # Re-evaluated per get_setup_status call (not cached) so a REDSHIFT_PASSWORD
+    # env change is reflected, mirroring lazy_config_provider's re-resolution.
+    redshift_tools = RedshiftTools(
+        lazy_config_provider,
+        inline_status_provider=lambda: resolve_inline_params(args),
+    )
     mcp_server = redshift_tools.get_server()
 
     try:

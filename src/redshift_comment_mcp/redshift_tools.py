@@ -423,7 +423,13 @@ class RedshiftTools:
     Provides a set of tools for interacting with Redshift databases to support guided data exploration.
     Uses a connect/disconnect pattern for each operation to ensure maximum robustness.
     """
-    def __init__(self, config_provider: Callable[[], RedshiftConnectionConfig]):
+    def __init__(
+        self,
+        config_provider: Callable[[], RedshiftConnectionConfig],
+        inline_status_provider: Optional[
+            Callable[[], Optional[tuple]]
+        ] = None,
+    ):
         """Construct a tool provider with a *lazy* connection-config resolver.
 
         ``config_provider`` is called on every DB tool invocation (via the
@@ -434,8 +440,17 @@ class RedshiftTools:
         ``@_guarded`` decorator on each tool turns it into a structured
         ``{"error": "not_configured", ...}`` response — the server itself
         never crashes for missing-profile.
+
+        ``inline_status_provider`` (optional) lets ``get_setup_status`` report
+        legacy inline mode (server launched with ``--host/--user/--dbname`` +
+        ``REDSHIFT_PASSWORD`` env, e.g. the Claude Code plugin UI) truthfully.
+        It returns ``(host, port, user, has_password, dbname)`` when inline
+        mode is active, else ``None``. When ``None`` (the default — used by
+        every test and any non-server caller), ``get_setup_status`` falls back
+        to its profile/keychain inspection unchanged.
         """
         self._config_provider = config_provider
+        self._inline_status_provider = inline_status_provider
         self.mcp = FastMCP(
             name="Redshift Comment MCP",
             instructions="""
@@ -489,7 +504,12 @@ boot without a configured profile. Two entry points:
 
   - PROACTIVE: call `get_setup_status` at session start to check whether
     a profile is configured. Safe to call any time, returns
-    non-secrets only. If `configured=false`, follow `next_step`.
+    non-secrets only. If `configured=false`, follow `next_step`. The
+    `source` field says which mechanism is live: `"inline"` means the
+    server runs on launch args + `REDSHIFT_PASSWORD` env (e.g. the Claude
+    Code plugin UI) and the profile/keychain path is bypassed — do NOT
+    report "no profile" in that mode; `"profile"` means config.toml +
+    keychain.
   - REACTIVE: any DB tool returns `{"error": "not_configured", ...}` —
     read the `next_step` field and follow it.
 
@@ -1449,17 +1469,58 @@ the only chat-leak-free paths.
 
             Returns:
               - ``profile`` — the queried profile name
+              - ``source`` — ``"inline"`` when the server was launched in
+                legacy inline mode (``--host/--user/--dbname`` + ``REDSHIFT_
+                PASSWORD`` env, e.g. the Claude Code plugin UI), else
+                ``"profile"``. In inline mode the profile/keychain path is
+                bypassed entirely, so don't go hunting for an active profile.
               - ``configured`` — bool, equivalent to has_fields && has_password
               - ``has_fields`` — whether config.toml has this profile's
-                non-secret fields (host / port / user / dbname)
-              - ``has_password`` — whether the OS keychain has a password
-                for this profile (NEVER returns the password itself)
+                non-secret fields (host / port / user / dbname); in inline mode,
+                True (the fields came from launch args)
+              - ``has_password`` — whether a password is available (OS keychain
+                in profile mode; ``REDSHIFT_PASSWORD`` / ``--password`` in inline
+                mode). NEVER returns the password itself
               - ``host`` / ``port`` / ``user`` / ``dbname`` — present only
                 when has_fields=True (these are non-secret)
               - ``next_step`` — present only when configured=False;
-                actionable hint pointing at setup_via_dialog
+                actionable hint pointing at the right mechanism for the mode
             """
             from . import config as cfg
+
+            # Inline mode short-circuit: when the server was launched with
+            # complete inline connection args, the profile/keychain path is
+            # bypassed by resolve_connection_params (it ignores the profile
+            # name entirely). Reporting profile/keychain state here would be a
+            # false "not configured" — the very bug this branch fixes.
+            inline = (
+                self._inline_status_provider()
+                if self._inline_status_provider is not None
+                else None
+            )
+            if inline is not None:
+                host, port, user, has_password, dbname = inline
+                result: Dict[str, Any] = {
+                    "profile": profile,
+                    "source": "inline",
+                    "configured": has_password,
+                    "has_fields": True,
+                    "has_password": has_password,
+                    "host": host,
+                    "port": port,
+                    "user": user,
+                    "dbname": dbname,
+                }
+                if not has_password:
+                    result["next_step"] = (
+                        "Inline mode: the server was launched with "
+                        "host/user/dbname but no password. Set the "
+                        "REDSHIFT_PASSWORD env var (or pass --password) where "
+                        "the MCP server is launched — e.g. the plugin's "
+                        "Password field in the Claude Code install UI — then "
+                        "restart the MCP client."
+                    )
+                return result
 
             profile_data = cfg.read_profile(profile)
             has_fields = profile_data is not None
@@ -1467,6 +1528,7 @@ the only chat-leak-free paths.
 
             result: Dict[str, Any] = {
                 "profile": profile,
+                "source": "profile",
                 "configured": has_fields and has_password,
                 "has_fields": has_fields,
                 "has_password": has_password,

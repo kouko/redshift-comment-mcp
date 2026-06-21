@@ -101,6 +101,48 @@ def test_inline_mode_partial_args_falls_through_to_profile(tmp_xdg, fake_keyring
         server.resolve_connection_params(args)
 
 
+# ===== resolve_inline_params (status-side inline detection) =====
+# Extracted so get_setup_status can report inline mode truthfully without
+# re-resolving the password value (it only needs presence, not the secret).
+
+
+def test_resolve_inline_params_complete_with_password(tmp_xdg, monkeypatch):
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="h.example.com", user="alice", dbname="analytics",
+               password="secret", port=5430)
+    assert server.resolve_inline_params(args) == (
+        "h.example.com", 5430, "alice", True, "analytics"
+    )
+
+
+def test_resolve_inline_params_password_presence_from_env(tmp_xdg, monkeypatch):
+    monkeypatch.setenv("REDSHIFT_PASSWORD", "envsecret")
+    args = _ns(host="h", user="u", dbname="d")
+    assert server.resolve_inline_params(args) == ("h", 5439, "u", True, "d")
+
+
+def test_resolve_inline_params_no_password_still_inline(tmp_xdg, monkeypatch):
+    """Complete host/user/dbname but no password → still inline, has_password=False
+    (the status tool must surface this as 'inline but needs a password')."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="h", user="u", dbname="d")
+    assert server.resolve_inline_params(args) == ("h", 5439, "u", False, "d")
+
+
+def test_resolve_inline_params_partial_returns_none(tmp_xdg, monkeypatch):
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="h")  # user/dbname absent → not inline
+    assert server.resolve_inline_params(args) is None
+
+
+def test_resolve_inline_params_placeholder_returns_none(tmp_xdg, monkeypatch):
+    """Unsubstituted optional-userConfig placeholders are not a real inline config."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="${user_config.host}", user="${user_config.user}",
+               dbname="${user_config.dbname}")
+    assert server.resolve_inline_params(args) is None
+
+
 # ===== optional plugin userConfig hardening =====
 # A Claude Code plugin `userConfig` is OPTIONAL: when the user leaves a field
 # blank, Claude Code substitutes "" into `--host ${user_config.host}` etc., and

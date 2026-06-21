@@ -2327,3 +2327,81 @@ class TestGetSetupStatusTool:
             "needs to work when the provider raises (its whole point)"
         )
         assert result["configured"] is False
+
+    def test_get_setup_status_profile_mode_labels_source(self, monkeypatch):
+        """Backward case: no inline provider → source='profile' so the agent
+        can tell which config mechanism it's reading."""
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.read_profile',
+            lambda name: {'host': 'h', 'port': 5439, 'user': 'u', 'dbname': 'd'},
+        )
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: 'pw')
+
+        tools = self._make_tools()
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+        assert result["source"] == "profile"
+
+    def test_get_setup_status_inline_mode_reports_configured(self, monkeypatch):
+        """The core bug: server launched in inline mode (plugin UI host/user/
+        dbname + REDSHIFT_PASSWORD env). get_setup_status must report
+        configured=True with source='inline' — NOT a false 'not configured'
+        derived from the unused profile/keychain path. It must NOT depend on
+        the keychain at all in this mode."""
+        # Profile/keychain are EMPTY — proves inline path is independent of them.
+        monkeypatch.setattr('redshift_comment_mcp.config.read_profile',
+                            lambda name: None)
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: None)
+
+        from redshift_comment_mcp.config import ConfigurationError
+        def provider():
+            raise ConfigurationError("doesn't matter")
+        tools = RedshiftTools(
+            provider,
+            inline_status_provider=lambda: (
+                "h.example.com", 5439, "yihan.chang", True, "dbt_pipeline"
+            ),
+        )
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+
+        assert result["configured"] is True
+        assert result["source"] == "inline"
+        assert result["has_fields"] is True
+        assert result["has_password"] is True
+        assert result["host"] == "h.example.com"
+        assert result["user"] == "yihan.chang"
+        assert result["dbname"] == "dbt_pipeline"
+        assert "next_step" not in result
+
+    def test_get_setup_status_inline_mode_missing_password(self, monkeypatch):
+        """Inline host/user/dbname present but no password (REDSHIFT_PASSWORD
+        unset / blank) → configured=False, source='inline', and next_step
+        points at the env var, NOT at setup_via_dialog (wrong mechanism)."""
+        monkeypatch.setattr('redshift_comment_mcp.config.read_profile',
+                            lambda name: None)
+        monkeypatch.setattr('redshift_comment_mcp.config.get_password',
+                            lambda name: None)
+
+        from redshift_comment_mcp.config import ConfigurationError
+        def provider():
+            raise ConfigurationError("doesn't matter")
+        tools = RedshiftTools(
+            provider,
+            inline_status_provider=lambda: (
+                "h.example.com", 5439, "alice", False, "analytics"
+            ),
+        )
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+
+        assert result["configured"] is False
+        assert result["source"] == "inline"
+        assert result["has_fields"] is True
+        assert result["has_password"] is False
+        assert "REDSHIFT_PASSWORD" in result["next_step"]
