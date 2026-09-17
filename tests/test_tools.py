@@ -1596,8 +1596,12 @@ class TestSetupViaDialogTool:
         assert set_pw_calls == [('prod', 'dialog-secret')]
 
     def test_setup_via_dialog_dialog_cancelled_status(self, monkeypatch):
-        """User clicked Cancel → profile fields are still written (recoverable
-        state) but no password is set."""
+        """User clicked Cancel → neither store is touched.
+
+        The password is collected before anything is persisted, so a cancel
+        leaves config.toml and the keychain exactly as they were. (Before
+        the write-ordering fix, fields were written first and a cancel left
+        the new host paired with the old keychain password.)"""
         write_calls = []
         set_pw_calls = []
         monkeypatch.setattr(
@@ -1619,7 +1623,7 @@ class TestSetupViaDialogTool:
         result = setup_via_dialog(host='h', user='u', dbname='d')
 
         assert result["status"] == "dialog_cancelled"
-        assert len(write_calls) == 1  # fields were written
+        assert len(write_calls) == 0  # fields were NOT written
         assert len(set_pw_calls) == 0  # password was NOT written
 
     def test_setup_via_dialog_dialog_unavailable_hints_stdin(self, monkeypatch):
@@ -1670,8 +1674,8 @@ class TestSetupViaDialogTool:
         result = setup_via_dialog(host='h', user='u', dbname='d')
 
         assert result["status"] == "permission_denied"
-        # Profile fields saved (recoverable state — same as cancelled)
-        assert len(write_calls) == 1
+        # Nothing persisted (same as cancelled — the password never arrived)
+        assert len(write_calls) == 0
         # Password NOT written
         assert len(set_pw_calls) == 0
         # Message must include the macOS-specific recovery path
@@ -1712,8 +1716,8 @@ class TestSetupViaDialogTool:
 
     def test_setup_via_dialog_platform_unsupported_returns_status(self, monkeypatch):
         """Platforms without osascript/zenity wiring (e.g. Windows) get the
-        unsupported branch. Profile fields are still saved so the user can
-        re-key with --stdin later."""
+        unsupported branch, and nothing is persisted — the message points at
+        the CLI pair that writes both stores instead."""
         write_calls = []
         monkeypatch.setattr(
             'redshift_comment_mcp.config.write_profile',
@@ -1732,7 +1736,7 @@ class TestSetupViaDialogTool:
         assert result["status"] == "platform_unsupported"
         assert "platform" in result  # carries the platform name for debugging
         assert "--stdin" in result["message"]
-        assert len(write_calls) == 1  # fields were saved even though password wasn't
+        assert len(write_calls) == 0  # nothing was written — no password arrived
 
     def test_setup_via_dialog_empty_password_status(self, monkeypatch):
         """Dialog returned (\"\", \"ok\") — weird state where the user clicked
@@ -1761,10 +1765,18 @@ class TestSetupViaDialogTool:
         assert len(set_pw_calls) == 0  # password was NOT written to keychain
 
     def test_setup_via_dialog_write_profile_failed_returns_error(self, monkeypatch):
-        """write_profile raises (e.g. config dir not writable) → tool exits
-        with a clear error BEFORE touching the dialog. Defensive: catches
-        disk-permission issues without prompting the user for password
-        for nothing.
+        """write_profile raises (e.g. config dir not writable) → tool returns
+        write_profile_failed.
+
+        Ordering note: this error is now reached only AFTER the password
+        dialog has run. write_profile used to go first, which meant a
+        cancelled or unavailable dialog left config.toml pointing at the new
+        host while the keychain still held the previous password — a profile
+        that reads as `configured` but has never worked. Collecting the
+        password first removes that half-written state; the cost is that an
+        unwritable config directory is discovered one dialog later, which is
+        the cheaper of the two failures. The response shape below is
+        unchanged by that move.
 
         Per CWE-209 (round-5 polish): the raw str(e) MUST NOT appear in
         the response message — the exception class name IS exposed (as
@@ -1775,11 +1787,19 @@ class TestSetupViaDialogTool:
             # Simulate an exception whose str() contains sensitive context
             raise PermissionError(secret_marker)
         monkeypatch.setattr('redshift_comment_mcp.config.write_profile', failing_write)
-        # Dialog should not even be called — assert via tripwire:
+        # Dialog runs first now — tripwire records that it did, and that the
+        # write attempt happened downstream of it.
         dialog_calls = []
         monkeypatch.setattr(
             'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
             lambda profile: dialog_calls.append(profile) or ("x", "ok"),
+        )
+        # Keychain tripwire: a failed field write must not leave a password
+        # behind for a profile that has no fields.
+        set_pw_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            lambda name, pw: set_pw_calls.append((name, pw)),
         )
 
         tools = self._make_tools()
@@ -1798,7 +1818,10 @@ class TestSetupViaDialogTool:
         )
         # ...but should still be agent-actionable
         assert "config" in result["message"].lower() or "filesystem" in result["message"].lower()
-        assert dialog_calls == []  # tripwire: dialog was NOT invoked
+        # Ordering tripwire: the dialog ran first, exactly once.
+        assert dialog_calls == ['default']
+        # And the collected password was not stored for a fieldless profile.
+        assert set_pw_calls == []
 
     def test_setup_via_dialog_keychain_write_failed_returns_error(self, monkeypatch):
         """set_password raises (e.g. keychain locked / access denied) AFTER
@@ -1927,6 +1950,207 @@ class TestSetupViaDialogTool:
             "instructions= must name the not_configured error code so the "
             "agent can pattern-match it"
         )
+
+
+class TestSetupViaDialogPersistsNothingWithoutPassword:
+    """Write-ordering safety: a password-step failure must leave BOTH stores
+    byte-for-byte as they were.
+
+    Pre-change, `write_profile` ran before the dialog opened, so any of the
+    five password-step failures left config.toml pointing at the newly
+    supplied host while the OS keychain still held the PREVIOUS profile's
+    still-valid password. `get_setup_status` then reported
+    ``configured: true`` for a credential pair that had never existed
+    together — a silent half-written profile. These tests exercise the REAL
+    `config.write_profile` / `config.set_password` against a tmp
+    XDG_CONFIG_HOME and an in-memory keychain, so they assert persisted
+    bytes rather than call counts.
+    """
+
+    # The five password-step failures, as (dialog return value, expected
+    # response status). Four are reason-keyed; the fifth is keyed by the
+    # password being empty despite an "ok" reason.
+    FAILURE_CASES = [
+        ((None, "cancelled"), "dialog_cancelled"),
+        ((None, "permission_denied"), "permission_denied"),
+        ((None, "unavailable"), "dialog_unavailable"),
+        ((None, "unsupported"), "platform_unsupported"),
+        (("", "ok"), "empty_password"),
+    ]
+
+    @pytest.fixture
+    def populated_stores(self, tmp_path, monkeypatch):
+        """A REAL config.toml under a tmp XDG root plus an in-memory keychain,
+        both pre-populated with a complete, working profile named 'prod'.
+
+        Yields ``(config_path, keychain_storage)`` so a test can snapshot the
+        exact bytes / entries before the call and compare after.
+        """
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+        storage: dict = {}
+        import keyring as _kr
+        monkeypatch.setattr(
+            _kr, "set_password",
+            lambda service, user, password: storage.__setitem__((service, user), password),
+        )
+        monkeypatch.setattr(
+            _kr, "get_password",
+            lambda service, user: storage.get((service, user)),
+        )
+
+        from redshift_comment_mcp import config as cfg
+        cfg.write_profile(
+            "prod", host="old.example.com", port=5439,
+            user="olduser", dbname="olddb",
+        )
+        cfg.set_password("prod", "the-still-valid-old-password")
+        yield cfg.config_path(), storage
+
+    def _make_tools(self):
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def provider():
+            raise ConfigurationError("not yet")
+        return RedshiftTools(provider)
+
+    @pytest.mark.parametrize(
+        "dialog_return,expected_status",
+        FAILURE_CASES,
+        ids=[status for _, status in FAILURE_CASES],
+    )
+    def test_password_step_failure_leaves_config_toml_byte_identical(
+        self, monkeypatch, populated_stores, dialog_return, expected_status
+    ):
+        """A1: after a failed password step, config.toml is byte-identical.
+
+        The caller-supplied host differs from the stored one, so any write
+        at all shows up as a byte difference.
+        """
+        config_path, _storage = populated_stores
+        before = config_path.read_bytes()
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: dialog_return,
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='prod', port=5440,
+        )
+
+        assert result["status"] == expected_status, f"got: {result}"
+        assert config_path.read_bytes() == before, (
+            f"{expected_status}: config.toml was modified even though no "
+            f"password was ever collected — half-written profile regression"
+        )
+
+    @pytest.mark.parametrize(
+        "dialog_return,expected_status",
+        FAILURE_CASES,
+        ids=[status for _, status in FAILURE_CASES],
+    )
+    def test_password_step_failure_leaves_keychain_entry_unchanged(
+        self, monkeypatch, populated_stores, dialog_return, expected_status
+    ):
+        """A2: after a failed password step, the keychain entry is unchanged.
+
+        Pairs with the config.toml assertion above: the danger is precisely
+        the SKEW between the two stores, so both directions need pinning.
+        """
+        _config_path, storage = populated_stores
+        before = dict(storage)
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: dialog_return,
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='prod', port=5440,
+        )
+
+        assert result["status"] == expected_status, f"got: {result}"
+        assert storage == before, (
+            f"{expected_status}: keychain entry changed even though no "
+            f"password was collected"
+        )
+
+    def test_successful_call_writes_both_stores(self, monkeypatch, populated_stores):
+        """Negative direction: the guard must not block the happy path.
+
+        A test that only asserts "nothing was written" would pass against a
+        tool that never writes anything, so pin the write as well.
+        """
+        config_path, storage = populated_stores
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("brand-new-password", "ok"),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *args, **kw: (True, None),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='prod', port=5440,
+        )
+
+        assert result["status"] == "configured", f"got: {result}"
+
+        from redshift_comment_mcp import config as cfg
+        written = cfg.read_profile("prod")
+        assert written == {
+            "host": "new.example.com", "port": 5440,
+            "user": "newuser", "dbname": "newdb",
+        }, f"config.toml not updated on the success path: {written}"
+        assert cfg.get_password("prod") == "brand-new-password", (
+            "keychain not updated on the success path"
+        )
+        # Sanity: the file really is the one we snapshotted.
+        assert config_path.exists()
+        assert len(storage) == 1
+
+    def test_missing_field_still_rejected_before_the_dialog(
+        self, monkeypatch, populated_stores
+    ):
+        """Field validation keeps its place at the very front of the flow:
+        it must still short-circuit BEFORE the dialog opens, so an agent that
+        forgot a field never makes the user type a password for nothing."""
+        config_path, storage = populated_stores
+        before_bytes = config_path.read_bytes()
+        before_storage = dict(storage)
+
+        dialog_calls = []
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: dialog_calls.append(profile) or ("pw", "ok"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='', user='u', dbname='d', profile='prod')
+
+        assert result["error"] == "missing_field"
+        assert dialog_calls == [], (
+            "missing_field must be rejected before the password dialog opens"
+        )
+        assert config_path.read_bytes() == before_bytes
+        assert storage == before_storage
 
 
 class TestDegradedModeContractAdditional:

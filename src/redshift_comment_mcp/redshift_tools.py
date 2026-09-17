@@ -73,6 +73,13 @@ def _guarded(tool_fn):
 # setup_via_dialog tool body stays focused on orchestration; each builder
 # is self-contained, has only ``profile`` + ``platform`` inputs, and is
 # unit-testable independently of the larger tool flow.
+#
+# All five describe a state in which NOTHING was persisted: setup_via_dialog
+# collects the password before it touches config.toml or the keychain, so a
+# failure here leaves both stores exactly as they were. The recovery hint is
+# therefore the `set-fields` + `set-password --stdin` CLI pair (which writes
+# both), not `set-password` alone — that would leave a password with no
+# fields behind it.
 
 
 def _build_dialog_cancelled_response(profile: str, **_kw) -> Dict[str, Any]:
@@ -80,9 +87,10 @@ def _build_dialog_cancelled_response(profile: str, **_kw) -> Dict[str, Any]:
         "status": "dialog_cancelled",
         "profile": profile,
         "message": (
-            f"Password dialog was cancelled. Profile '{profile}' is "
-            f"INCOMPLETE — DB tools will continue to return not_configured "
-            f"until a password is set. Ask the user explicitly whether they "
+            f"Password dialog was cancelled. Nothing was written — profile "
+            f"'{profile}' is exactly as it was before this call, and DB "
+            f"tools will behave exactly as they did before it. Ask the user "
+            f"explicitly whether they "
             f"intended to cancel (and abandon Redshift setup) or hit Cancel "
             f"by accident; default to retrying setup_via_dialog if no clear "
             f"cancellation signal was given."
@@ -99,16 +107,18 @@ def _build_permission_denied_response(profile: str, platform: str, **_kw) -> Dic
             f"macOS blocked the password dialog. The app running the MCP "
             f"server (Claude Desktop / Cursor / etc.) doesn't have "
             f"`Automation > System Events` permission, so the dialog never "
-            f"appeared — this is NOT a user cancellation. Profile "
-            f"'{profile}' fields are saved but password is not set. Tell "
+            f"appeared — this is NOT a user cancellation. Nothing was "
+            f"written: profile '{profile}' is exactly as it was before "
+            f"this call. Tell "
             f"the user: open System Settings → Privacy & Security → "
             f"Automation → find the app entry → enable `System Events`, "
             f"then call setup_via_dialog again. If no permission entry "
             f"exists yet, run `tccutil reset AppleEvents` from a terminal "
             f"to force a fresh permission prompt on next attempt. Fallback: "
-            f"have the user pipe the password via "
-            f"`redshift-comment-mcp set-password --profile {profile} "
-            f"--stdin` from a terminal."
+            f"have the user run `redshift-comment-mcp set-fields --profile "
+            f"{profile} --host H --port P --user U --dbname D` and then pipe "
+            f"the password via `redshift-comment-mcp set-password --profile "
+            f"{profile} --stdin`, both from a terminal."
         ),
     }
 
@@ -120,11 +130,14 @@ def _build_dialog_unavailable_response(profile: str, platform: str, **_kw) -> Di
         "platform": platform,
         "message": (
             f"No supported dialog tool found on this host (macOS needs "
-            f"`osascript`, Linux needs `zenity`). Profile fields for "
-            f"'{profile}' are saved but no password is set. Tell the user "
-            f"the dialog isn't available and instruct them to run this in "
-            f"a terminal themselves: `redshift-comment-mcp set-password "
-            f"--profile {profile} --stdin` (piping the password). DO NOT "
+            f"`osascript`, Linux needs `zenity`). Nothing was written: "
+            f"profile '{profile}' is exactly as it was before this call. "
+            f"Tell the user the dialog isn't available and instruct them "
+            f"to run both of these in a terminal themselves: "
+            f"`redshift-comment-mcp set-fields --profile {profile} --host H "
+            f"--port P --user U --dbname D`, then `redshift-comment-mcp "
+            f"set-password --profile {profile} --stdin` (piping the "
+            f"password). DO NOT "
             f"pass the password as a tool argument or shell argument — "
             f"that leaks it to chat / process args / shell history."
         ),
@@ -138,11 +151,13 @@ def _build_platform_unsupported_response(profile: str, platform: str, **_kw) -> 
         "platform": platform,
         "message": (
             f"Password dialog is not supported on platform '{platform}' "
-            f"(only macOS and Linux are wired). Profile fields for "
-            f"'{profile}' are saved but no password is set. Tell the user "
-            f"to set the password from their terminal: "
-            f"`redshift-comment-mcp set-password --profile {profile} "
-            f"--stdin` (pipe the password via stdin)."
+            f"(only macOS and Linux are wired). Nothing was written: "
+            f"profile '{profile}' is exactly as it was before this call. "
+            f"Tell the user to configure it from their terminal instead: "
+            f"`redshift-comment-mcp set-fields --profile {profile} --host H "
+            f"--port P --user U --dbname D`, then `redshift-comment-mcp "
+            f"set-password --profile {profile} --stdin` (pipe the password "
+            f"via stdin)."
         ),
     }
 
@@ -154,7 +169,8 @@ def _build_empty_password_response(profile: str, **_kw) -> Dict[str, Any]:
         "message": (
             f"Password dialog returned an empty string — likely the user "
             f"clicked OK without typing, or the dialog failed to render. "
-            f"Profile '{profile}' is INCOMPLETE. Ask the user to retry "
+            f"Nothing was written: profile '{profile}' is exactly as it "
+            f"was before this call. Ask the user to retry "
             f"and call setup_via_dialog again with the same arguments."
         ),
     }
@@ -1296,12 +1312,19 @@ the only chat-leak-free paths.
               - ``{"status": "configured", ...}`` — profile written, password in
                 keychain. Lazy resolve picks it up on next DB tool call; no
                 restart needed.
-              - ``{"status": "dialog_cancelled" | "dialog_unavailable" |
-                   "platform_unsupported" | "empty_password", ...}`` — profile
-                fields saved but no password set; the message field tells the
+              - ``{"status": "dialog_cancelled" | "permission_denied" |
+                   "dialog_unavailable" | "platform_unsupported" |
+                   "empty_password", ...}`` — the password step failed, so
+                NOTHING was written: config.toml and the keychain are exactly
+                as they were before the call. The message field tells the
                 agent / user what to do next (often: run
-                ``redshift-comment-mcp set-password --profile X --stdin`` from
-                a terminal).
+                ``redshift-comment-mcp set-fields`` + ``set-password
+                --profile X --stdin`` from a terminal).
+
+            Write ordering: the password is collected FIRST; config.toml and
+            the keychain are only touched once one is in hand. That keeps a
+            failed setup from leaving a profile whose fields point at the new
+            cluster while the keychain still holds the old password.
 
             For headless environments without a GUI, prefer the CLI pair
             ``set-fields`` + ``set-password --stdin`` instead.
@@ -1322,6 +1345,38 @@ the only chat-leak-free paths.
                     "exception_class": "ValidationError",
                     "message": "host, user, and dbname are all required.",
                 }
+
+            # Collect the password BEFORE touching either store.
+            #
+            # Write ordering is a security property here, not a style
+            # preference. `write_profile` replaces the whole profile dict
+            # (config.py) while the keychain entry is only overwritten on a
+            # successful `set_password`. So writing fields first and failing
+            # at the password step left config.toml pointing at the NEW host
+            # while the keychain still held the PREVIOUS profile's
+            # still-valid password — `get_setup_status` reported
+            # `configured: true` for a credential pair that never existed
+            # together, and the next DB tool authenticated the old password
+            # against the new host.
+            #
+            # Deliberate trade-off: `write_profile_failed` (unwritable config
+            # dir, disk full) is now only reachable AFTER the user has typed
+            # a password, so an unwritable config directory costs them one
+            # wasted dialog. Not leaving a half-written profile behind
+            # outranks failing fast on that much rarer filesystem case.
+            password, reason = _collect_password_via_dialog(profile)
+
+            # 4 reason-keyed failure paths dispatch to module-level builders
+            # (see _DIALOG_FAILURE_BUILDERS). The 5th case ("ok" reason but
+            # empty password — user clicked OK without typing) is checked
+            # separately because it's keyed by password emptiness, not reason.
+            # All five return before any store is touched.
+            if reason in _DIALOG_FAILURE_BUILDERS:
+                return _DIALOG_FAILURE_BUILDERS[reason](
+                    profile=profile, platform=_sys.platform,
+                )
+            if not password:
+                return _build_empty_password_response(profile=profile)
 
             try:
                 cfg.write_profile(profile, host=host, port=port, user=user, dbname=dbname)
@@ -1346,19 +1401,6 @@ the only chat-leak-free paths.
                         f"not writable, disk full, or filesystem error."
                     ),
                 }
-
-            password, reason = _collect_password_via_dialog(profile)
-
-            # 4 reason-keyed failure paths dispatch to module-level builders
-            # (see _DIALOG_FAILURE_BUILDERS). The 5th case ("ok" reason but
-            # empty password — user clicked OK without typing) is checked
-            # separately because it's keyed by password emptiness, not reason.
-            if reason in _DIALOG_FAILURE_BUILDERS:
-                return _DIALOG_FAILURE_BUILDERS[reason](
-                    profile=profile, platform=_sys.platform,
-                )
-            if not password:
-                return _build_empty_password_response(profile=profile)
 
             try:
                 cfg.set_password(profile, password)
