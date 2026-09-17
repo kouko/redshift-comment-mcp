@@ -12,9 +12,12 @@ hand-written comments, an unusual key order, several profiles, a non-ASCII
 value, a CRLF line ending and a trailing blank line. Any rewrite at all shows
 up as a byte difference.
 
-It then turns the same hostile file on the SUCCESS path, where a rewrite does
-happen, to record exactly what the user loses from the profiles they did not
-ask to touch.
+A companion case once turned the same hostile file on the SUCCESS path, where a
+rewrite does happen, to record what the user loses from the profiles they did
+not ask to touch. It is red, and it is red for ``write_profile``'s
+serialisation, which this change does not touch, so it was re-filed unchanged to
+docs/loom/2026-09-17-credential-resolution-hardening/evidence/probes/probe_config_toml_byte_identity.py
+as finding F. It stays red there until that change lands.
 """
 from __future__ import annotations
 
@@ -29,7 +32,6 @@ from _probe_support import (  # noqa: E402
     install_fake_keychain,
     isolate_config,
     make_tools,
-    stub_connection,
     stub_dialog,
 )
 
@@ -134,49 +136,3 @@ def test_setupviadialog_passwordstepfails_leaveshandwrittentomlmodeunchanged(
 
     assert result["status"] == "dialog_cancelled"
     assert config_path.stat().st_mode == before_mode
-
-
-def test_setupviadialog_succeeds_preservesuntouchedprofilesverbatim(
-    monkeypatch, hostile_config
-):
-    """Collateral damage on the success path: what happens to 'staging'?
-
-    The caller asked to configure 'prod'. Everything belonging to any other
-    profile — and every byte the user hand-wrote — should survive a call that
-    names a different profile.
-    """
-    config_path, _keychain = hostile_config
-    before_text = config_path.read_text(encoding="utf-8")
-
-    stub_dialog(monkeypatch, ("brand-new-password", "ok"))
-    stub_connection(monkeypatch, (True, None))
-    setup_via_dialog = get_tool_fn(make_tools(), "setup_via_dialog")
-
-    result = setup_via_dialog(
-        host="new.example.com", user="newuser", dbname="newdb",
-        profile="prod", port=5440,
-    )
-    assert result["status"] == "configured", f"got: {result}"
-
-    after_text = config_path.read_text(encoding="utf-8")
-
-    # The values of the untouched profile must still be readable.
-    from redshift_comment_mcp import config as cfg
-
-    assert cfg.read_profile("staging") == {
-        "host": "staging.example.com", "port": 5439,
-        "user": "bob", "dbname": "staging_db",
-    }
-
-    lost = [
-        label for label, fragment in [
-            ("the staging cluster comment", "# the staging cluster"),
-            ("the file header comment", "do not reformat"),
-            ("prod's extra sslmode key", "sslmode"),
-        ]
-        if fragment in before_text and fragment not in after_text
-    ]
-    assert not lost, (
-        "a successful call to configure 'prod' silently destroyed content it "
-        f"was not asked to touch: {lost}. after={after_text!r}"
-    )

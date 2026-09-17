@@ -108,15 +108,39 @@ def test_setupviadialog_keychainwritefails_leavesnewhostpairedwitholdpassword(
 
 # --- prose matcher for the one message claim this probe pins -----------------
 #
-# Four failure messages were rewritten in this change to promise "Nothing was
-# written". The keychain branch must NOT inherit that promise, because
-# write_profile ran a moment earlier — so the claim worth pinning is the
-# affirmative one: the fields WERE saved. A bare substring search would accept
-# "the fields were not saved", so the matcher below requires an affirmative
-# verb before the pinned literal and rejects any negation in the same clause.
+# HISTORY. This block used to pin the OPPOSITE claim: that keychain_write_failed
+# affirmatively told the agent the fields "were saved", because write_profile
+# had run a moment earlier and nothing else warned the user that config.toml had
+# been repointed at the new cluster. Finding A's fix removed the thing that was
+# being warned about — the branch now snapshots config.toml before write_profile
+# and restores those exact bytes when set_password raises, so on the restored
+# path nothing is repointed and "the fields were saved" would be FALSE.
+#
+# The shipped message happens to still satisfy the old matcher, via the clause
+# "rolled back to exactly what was saved before this call" — "saved" there
+# refers to the PREVIOUS contents, not to anything this call wrote. That is the
+# letter of the old test with none of its intent, which is precisely the kind of
+# accidental pass a probe must not coast on. So the claim worth pinning flipped,
+# and the pair of tests below now pins the claim that matches the fix: the
+# stores were left untouched, and no repointed profile is claimed.
+#
+# A bare substring search would accept "the stores were not left untouched", so
+# the matcher requires an affirmative verb before the pinned literal and rejects
+# any negation in the same clause.
 
 NEGATIONS = ("not", "never", "no", "nothing", "without", "n't")
-AFFIRMATIVE_VERBS = ("were", "was", "have been", "has been")
+AFFIRMATIVE_VERBS = ("were", "was", "are", "is", "have been", "has been")
+
+
+def _contains_token(text: str, token: str) -> bool:
+    """Whole-word containment, so "is" does not match inside "this".
+
+    Substring matching here would make the affirmative test almost free to
+    satisfy — "before this call" alone would supply an "is" — which is how a
+    matcher quietly degrades into the plain substring search it exists to
+    avoid.
+    """
+    return f" {token} " in f" {text} "
 
 
 def _clauses(text: str) -> list[str]:
@@ -142,43 +166,73 @@ def claims_affirmatively(text: str, literal: str) -> bool:
         if where == -1:
             continue
         before = clause[:where]
-        if not any(verb in before for verb in AFFIRMATIVE_VERBS):
+        if not any(_contains_token(before, verb) for verb in AFFIRMATIVE_VERBS):
             continue
-        if any(f" {token} " in f" {clause} " for token in NEGATIONS):
+        if any(_contains_token(clause, token) for token in NEGATIONS):
             continue
         return True
     return False
 
 
 def test_prosematcher_affirmativeclausebesideanegatedone_isaccepted():
-    """Self-test: the shipped message shape must register as an affirmative."""
+    """Self-test: the shipped message shape must register as an affirmative.
+
+    The negation lives in a later clause (" but ... was NOT stored"), and a
+    clause boundary must stop it vetoing the affirmative claim in front of it.
+    """
     assert claims_affirmatively(
-        "Profile 'prod' fields were saved to config.toml but the password "
-        "was NOT stored.",
-        "saved",
+        "Profile 'prod' was rolled back, so both stores are untouched but the "
+        "password was NOT stored.",
+        "untouched",
     )
 
 
 def test_prosematcher_negatedclaim_isrejected():
-    """Self-test: the matcher must not be a plain substring search."""
+    """Self-test: the matcher must not be a plain substring search.
+
+    The literal is present and an affirmative verb precedes it, so only the
+    in-clause negation check can reject this one.
+    """
     assert not claims_affirmatively(
-        "Nothing was written: profile 'prod' fields were not saved to "
-        "config.toml.",
-        "saved",
+        "The stores were not left untouched; check config.toml.",
+        "untouched",
     )
 
 
-def test_setupviadialog_keychainwritefails_stillclaimsthefieldsweresaved(
+def test_prosematcher_verbhiddeninsideanotherword_doesnotcount():
+    """Self-test: "is" inside "this" must not pass as an affirmative verb.
+
+    Without whole-word matching this sentence asserts nothing yet registers as
+    a claim, which would let the pins above pass on prose that never makes the
+    claim they exist to pin.
+    """
+    assert not claims_affirmatively(
+        "Before this call the fields untouched.",
+        "untouched",
+    )
+
+
+def test_setupviadialog_keychainwritefailsandrollbacksucceeds_saysstoresareuntouched(
     monkeypatch, working_profile
 ):
-    """The keychain message must stay honest about the write that did land.
+    """The message must match what the rollback actually achieved.
 
-    Its four siblings now promise the stores are untouched. If a later copy
-    edit gives this one the same sentence, the agent stops warning the user
-    that config.toml was already repointed at the new cluster — the half-write
-    becomes silent as well as real.
+    This replaces an assertion that finding A's fix made obsolete. That
+    assertion demanded the message affirmatively claim the fields "were saved",
+    because before the fix write_profile had already repointed config.toml at
+    the new cluster and nothing else warned the user. The fix restores the
+    snapshotted bytes on this branch, so nothing is repointed and that claim
+    would now be false — the shipped message satisfies the old matcher only by
+    accident, through "rolled back to exactly what was saved before this call",
+    where "saved" describes the PREVIOUS contents.
+
+    What is true and worth pinning instead: when the rollback succeeds, the
+    message tells the agent both stores were left untouched, and it does not
+    claim a repointed profile. An agent that read a repointing claim here would
+    send the user to clean up a config.toml that is already correct.
     """
-    _config_path, _keychain = working_profile
+    config_path, keychain = working_profile
+    before_bytes = config_path.read_bytes()
     stub_dialog(monkeypatch, ("a-brand-new-password", "ok"))
 
     def refuse(name, pw):
@@ -190,18 +244,82 @@ def test_setupviadialog_keychainwritefails_stillclaimsthefieldsweresaved(
     result = setup_via_dialog(
         host=NEW_HOST, user="newuser", dbname="newdb", profile="prod", port=5440
     )
+    assert result["error"] == "keychain_write_failed", f"got: {result}"
+
+    # Ground the prose in the state it describes: the claim is only worth
+    # pinning if it is true, so assert the stores first.
+    assert config_path.read_bytes() == before_bytes, "config.toml was not restored"
+    assert keychain[("redshift-comment-mcp", "prod")] == OLD_PASSWORD
 
     message = result["message"]
-    assert claims_affirmatively(message, "saved"), (
-        "keychain_write_failed no longer tells the agent the fields were "
-        f"saved, so nothing warns the user that config.toml was repointed. "
-        f"Message: {message!r}"
+    assert claims_affirmatively(message, "untouched"), (
+        "the rollback succeeded, but keychain_write_failed does not tell the "
+        "agent the stores were left untouched — so the agent cannot "
+        f"distinguish this from the un-rolled-back branch. Message: {message!r}"
     )
-    # Absence check, so no affirmative-verb machinery applies: the phrase
-    # itself carries the negation, and any occurrence of it is the defect.
-    assert "nothing was written" not in message.lower(), (
-        "keychain_write_failed inherited the 'nothing was written' promise, "
-        f"which is false on this branch. Message: {message!r}"
+    # The mirror of the claim above: no affirmative statement that the fields
+    # landed in config.toml, because on this branch they did not survive.
+    for stale_claim in ("repointed", "point at the new cluster"):
+        assert not claims_affirmatively(message, stale_claim), (
+            f"keychain_write_failed claims {stale_claim!r} on a branch whose "
+            f"rollback succeeded. Message: {message!r}"
+        )
+
+
+def test_setupviadialog_keychainwritefailsandrollbackfails_warnsinsteadofclaimingclean(
+    monkeypatch, working_profile
+):
+    """The paired direction, so a hard-coded "untouched" is caught too.
+
+    ``_restore_config_bytes`` is guarded and returns False when the restore
+    itself fails (read-only filesystem, vanished directory). On that branch the
+    fields really are left pointing at the new cluster while the keychain holds
+    the previous password, and the message must say so rather than inherit the
+    reassurance from its sibling branch.
+    """
+    config_path, _keychain = working_profile
+    stub_dialog(monkeypatch, ("a-brand-new-password", "ok"))
+
+    def refuse(name, pw):
+        raise RuntimeError("keychain is locked")
+
+    monkeypatch.setattr("redshift_comment_mcp.config.set_password", refuse)
+
+    snapshot = config_path.read_bytes()
+    real_write_bytes = Path.write_bytes
+
+    def fail_the_restore(self, data):
+        """Fail only the restoring write, so write_profile still lands."""
+        if str(self) == str(config_path) and data == snapshot:
+            raise OSError("read-only file system")
+        return real_write_bytes(self, data)
+
+    monkeypatch.setattr(Path, "write_bytes", fail_the_restore)
+
+    setup_via_dialog = get_tool_fn(make_tools(), "setup_via_dialog")
+    result = setup_via_dialog(
+        host=NEW_HOST, user="newuser", dbname="newdb", profile="prod", port=5440
+    )
+    assert result["error"] == "keychain_write_failed", f"got: {result}"
+
+    from redshift_comment_mcp import config as cfg
+
+    assert cfg.read_profile("prod")["host"] == NEW_HOST, (
+        "the restore was supposed to have failed — this probe is no longer "
+        "exercising the un-rolled-back branch"
+    )
+
+    message = result["message"]
+    assert not claims_affirmatively(message, "untouched"), (
+        "the rollback FAILED, but keychain_write_failed still tells the agent "
+        f"the stores are untouched. config.toml now points at {NEW_HOST!r} "
+        f"while the keychain holds the previous password. Message: {message!r}"
+    )
+    # Absence-of-negation machinery does not apply here: this phrase carries
+    # its own negation, and its presence is the warning being pinned.
+    assert "not be rolled back" in message.lower(), (
+        "the un-rolled-back branch no longer warns that config.toml was left "
+        f"repointed. Message: {message!r}"
     )
 
 

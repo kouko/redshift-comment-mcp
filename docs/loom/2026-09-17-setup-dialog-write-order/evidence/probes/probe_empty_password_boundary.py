@@ -7,9 +7,14 @@ write or skips one.
 
 ``_collect_password_via_dialog`` is typed ``tuple[str | None, str]``, so the
 values that can reach the gate are: a non-empty string, the empty string, and
-None. The probe walks each, plus the values a caller would expect to behave
-like "empty" but that Python's truthiness does not: a single space, a tab, a
-newline, and the string "0".
+None. The probe walks each, plus "0" — the classic falsy-LOOKING but legal
+password that must survive the gate.
+
+The whitespace-only cases (" ", "\\t", "\\n") once lived here too. They are red,
+and they are red for blank-password semantics this change's intent puts out of
+scope, so they were re-filed unchanged to
+docs/loom/2026-09-17-credential-resolution-hardening/evidence/probes/probe_empty_password_boundary.py
+as finding E. They stay red there until that change lands.
 """
 from __future__ import annotations
 
@@ -68,38 +73,6 @@ def test_setupviadialog_falsypasswordwithokreason_writesneitherstore(
         f"config.toml created for an empty password: {config_path.read_text()}"
     )
     assert keychain == {}
-
-
-@pytest.mark.parametrize(
-    "password",
-    [" ", "\t", "\n", "   \t  "],
-    ids=["single-space", "tab", "newline", "mixed-whitespace"],
-)
-def test_setupviadialog_whitespaceonlypassword_isstoredverbatimasarealpassword(
-    monkeypatch, clean_stores, password
-):
-    """Whitespace is truthy, so it sails past the gate and gets persisted.
-
-    A user who holds down the space bar, or a dialog that returns padding,
-    produces a profile the tool declares ``configured`` with a password no
-    cluster will accept. The probe asserts the boundary treats
-    whitespace-only input as absent, which is what "the user did not type a
-    password" means to the person at the dialog.
-    """
-    config_path, keychain = clean_stores
-    stub_dialog(monkeypatch, (password, "ok"))
-
-    setup_via_dialog = get_tool_fn(make_tools(), "setup_via_dialog")
-    result = setup_via_dialog(
-        host="h.example.com", user="alice", dbname="analytics",
-        profile="prod", port=5439,
-    )
-
-    assert result["status"] == "empty_password", (
-        f"a whitespace-only password ({password!r}) was accepted as real: "
-        f"status={result.get('status')}, config written="
-        f"{config_path.exists()}, keychain={ {k: '***' for k in keychain} }"
-    )
 
 
 def test_setupviadialog_passwordstringzero_isstoredasatypedpassword(
