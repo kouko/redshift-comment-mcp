@@ -85,9 +85,9 @@ Run the right tier(s) for the change before merging:
 
 | Change touches | Run |
 |---|---|
-| Pure code logic | `uv run pytest tests/ --ignore=tests/integration --ignore=tests/e2e` |
-| Anything that hits Redshift catalog SQL or `wr.redshift.read_sql_query` | also `REDSHIFT_INTEGRATION=1 uv run pytest tests/integration/` |
-| MCP server `instructions`, tool registration, response field shape, FastMCP serialization | also `REDSHIFT_INTEGRATION=1 uv run pytest tests/e2e/` |
+| Pure code logic | `uv run --extra dev pytest tests/ --ignore=tests/integration --ignore=tests/e2e` |
+| Anything that hits Redshift catalog SQL or `wr.redshift.read_sql_query` | also `REDSHIFT_INTEGRATION=1 uv run --extra dev pytest tests/integration/` |
+| MCP server `instructions`, tool registration, response field shape, FastMCP serialization | also `REDSHIFT_INTEGRATION=1 uv run --extra dev pytest tests/e2e/` |
 
 E2E spawns a subprocess per test — ~5s for the four tests. Don't add
 breadth tests there; that's the integration tier's job.

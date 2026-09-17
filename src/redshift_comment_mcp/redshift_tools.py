@@ -1,9 +1,11 @@
 import functools
 import logging
 import re
+import shlex
+import stat as _stat
 import awswrangler as wr
 from fastmcp import FastMCP
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 from .config import ConfigurationError
 from .connection import RedshiftConnectionConfig
 
@@ -71,8 +73,28 @@ def _guarded(tool_fn):
 # outcomes (cancelled / permission_denied / dialog_unavailable / platform_
 # unsupported / empty_password). Extracted to module level so the
 # setup_via_dialog tool body stays focused on orchestration; each builder
-# is self-contained, has only ``profile`` + ``platform`` inputs, and is
-# unit-testable independently of the larger tool flow.
+# is self-contained, takes only the call's own arguments (``profile`` /
+# ``platform`` / the four connection fields) as inputs, and is unit-testable
+# independently of the larger tool flow. The three that print a `set-fields`
+# command interpolate those fields so the user can paste the line rather
+# than decode placeholders; none of them is ever handed the password.
+#
+# Every interpolated field goes through ``shlex.quote``. These messages are
+# command lines an agent is told to have a human paste into a terminal, and
+# this server's own charter makes table comments authoritative — so comment
+# text is an input channel that can influence which `host` an agent passes
+# here. Raw, a host of ``h.example.com; curl … | sh #`` turns one printed
+# line into two commands. Benign values need it just as much: a space or a
+# metacharacter in any of host / user / dbname / profile would otherwise
+# silently produce a different command. ``port`` is typed ``int`` at every
+# site that builds one of these lines, so it needs no quoting.
+#
+# All five describe a state in which NOTHING was persisted: setup_via_dialog
+# collects the password before it touches config.toml or the keychain, so a
+# failure here leaves both stores exactly as they were. The recovery hint is
+# therefore the `set-fields` + `set-password --stdin` CLI pair (which writes
+# both), not `set-password` alone — that would leave a password with no
+# fields behind it.
 
 
 def _build_dialog_cancelled_response(profile: str, **_kw) -> Dict[str, Any]:
@@ -80,9 +102,10 @@ def _build_dialog_cancelled_response(profile: str, **_kw) -> Dict[str, Any]:
         "status": "dialog_cancelled",
         "profile": profile,
         "message": (
-            f"Password dialog was cancelled. Profile '{profile}' is "
-            f"INCOMPLETE — DB tools will continue to return not_configured "
-            f"until a password is set. Ask the user explicitly whether they "
+            f"Password dialog was cancelled. Nothing was written — profile "
+            f"'{profile}' is exactly as it was before this call, and DB "
+            f"tools will behave exactly as they did before it. Ask the user "
+            f"explicitly whether they "
             f"intended to cancel (and abandon Redshift setup) or hit Cancel "
             f"by accident; default to retrying setup_via_dialog if no clear "
             f"cancellation signal was given."
@@ -90,7 +113,10 @@ def _build_dialog_cancelled_response(profile: str, **_kw) -> Dict[str, Any]:
     }
 
 
-def _build_permission_denied_response(profile: str, platform: str, **_kw) -> Dict[str, Any]:
+def _build_permission_denied_response(
+    profile: str, platform: str, host: str, port: int, user: str, dbname: str,
+    **_kw,
+) -> Dict[str, Any]:
     return {
         "status": "permission_denied",
         "profile": profile,
@@ -99,49 +125,68 @@ def _build_permission_denied_response(profile: str, platform: str, **_kw) -> Dic
             f"macOS blocked the password dialog. The app running the MCP "
             f"server (Claude Desktop / Cursor / etc.) doesn't have "
             f"`Automation > System Events` permission, so the dialog never "
-            f"appeared — this is NOT a user cancellation. Profile "
-            f"'{profile}' fields are saved but password is not set. Tell "
+            f"appeared — this is NOT a user cancellation. Nothing was "
+            f"written: profile '{profile}' is exactly as it was before "
+            f"this call. Tell "
             f"the user: open System Settings → Privacy & Security → "
             f"Automation → find the app entry → enable `System Events`, "
             f"then call setup_via_dialog again. If no permission entry "
             f"exists yet, run `tccutil reset AppleEvents` from a terminal "
             f"to force a fresh permission prompt on next attempt. Fallback: "
-            f"have the user pipe the password via "
-            f"`redshift-comment-mcp set-password --profile {profile} "
-            f"--stdin` from a terminal."
+            f"have the user run `redshift-comment-mcp set-fields --profile "
+            f"{shlex.quote(profile)} --host {shlex.quote(host)} --port {port} "
+            f"--user {shlex.quote(user)} --dbname "
+            f"{shlex.quote(dbname)}` and then pipe the password via "
+            f"`redshift-comment-mcp set-password --profile "
+            f"{shlex.quote(profile)} --stdin`, both from a terminal."
         ),
     }
 
 
-def _build_dialog_unavailable_response(profile: str, platform: str, **_kw) -> Dict[str, Any]:
+def _build_dialog_unavailable_response(
+    profile: str, platform: str, host: str, port: int, user: str, dbname: str,
+    **_kw,
+) -> Dict[str, Any]:
     return {
         "status": "dialog_unavailable",
         "profile": profile,
         "platform": platform,
         "message": (
             f"No supported dialog tool found on this host (macOS needs "
-            f"`osascript`, Linux needs `zenity`). Profile fields for "
-            f"'{profile}' are saved but no password is set. Tell the user "
-            f"the dialog isn't available and instruct them to run this in "
-            f"a terminal themselves: `redshift-comment-mcp set-password "
-            f"--profile {profile} --stdin` (piping the password). DO NOT "
+            f"`osascript`, Linux needs `zenity`). Nothing was written: "
+            f"profile '{profile}' is exactly as it was before this call. "
+            f"Tell the user the dialog isn't available and instruct them "
+            f"to run both of these in a terminal themselves: "
+            f"`redshift-comment-mcp set-fields --profile "
+            f"{shlex.quote(profile)} --host {shlex.quote(host)} --port {port} "
+            f"--user {shlex.quote(user)} --dbname {shlex.quote(dbname)}`, then "
+            f"`redshift-comment-mcp set-password --profile "
+            f"{shlex.quote(profile)} "
+            f"--stdin` (piping the password). DO NOT "
             f"pass the password as a tool argument or shell argument — "
             f"that leaks it to chat / process args / shell history."
         ),
     }
 
 
-def _build_platform_unsupported_response(profile: str, platform: str, **_kw) -> Dict[str, Any]:
+def _build_platform_unsupported_response(
+    profile: str, platform: str, host: str, port: int, user: str, dbname: str,
+    **_kw,
+) -> Dict[str, Any]:
     return {
         "status": "platform_unsupported",
         "profile": profile,
         "platform": platform,
         "message": (
             f"Password dialog is not supported on platform '{platform}' "
-            f"(only macOS and Linux are wired). Profile fields for "
-            f"'{profile}' are saved but no password is set. Tell the user "
-            f"to set the password from their terminal: "
-            f"`redshift-comment-mcp set-password --profile {profile} "
+            f"(only macOS and Linux are wired). Nothing was written: "
+            f"profile '{profile}' is exactly as it was before this call. "
+            f"Tell the user to configure it from their terminal instead: "
+            f"`redshift-comment-mcp set-fields --profile "
+            f"{shlex.quote(profile)} --host {shlex.quote(host)} --port {port} "
+            f"--user {shlex.quote(user)} --dbname {shlex.quote(dbname)}`, then "
+            f"`redshift-comment-mcp set-password --profile "
+            f"{shlex.quote(profile)} "
             f"--stdin` (pipe the password via stdin)."
         ),
     }
@@ -154,7 +199,8 @@ def _build_empty_password_response(profile: str, **_kw) -> Dict[str, Any]:
         "message": (
             f"Password dialog returned an empty string — likely the user "
             f"clicked OK without typing, or the dialog failed to render. "
-            f"Profile '{profile}' is INCOMPLETE. Ask the user to retry "
+            f"Nothing was written: profile '{profile}' is exactly as it "
+            f"was before this call. Ask the user to retry "
             f"and call setup_via_dialog again with the same arguments."
         ),
     }
@@ -169,6 +215,60 @@ _DIALOG_FAILURE_BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "unavailable": _build_dialog_unavailable_response,
     "unsupported": _build_platform_unsupported_response,
 }
+
+
+def _snapshot_config_bytes(path) -> Optional[Tuple[bytes, int]]:
+    """``(raw bytes, permission bits)`` of config.toml, or ``None`` if absent.
+
+    Raw bytes rather than the parsed profile dict: restoring them gives byte
+    identity for free, with no re-serialisation round trip that would drop
+    comments, key order or unknown keys. ``None`` records the file's absence,
+    which is a state that has to be restorable too.
+
+    The permission bits travel with the bytes because ``config.write_profile``
+    chmods config.toml to 0600 unconditionally, so a rollback that restored
+    only the bytes would silently narrow a file the user had left at, say,
+    0640 — harmless in direction, but the rollback's own message promises
+    "both stores are untouched".
+
+    Raises ``OSError`` when the file exists but cannot be read. That is
+    deliberate and must stay that way: returning ``None`` there would be
+    indistinguishable from "no config.toml", and a later restore would then
+    DELETE the user's config. The caller keeps this call inside the try that
+    owns ``write_profile``, so an unreadable config.toml aborts before
+    anything is written rather than proceeding to a state it cannot undo.
+    """
+    try:
+        return path.read_bytes(), _stat.S_IMODE(path.stat().st_mode)
+    except FileNotFoundError:
+        return None
+
+
+def _restore_config_bytes(path, snapshot: Optional[Tuple[bytes, int]]) -> bool:
+    """Put config.toml back to ``snapshot``; ``None`` means delete it again.
+
+    Returns True when the file is back to its pre-call state. Deliberately
+    NOT ``config.delete_profile``: that also deletes the keychain entry, and
+    the entry this rollback protects is the one that must stay untouched.
+    """
+    try:
+        if _snapshot_config_bytes(path) == snapshot:
+            return True
+        if snapshot is None:
+            path.unlink(missing_ok=True)
+        else:
+            contents, mode = snapshot
+            path.write_bytes(contents)
+            path.chmod(mode)
+        return True
+    except OSError as e:
+        logger.error(
+            f"setup_via_dialog: could not restore config.toml after a failed "
+            f"password write (exception class: {type(e).__name__}); the "
+            f"profile fields may be left pointing at the new host"
+        )
+        return False
+
 
 # 分頁設定
 DEFAULT_MAX_ITEMS = 50  # 預設最大回傳筆數（超過時自動截斷）
@@ -517,11 +617,12 @@ Either way, the bootstrap flow is:
 
   1. Ask the user for host / port / user / dbname conversationally
      (these are NOT secrets; OK to discuss in chat).
-  2. Call `setup_via_dialog` with those args. It writes config.toml
-     fields, launches an OS-native password dialog server-side
-     (macOS osascript / Linux zenity), and **tests the connection
-     against Redshift** before declaring success. The password value
-     never crosses the MCP wire.
+  2. Call `setup_via_dialog` with those args. It launches an OS-native
+     password dialog server-side (macOS osascript / Linux zenity)
+     FIRST and touches config.toml and the keychain only once a
+     password is in hand, then **tests the connection against
+     Redshift** before declaring success. The password value never
+     crosses the MCP wire.
   3. Interpret the response status:
      - `configured` (with `tested: true`) — retry the original DB
        tool, lazy resolution picks up the new profile without restart.
@@ -530,17 +631,29 @@ Either way, the bootstrap flow is:
        (likely host typo / VPN not connected / wrong password /
        paused cluster), ask the user to verify, then call
        setup_via_dialog again with corrections (overwrites).
-     - `dialog_cancelled` / `empty_password` — profile incomplete;
-       ask the user whether they meant to cancel; usually retry.
+     - `dialog_cancelled` / `empty_password` — the password step
+       failed, so NOTHING was written: config.toml and the keychain
+       are exactly as they were before the call, and a pre-existing
+       healthy profile is untouched. Ask the user whether they meant
+       to cancel; usually retry.
      - `permission_denied` (macOS only) — Apple Events blocked. The
        dialog never appeared; the MCP-client app lacks Automation >
-       System Events permission. Do NOT retry blindly — tell the user
-       to enable it (System Settings → Privacy & Security → Automation)
-       OR fall back to `set-password --stdin` from a terminal.
+       System Events permission. NOTHING was written. Do NOT retry
+       blindly — tell the user to enable it (System Settings →
+       Privacy & Security → Automation) OR fall back to the terminal
+       pair `set-fields --profile X --host … --port … --user …
+       --dbname …` then `set-password --profile X --stdin`. Both, in
+       that order: nothing reached config.toml, so `set-password`
+       alone stores a password for a profile with no fields — and if
+       a profile of that name already existed, it overwrites that
+       profile's still-valid password with the new cluster's.
      - `dialog_unavailable` / `platform_unsupported` (no GUI tool) —
-       the dialog path is unusable on this host; tell the user to
-       run `redshift-comment-mcp set-password --profile X --stdin`
-       from a terminal. DO NOT pass the password as a tool argument.
+       the dialog path is unusable on this host; NOTHING was written.
+       Tell the user to run `redshift-comment-mcp set-fields
+       --profile X --host … --port … --user … --dbname …` and then
+       `redshift-comment-mcp set-password --profile X --stdin` from a
+       terminal — the same pair, for the same reason.
+       DO NOT pass the password as a tool argument.
 
 Never invent host/user/dbname values. Never pass the password as a
 tool argument or shell argument — the system dialog or stdin pipe are
@@ -1296,12 +1409,19 @@ the only chat-leak-free paths.
               - ``{"status": "configured", ...}`` — profile written, password in
                 keychain. Lazy resolve picks it up on next DB tool call; no
                 restart needed.
-              - ``{"status": "dialog_cancelled" | "dialog_unavailable" |
-                   "platform_unsupported" | "empty_password", ...}`` — profile
-                fields saved but no password set; the message field tells the
+              - ``{"status": "dialog_cancelled" | "permission_denied" |
+                   "dialog_unavailable" | "platform_unsupported" |
+                   "empty_password", ...}`` — the password step failed, so
+                NOTHING was written: config.toml and the keychain are exactly
+                as they were before the call. The message field tells the
                 agent / user what to do next (often: run
-                ``redshift-comment-mcp set-password --profile X --stdin`` from
-                a terminal).
+                ``redshift-comment-mcp set-fields`` + ``set-password
+                --profile X --stdin`` from a terminal).
+
+            Write ordering: the password is collected FIRST; config.toml and
+            the keychain are only touched once one is in hand. That keeps a
+            failed setup from leaving a profile whose fields point at the new
+            cluster while the keychain still holds the old password.
 
             For headless environments without a GUI, prefer the CLI pair
             ``set-fields`` + ``set-password --stdin`` instead.
@@ -1323,75 +1443,198 @@ the only chat-leak-free paths.
                     "message": "host, user, and dbname are all required.",
                 }
 
-            try:
-                cfg.write_profile(profile, host=host, port=port, user=user, dbname=dbname)
-            except Exception as e:
-                # Per CWE-209 / OWASP Error Handling Cheat Sheet: log the
-                # full exception server-side, but return only the exception
-                # CLASS to the client. The class name is diagnostic-useful
-                # (PermissionError vs OSError vs ...) without including any
-                # exception args, which could in theory carry sensitive
-                # info (file paths, environment values, etc.).
-                logger.error(f"setup_via_dialog: write_profile failed: {e}", exc_info=True)
-                return {
-                    "error": "write_profile_failed",
-                    "exception_class": type(e).__name__,
-                    "message": (
-                        f"Failed to write profile fields to config.toml "
-                        f"(exception class: {type(e).__name__}). The "
-                        f"underlying error was logged server-side with "
-                        f"full detail; it is not included in this response "
-                        f"to avoid leaking sensitive context through the "
-                        f"MCP wire. Most likely causes: config directory "
-                        f"not writable, disk full, or filesystem error."
-                    ),
-                }
-
+            # Collect the password BEFORE touching either store.
+            #
+            # Write ordering is a security property here, not a style
+            # preference. `write_profile` replaces the whole profile dict
+            # (config.py) while the keychain entry is only overwritten on a
+            # successful `set_password`. So writing fields first and failing
+            # at the password step left config.toml pointing at the NEW host
+            # while the keychain still held the PREVIOUS profile's
+            # still-valid password — `get_setup_status` reported
+            # `configured: true` for a credential pair that never existed
+            # together, and the next DB tool authenticated the old password
+            # against the new host.
+            #
+            # Deliberate trade-off: `write_profile_failed` (unwritable config
+            # dir, disk full) is now only reachable AFTER the user has typed
+            # a password, so an unwritable config directory costs them one
+            # wasted dialog. Not leaving a half-written profile behind
+            # outranks failing fast on that much rarer filesystem case.
             password, reason = _collect_password_via_dialog(profile)
 
             # 4 reason-keyed failure paths dispatch to module-level builders
             # (see _DIALOG_FAILURE_BUILDERS). The 5th case ("ok" reason but
             # empty password — user clicked OK without typing) is checked
             # separately because it's keyed by password emptiness, not reason.
+            # All five return before any store is touched.
             if reason in _DIALOG_FAILURE_BUILDERS:
                 return _DIALOG_FAILURE_BUILDERS[reason](
                     profile=profile, platform=_sys.platform,
+                    host=host, port=port, user=user, dbname=dbname,
                 )
             if not password:
                 return _build_empty_password_response(profile=profile)
 
+            # Snapshot config.toml before it is touched. The keychain write
+            # can still fail after this one succeeds (a locked macOS keychain
+            # is an ordinary state), which would leave the fields pointing at
+            # the NEW host while the keychain still holds the PREVIOUS
+            # profile's still-valid password — the same half-written profile
+            # the dialog-first ordering removes, reached one step later.
+            #
+            # The snapshot shares `write_profile`'s try deliberately. It reads
+            # the filesystem, so it can fail for every reason the write can
+            # (mode 000, a root-owned file from a sudo install, a directory
+            # where the file should be). Outside a try, those raised straight
+            # out of the tool: the client got a raw exception instead of a
+            # documented response shape, the password the user had ALREADY
+            # typed was wasted, and the escaping frame carried that password
+            # as a live local — the same frame-locals exposure the two
+            # branches below drop `exc_info=True` to avoid, reached through an
+            # exception nobody caught. Inside the try, an unreadable
+            # config.toml returns `write_profile_failed` (the fields did not
+            # reach config.toml, which is exactly what that shape reports) and,
+            # because the snapshot runs FIRST, `write_profile` never runs — the
+            # call cannot reach a state it has no snapshot to undo.
+            #
+            # Both names are pre-bound because either statement above the
+            # write can raise: `cfg.config_path()` resolves the XDG root and
+            # `_snapshot_config_bytes` reads the file. `snapshot_taken` is a
+            # third name rather than a `config_snapshot is None` check
+            # because None is a MEANING here — "there was no config.toml" —
+            # and restoring that meaning DELETES the file. A snapshot that
+            # was never taken must not be mistaken for one that recorded an
+            # absent file.
+            config_file = None
+            config_snapshot = None
+            snapshot_taken = False
+            try:
+                config_file = cfg.config_path()
+                config_snapshot = _snapshot_config_bytes(config_file)
+                snapshot_taken = True
+                cfg.write_profile(profile, host=host, port=port, user=user, dbname=dbname)
+            except Exception as e:
+                # Per CWE-209 / OWASP Error Handling Cheat Sheet: log the
+                # exception server-side, but return only the exception CLASS
+                # to the client. The class name is diagnostic-useful
+                # (PermissionError vs OSError vs ...) without including any
+                # exception args, which could in theory carry sensitive
+                # info (file paths, environment values, etc.).
+                #
+                # No `exc_info=True`: the password is a live local of this
+                # very frame, and any handler that renders frame locals
+                # (rich, better-exceptions, a custom formatter) would write
+                # it into the server log. Neither `write_profile` nor the
+                # snapshot is ever handed the password, so their own exception
+                # text is safe to log.
+                logger.error(f"setup_via_dialog: write_profile failed: {e}")
+                # `write_profile` opens config.toml "wb" — which truncates it
+                # — and only then serialises, so a failure BETWEEN those two
+                # steps leaves a fragment where the file was: the target
+                # profile destroyed, every unrelated profile sharing the file
+                # destroyed with it, and the keychain still holding the old
+                # password. Roll the snapshot back, and say which of the two
+                # states the caller is in rather than asserting the happier
+                # one. When the snapshot was never taken nothing had been
+                # written yet, so there is nothing to undo.
+                restored = (
+                    _restore_config_bytes(config_file, config_snapshot)
+                    if snapshot_taken and config_file is not None
+                    else True
+                )
+                state = (
+                    f"Profile '{profile}' is exactly as it was before this "
+                    f"call — config.toml is back to its pre-call bytes and "
+                    f"no password was stored."
+                    if restored else
+                    f"config.toml could NOT be rolled back (the restore "
+                    f"failed too, and was logged server-side), so it may be "
+                    f"left truncated or half-written — have the user check "
+                    f"config.toml before retrying."
+                )
+                return {
+                    "error": "write_profile_failed",
+                    "exception_class": type(e).__name__,
+                    "message": (
+                        f"Failed to write profile fields to config.toml "
+                        f"(exception class: {type(e).__name__}). {state} The "
+                        f"underlying error text was logged server-side (text "
+                        f"only, no traceback — a frame dump would carry the "
+                        f"password); it is not included in this response "
+                        f"to avoid leaking sensitive context through the "
+                        f"MCP wire. Most likely causes: config directory "
+                        f"not writable, disk full, or filesystem error."
+                    ),
+                }
+
             try:
                 cfg.set_password(profile, password)
             except Exception as e:
-                # Same CWE-209 discipline as write_profile_failed above: log
-                # full exception server-side, return only the exception
-                # class name + a sanitized message. Keychain backends are
-                # third-party (macOS Security framework, gnome-keyring,
-                # KWallet, etc.) and their exception args' contents are
-                # outside our control — assume they may carry context we
-                # don't want crossing the MCP wire.
-                logger.error(f"setup_via_dialog: set_password failed: {e}", exc_info=True)
+                # No password was stored, so the call must leave the profile
+                # store exactly as it found it: roll config.toml back to the
+                # bytes captured before write_profile ran.
+                restored = _restore_config_bytes(config_file, config_snapshot)
+                # Same CWE-209 discipline as write_profile_failed above, one
+                # notch stricter. This is the single call that receives the
+                # password; keychain backends are third-party (macOS Security
+                # framework, gnome-keyring, KWallet, etc.) and their
+                # exception args are outside this repo's control, so a
+                # backend that echoes the password would put it in both
+                # `str(e)` and the last line of an `exc_info=True` traceback.
+                # Only the exception class is logged.
+                exc_class = type(e).__name__
+                logger.error(
+                    f"setup_via_dialog: set_password failed for profile "
+                    f"'{profile}' (exception class: {exc_class})"
+                )
                 # Surface specific keyring exceptions when recognisable
                 # (per Snyk guidance: catch keyring.errors.PasswordSetError
                 # / KeyringLocked separately for more actionable diagnosis).
-                exc_class = type(e).__name__
                 hint = {
                     "PasswordSetError": "Keychain rejected the write (locked, missing entitlement, or backend refused).",
                     "KeyringLocked": "OS keychain is currently locked; unlock it and retry.",
                     "InitError": "Keyring backend failed to initialize on this host.",
                     "NoKeyringError": "No keyring backend is available on this host.",
                 }.get(exc_class, "Underlying keychain write failed.")
+                # The recovery hint differs per branch and must travel INSIDE
+                # the branch. Restored means the fields are gone or reverted,
+                # so `set-password` alone would leave a password with no
+                # fields behind it — or, for a profile that already existed,
+                # re-key that profile's still-valid password with the new
+                # cluster's, which is the destruction this rollback just
+                # prevented. Only the not-restored branch, where the fields
+                # did reach config.toml, can be repaired by the password
+                # command on its own.
+                rollback = (
+                    f"Profile '{profile}' was rolled back to exactly what "
+                    f"was saved before this call, so both stores are "
+                    f"untouched. Have the user re-run both halves from a "
+                    f"terminal: `redshift-comment-mcp set-fields --profile "
+                    f"{shlex.quote(profile)} --host {shlex.quote(host)} "
+                    f"--port {port} --user {shlex.quote(user)} "
+                    f"--dbname {shlex.quote(dbname)}`, then pipe the password "
+                    f"via `redshift-comment-mcp set-password --profile "
+                    f"{shlex.quote(profile)} --stdin`."
+                    if restored else
+                    f"Profile '{profile}' fields reached config.toml and "
+                    f"could NOT be rolled back (the restore failed too, and "
+                    f"was logged server-side), so the fields may point at "
+                    f"the new cluster while the keychain holds the previous "
+                    f"password — have the user check config.toml. The fields "
+                    f"are in place, so have them pipe the password via "
+                    f"`redshift-comment-mcp set-password --profile "
+                    f"{shlex.quote(profile)} --stdin` from a terminal to "
+                    f"finish the pair."
+                )
                 return {
                     "error": "keychain_write_failed",
                     "exception_class": exc_class,
                     "message": (
-                        f"{hint} Profile '{profile}' fields were saved to "
-                        f"config.toml but the password was NOT stored. The "
-                        f"underlying error was logged server-side with full "
-                        f"detail; it is not included here per chat-leak "
-                        f"hygiene. Have the user pipe the password via "
-                        f"`redshift-comment-mcp set-password --profile "
-                        f"{profile} --stdin` from a terminal as a fallback."
+                        f"{hint} The password was NOT stored. The "
+                        f"keychain error was logged server-side by exception "
+                        f"class; its text is withheld because a backend can "
+                        f"echo the value it was handed. {rollback}"
                     ),
                 }
 
