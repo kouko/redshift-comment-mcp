@@ -16,10 +16,10 @@ charter: 1.0
 - Test: A1 positive: cancel-leaves-toml-identical; negative: success-writes-toml. A2 positive: cancel-leaves-keychain; negative: success-writes-keychain. A4 positive: red-against-pre-change; boundary: all-five-failure-reasons.
 - Risk: moving `write_profile` after the dialog makes `write_profile_failed` reachable only after the user types a password; agent-decided — the security property outranks failing fast on an unwritable config directory.
 
-**W0-02 Pin the six response shapes against regression**  after: W0-01  acceptance: 3
-- Files: tests/test_tools.py
+**W0-02 Pin the six response shapes, and bump the two version fields**  after: W0-01  acceptance: 3
+- Files: tests/test_tools.py, .claude-plugin/plugin.json, pyproject.toml
 - Test: A3 positive: success-returns-configured-with-tested-true; negative: connection-failure-returns-configured-but-connection-failed.
-- Risk: the existing suite asserts responses but not field-by-field stability; agent-decided — pin the status string and field names of all six shapes, not their prose.
+- Risk: W0-01 rewrote four response messages, so pinning prose would lock in wording; agent-decided — pin status strings and field names only. Bump is PATCH 0.10.0 to 0.10.1.
 
 ## Questions asked
 ① — consequence — 「密碼留空」這次會定案：借相符設定的密碼，或維持報錯只改文案
@@ -31,3 +31,5 @@ pre-① — what — 要不要現在就做 plugin 退回純啟動器的真統合
 1. user-decided — blank password means borrow the password of an exactly matching profile, not raise. That decision governs the follow-up change; this plan only stops the half-written state.
 2. `test_setup_via_dialog_write_profile_failed_returns_error` documents fail-fast-before-the-dialog as deliberate. Its rationale changes here; the response shape it asserts does not.
 3. Carried details from decision point ① were scope and sequencing remarks, not flow or reaction details, so this change carries none and needs no spec.
+4. Acceptance 2 held before the change: `set_password` was already unreachable on all five failure paths. Its cases are regression pins; acceptance 4 rests on the config.toml cases alone.
+5. W0-01 rewrote four response messages because the old wording ("fields are saved but no password is set") became false. Prose is not pinned, so a later edit cannot be caught mechanically.
