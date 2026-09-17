@@ -1996,6 +1996,58 @@ class TestSetupViaDialogTool:
             "agent can pattern-match it"
         )
 
+    def test_fastmcp_instructions_describe_the_dialog_first_write_order(self):
+        """`instructions=` is read at handshake by every client agent, so it
+        outranks the per-call response messages. It described the OLD order
+        (fields written, then the dialog) and handed out a bare
+        `set-password --stdin` recovery — which, with no fields written,
+        stores a password for a profile that has none, and for an existing
+        profile of that name re-keys its still-valid password with the new
+        cluster's. That is the exact destruction this change's rollback
+        exists to prevent, prescribed by the server's own handshake text.
+        """
+        tools = self._make_tools()
+        instructions = tools.mcp.instructions or ""
+        assert "SETUP RECOVERY" in instructions
+        # The block is hard-wrapped prose, so every phrase below is matched
+        # against a whitespace-flattened copy — otherwise a re-wrap that
+        # leaves the meaning intact fails the test, and worse, a re-wrap that
+        # changes the meaning passes it.
+        recovery = " ".join(
+            instructions.split("SETUP RECOVERY", 1)[1].split()
+        )
+
+        assert "It writes config.toml fields, launches" not in recovery, (
+            "instructions still describe the pre-change write order"
+        )
+        assert "only once a password is in hand" in recovery, (
+            "instructions must state that neither store is touched until the "
+            "dialog has returned a password"
+        )
+        assert "NOTHING was written" in recovery, (
+            "the password-step failure statuses must tell the agent that a "
+            "pre-existing healthy profile is untouched"
+        )
+        assert recovery.count("set-password --profile") > 0
+        assert recovery.count("set-password --profile") == recovery.count(
+            "set-fields --profile"
+        ), (
+            "every `set-password --stdin` recovery hint in the SETUP RECOVERY "
+            "block must be paired with `set-fields`: nothing was written, so "
+            "set-password alone leaves a password with no fields, or re-keys "
+            "an existing profile's password with the new cluster's"
+        )
+        assert "DO NOT pass the password as a tool argument" in recovery
+
+
+def _refuse_keychain_write(_name, _pw):
+    """Stand-in for `config.set_password` against a locked OS keychain.
+
+    Shared by every rollback test below: they differ in what they assert
+    about the stores afterwards, not in how the keychain fails.
+    """
+    raise RuntimeError("keychain is locked")
+
 
 class TestSetupViaDialogPersistsNothingWithoutPassword:
     """Write-ordering safety: a password-step failure must leave BOTH stores
@@ -2218,9 +2270,9 @@ class TestSetupViaDialogPersistsNothingWithoutPassword:
             lambda profile: ("a-brand-new-password", "ok"),
         )
 
-        def refuse(name, pw):
-            raise RuntimeError("keychain is locked")
-        monkeypatch.setattr('redshift_comment_mcp.config.set_password', refuse)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password', _refuse_keychain_write
+        )
 
         tools = self._make_tools()
         setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
@@ -2271,9 +2323,9 @@ class TestSetupViaDialogPersistsNothingWithoutPassword:
             lambda profile: ("a-brand-new-password", "ok"),
         )
 
-        def refuse(name, pw):
-            raise RuntimeError("keychain is locked")
-        monkeypatch.setattr('redshift_comment_mcp.config.set_password', refuse)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password', _refuse_keychain_write
+        )
 
         tools = self._make_tools()
         setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
@@ -2310,9 +2362,9 @@ class TestSetupViaDialogPersistsNothingWithoutPassword:
             lambda profile: ("a-brand-new-password", "ok"),
         )
 
-        def refuse(name, pw):
-            raise RuntimeError("keychain is locked")
-        monkeypatch.setattr('redshift_comment_mcp.config.set_password', refuse)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password', _refuse_keychain_write
+        )
 
         tools = self._make_tools()
         setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
@@ -2327,6 +2379,246 @@ class TestSetupViaDialogPersistsNothingWithoutPassword:
             f"the rollback changed config.toml's mode from "
             f"{oct(before_mode)} to {oct(config_path.stat().st_mode)} while "
             f"reporting both stores untouched"
+        )
+
+    def test_write_profile_failure_mid_write_rolls_config_toml_back(
+        self, monkeypatch, populated_stores
+    ):
+        """A `write_profile` that fails PART WAY through is the one failure
+        that damages config.toml rather than leaving it alone.
+
+        `config.write_profile` opens config.toml `"wb"` — which truncates it —
+        and only then serialises. A failure between those two steps (full
+        disk, I/O error) leaves the file holding a fragment: the target
+        profile is destroyed AND so is every unrelated profile in the same
+        file, while the keychain still holds the old password. The tool
+        already snapshots the bytes before the write; it just never used the
+        snapshot on this branch, so the shape it returned ("the fields did not
+        reach config.toml") was a claim it had not checked.
+        """
+        config_path, storage = populated_stores
+        from redshift_comment_mcp import config as cfg
+        cfg.write_profile(
+            "unrelated", host="other.example.com", port=5439,
+            user="otheruser", dbname="otherdb",
+        )
+        before_bytes = config_path.read_bytes()
+        before_storage = dict(storage)
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("a-brand-new-password", "ok"),
+        )
+
+        import tomli_w
+
+        def truncating_dump(_obj, fp):
+            """The open() truncated the file; the serialise dies half way."""
+            fp.write(b"[profile.pr")
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(tomli_w, "dump", truncating_dump)
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='prod', port=5440,
+        )
+
+        assert result["error"] == "write_profile_failed", f"got: {result}"
+        assert config_path.read_bytes() == before_bytes, (
+            "config.toml was left truncated by a half-finished write — the "
+            "snapshot taken two lines earlier was never used"
+        )
+        assert cfg.read_profile("prod")["host"] == "old.example.com"
+        assert cfg.read_profile("unrelated")["host"] == "other.example.com", (
+            "an unrelated profile sharing config.toml was destroyed"
+        )
+        assert storage == before_storage
+        assert "a-brand-new-password" not in str(result)
+
+    def test_a_snapshot_that_was_never_taken_does_not_delete_config_toml(
+        self, monkeypatch, populated_stores
+    ):
+        """The rollback's guard: `None` means "there was no config.toml", and
+        restoring that meaning UNLINKS the file.
+
+        So the branch cannot key off `config_snapshot is None` — on the path
+        where `_snapshot_config_bytes` itself raised, that name is still at
+        its pre-bound `None` while a perfectly good config.toml sits on disk.
+        A restore there deletes the user's profiles outright: strictly worse
+        than the truncation the rollback was added to undo.
+        """
+        from pathlib import Path as _Path
+
+        config_path, storage = populated_stores
+        real_read_bytes = _Path.read_bytes
+        before_bytes = real_read_bytes(config_path)
+        before_storage = dict(storage)
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("a-brand-new-password", "ok"),
+        )
+
+        # Fails the snapshot read ONCE. A restore attempt would then re-read
+        # successfully, see bytes where the un-taken snapshot says None, and
+        # unlink the file.
+        failed_once = []
+
+        def fail_first_read(self):
+            if str(self) == str(config_path) and not failed_once:
+                failed_once.append(True)
+                raise OSError(5, "Input/output error", str(config_path))
+            return real_read_bytes(self)
+        monkeypatch.setattr(_Path, "read_bytes", fail_first_read)
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='prod', port=5440,
+        )
+
+        assert result["error"] == "write_profile_failed", f"got: {result}"
+        assert config_path.exists(), (
+            "the rollback deleted a config.toml it had never snapshotted"
+        )
+        assert real_read_bytes(config_path) == before_bytes
+        assert storage == before_storage
+
+    def test_write_profile_failure_says_so_when_the_rollback_also_fails(
+        self, monkeypatch, populated_stores
+    ):
+        """The mirror of the test above: a truncating write whose rollback
+        ALSO fails must not report the state the successful rollback reports.
+
+        `write_profile_failed`'s message used to assert one state
+        unconditionally; both branches of the new one are claims about the
+        file on disk, so both have to be exercised or one of them is prose
+        nobody ran.
+        """
+        from pathlib import Path as _Path
+
+        config_path, _storage = populated_stores
+        real_read_bytes = _Path.read_bytes
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("a-brand-new-password", "ok"),
+        )
+
+        import tomli_w
+
+        def truncating_dump(_obj, fp):
+            fp.write(b"[profile.pr")
+            raise OSError(28, "No space left on device")
+        monkeypatch.setattr(tomli_w, "dump", truncating_dump)
+
+        def unwritable(self, _data):
+            raise PermissionError(13, "Permission denied", str(self))
+        monkeypatch.setattr(_Path, "write_bytes", unwritable)
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='prod', port=5440,
+        )
+
+        assert result["error"] == "write_profile_failed", f"got: {result}"
+        assert "could NOT be rolled back" in result["message"], (
+            f"the restore failed but the response still claims config.toml is "
+            f"back to its pre-call bytes: {result['message']}"
+        )
+        assert real_read_bytes(config_path) == b"[profile.pr", (
+            "fixture precondition: the file really is left truncated here"
+        )
+        assert "a-brand-new-password" not in str(result)
+
+    def test_keychain_failure_hint_names_set_fields_when_config_was_restored(
+        self, monkeypatch, populated_stores
+    ):
+        """The restored branch has just told the agent both stores are
+        untouched, so the fields are gone or reverted. A bare
+        `set-password --stdin` there stores a password for a profile with no
+        fields — or, for a profile that already existed, overwrites its
+        still-valid password with the new cluster's, destroying exactly the
+        setup the rollback just protected. The hint has to name `set-fields`
+        too.
+        """
+        _config_path, _storage = populated_stores
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("a-brand-new-password", "ok"),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password', _refuse_keychain_write
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='prod', port=5440,
+        )
+
+        assert result["error"] == "keychain_write_failed", f"got: {result}"
+        msg = result["message"]
+        assert "untouched" in msg, "expected the restored branch's wording"
+        assert "set-fields" in msg, (
+            "the restored branch tells the user both stores are untouched, "
+            "then hands them a recovery that only writes the password"
+        )
+        assert "set-password" in msg
+
+    def test_keychain_failure_hint_omits_set_fields_when_config_survived(
+        self, monkeypatch, populated_stores
+    ):
+        """The mirror branch: when the restore itself failed, the new fields
+        ARE in config.toml, so `set-password --stdin` alone is the correct
+        (and minimal) repair — re-running `set-fields` would only re-write
+        what is already there.
+        """
+        from pathlib import Path as _Path
+
+        _config_path, _storage = populated_stores
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("a-brand-new-password", "ok"),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password', _refuse_keychain_write
+        )
+
+        def unwritable(self, _data):
+            raise PermissionError(13, "Permission denied", str(self))
+        monkeypatch.setattr(_Path, "write_bytes", unwritable)
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='prod', port=5440,
+        )
+
+        assert result["error"] == "keychain_write_failed", f"got: {result}"
+        msg = result["message"]
+        assert "could NOT be rolled back" in msg, (
+            f"expected the restore-failed branch, got: {msg}"
+        )
+        assert "set-password" in msg
+        assert "set-fields" not in msg, (
+            "the fields did reach config.toml on this branch — sending the "
+            "user back through set-fields contradicts the same message's own "
+            "description of the state"
         )
 
     def test_unreadable_config_toml_returns_a_shape_and_writes_nothing(
@@ -2814,7 +3106,12 @@ class TestSetupViaDialogResponseShapeContract:
             lambda *a, **kw: connection,
         )
 
-    def _call(self, monkeypatch, stub, call_overrides):
+    def _call(self, monkeypatch, tmp_path, stub, call_overrides):
+        # Scope the config store to a tmp root FIRST. The keychain_write_failed
+        # row drives the real rollback, which resolves `cfg.config_path()` and
+        # can write or unlink it; without this the developer's own
+        # ~/.config/redshift-comment-mcp/config.toml is the file under test.
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
         self._stub(monkeypatch, **stub)
         setup_via_dialog = _get_tool_fn(self._make_tools(), 'setup_via_dialog')
         kwargs = {
@@ -2832,10 +3129,10 @@ class TestSetupViaDialogResponseShapeContract:
         _SETUP_RESPONSE_SHAPES,
         ids=[row[0] for row in _SETUP_RESPONSE_SHAPES],
     )
-    def test_response_shape_unchanged(self, monkeypatch, case_id, stub,
-                                      call_overrides, discriminator,
+    def test_response_shape_unchanged(self, monkeypatch, tmp_path, case_id,
+                                      stub, call_overrides, discriminator,
                                       expected_keys, expected_values):
-        result = self._call(monkeypatch, stub, call_overrides)
+        result = self._call(monkeypatch, tmp_path, stub, call_overrides)
 
         disc_key, disc_value = discriminator
         assert result.get(disc_key) == disc_value, (
