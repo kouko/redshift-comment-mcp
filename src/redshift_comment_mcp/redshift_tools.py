@@ -1,9 +1,10 @@
 import functools
 import logging
 import re
+import stat as _stat
 import awswrangler as wr
 from fastmcp import FastMCP
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional, Tuple
 from .config import ConfigurationError
 from .connection import RedshiftConnectionConfig
 
@@ -187,21 +188,34 @@ _DIALOG_FAILURE_BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
 }
 
 
-def _snapshot_config_bytes(path) -> Optional[bytes]:
-    """Raw bytes of config.toml, or ``None`` when the file does not exist.
+def _snapshot_config_bytes(path) -> Optional[Tuple[bytes, int]]:
+    """``(raw bytes, permission bits)`` of config.toml, or ``None`` if absent.
 
     Raw bytes rather than the parsed profile dict: restoring them gives byte
     identity for free, with no re-serialisation round trip that would drop
     comments, key order or unknown keys. ``None`` records the file's absence,
     which is a state that has to be restorable too.
+
+    The permission bits travel with the bytes because ``config.write_profile``
+    chmods config.toml to 0600 unconditionally, so a rollback that restored
+    only the bytes would silently narrow a file the user had left at, say,
+    0640 — harmless in direction, but the rollback's own message promises
+    "both stores are untouched".
+
+    Raises ``OSError`` when the file exists but cannot be read. That is
+    deliberate and must stay that way: returning ``None`` there would be
+    indistinguishable from "no config.toml", and a later restore would then
+    DELETE the user's config. The caller keeps this call inside the try that
+    owns ``write_profile``, so an unreadable config.toml aborts before
+    anything is written rather than proceeding to a state it cannot undo.
     """
     try:
-        return path.read_bytes()
+        return path.read_bytes(), _stat.S_IMODE(path.stat().st_mode)
     except FileNotFoundError:
         return None
 
 
-def _restore_config_bytes(path, snapshot: Optional[bytes]) -> bool:
+def _restore_config_bytes(path, snapshot: Optional[Tuple[bytes, int]]) -> bool:
     """Put config.toml back to ``snapshot``; ``None`` means delete it again.
 
     Returns True when the file is back to its pre-call state. Deliberately
@@ -214,7 +228,9 @@ def _restore_config_bytes(path, snapshot: Optional[bytes]) -> bool:
         if snapshot is None:
             path.unlink(missing_ok=True)
         else:
-            path.write_bytes(snapshot)
+            contents, mode = snapshot
+            path.write_bytes(contents)
+            path.chmod(mode)
         return True
     except OSError as e:
         logger.error(
@@ -1423,10 +1439,24 @@ the only chat-leak-free paths.
             # the NEW host while the keychain still holds the PREVIOUS
             # profile's still-valid password — the same half-written profile
             # the dialog-first ordering removes, reached one step later.
-            config_file = cfg.config_path()
-            config_snapshot = _snapshot_config_bytes(config_file)
-
+            #
+            # The snapshot shares `write_profile`'s try deliberately. It reads
+            # the filesystem, so it can fail for every reason the write can
+            # (mode 000, a root-owned file from a sudo install, a directory
+            # where the file should be). Outside a try, those raised straight
+            # out of the tool: the client got a raw exception instead of a
+            # documented response shape, the password the user had ALREADY
+            # typed was wasted, and the escaping frame carried that password
+            # as a live local — the same frame-locals exposure the two
+            # branches below drop `exc_info=True` to avoid, reached through an
+            # exception nobody caught. Inside the try, an unreadable
+            # config.toml returns `write_profile_failed` (the fields did not
+            # reach config.toml, which is exactly what that shape reports) and,
+            # because the snapshot runs FIRST, `write_profile` never runs — the
+            # call cannot reach a state it has no snapshot to undo.
             try:
+                config_file = cfg.config_path()
+                config_snapshot = _snapshot_config_bytes(config_file)
                 cfg.write_profile(profile, host=host, port=port, user=user, dbname=dbname)
             except Exception as e:
                 # Per CWE-209 / OWASP Error Handling Cheat Sheet: log the
@@ -1439,8 +1469,9 @@ the only chat-leak-free paths.
                 # No `exc_info=True`: the password is a live local of this
                 # very frame, and any handler that renders frame locals
                 # (rich, better-exceptions, a custom formatter) would write
-                # it into the server log. `write_profile` is never handed the
-                # password, so its own exception text is safe to log.
+                # it into the server log. Neither `write_profile` nor the
+                # snapshot is ever handed the password, so their own exception
+                # text is safe to log.
                 logger.error(f"setup_via_dialog: write_profile failed: {e}")
                 return {
                     "error": "write_profile_failed",

@@ -2289,6 +2289,106 @@ class TestSetupViaDialogPersistsNothingWithoutPassword:
         )
         assert storage == {}
 
+    def test_keychain_write_failure_restores_the_users_file_mode(
+        self, monkeypatch, populated_stores
+    ):
+        """Finding G: the rollback restored bytes but not the permission bits.
+
+        `config.write_profile` chmods config.toml to 0600 unconditionally, so a
+        file the user had deliberately left at 0640 came back 0600 from a
+        rolled-back call — while the response's message claims the profile was
+        "rolled back to exactly what was saved before this call, so both stores
+        are untouched". Narrowing, not widening, so it costs the user a setting
+        rather than exposing anything; the response's claim is still not true.
+        """
+        config_path, _storage = populated_stores
+        config_path.chmod(0o640)
+        before_mode = config_path.stat().st_mode
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("a-brand-new-password", "ok"),
+        )
+
+        def refuse(name, pw):
+            raise RuntimeError("keychain is locked")
+        monkeypatch.setattr('redshift_comment_mcp.config.set_password', refuse)
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='prod', port=5440,
+        )
+
+        assert result["error"] == "keychain_write_failed", f"got: {result}"
+        assert config_path.stat().st_mode == before_mode, (
+            f"the rollback changed config.toml's mode from "
+            f"{oct(before_mode)} to {oct(config_path.stat().st_mode)} while "
+            f"reporting both stores untouched"
+        )
+
+    def test_unreadable_config_toml_returns_a_shape_and_writes_nothing(
+        self, monkeypatch, populated_stores
+    ):
+        """Finding H: an unreadable config.toml escaped the tool entirely.
+
+        `_snapshot_config_bytes` catches only FileNotFoundError, and its call
+        site sat outside every `try`. A config.toml that exists but cannot be
+        read — mode 000, a root-owned file from a sudo install, a directory
+        where the file should be — raised straight out of `setup_via_dialog`:
+        the client got a raw exception instead of a documented shape, and the
+        escaping frame held the live `password` local, which is the same
+        frame-locals exposure the branches below drop `exc_info=True` to avoid.
+
+        The second half matters as much as the first: when the snapshot cannot
+        be taken the tool must not go on to write a state it cannot undo.
+        """
+        from pathlib import Path as _Path
+
+        config_path, storage = populated_stores
+        real_read_bytes = _Path.read_bytes
+        before_bytes = real_read_bytes(config_path)
+        before_storage = dict(storage)
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("a-brand-new-password", "ok"),
+        )
+
+        def unreadable(self):
+            if str(self) == str(config_path):
+                raise PermissionError(13, "Permission denied", str(config_path))
+            return real_read_bytes(self)
+        monkeypatch.setattr(_Path, "read_bytes", unreadable)
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        try:
+            result = setup_via_dialog(
+                host='new.example.com', user='newuser',
+                dbname='newdb', profile='prod', port=5440,
+            )
+        except Exception as exc:  # noqa: BLE001 — the defect is that this fires
+            pytest.fail(
+                f"setup_via_dialog raised {type(exc).__name__} instead of "
+                f"returning a documented response shape; the password the "
+                f"user just typed is a live local of the escaping frame"
+            )
+
+        assert {"status", "error"} & set(result), (
+            f"response carries neither discriminator key: {result}"
+        )
+        assert "a-brand-new-password" not in str(result), (
+            "the password reached the response"
+        )
+        assert real_read_bytes(config_path) == before_bytes, (
+            "the tool wrote profile fields it had no snapshot to undo"
+        )
+        assert storage == before_storage
+
 
 class TestDegradedModeContractAdditional:
     """Round-2 coverage: end-to-end bootstrap-then-use, lazy-property direct
