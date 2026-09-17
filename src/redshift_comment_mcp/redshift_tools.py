@@ -1,6 +1,7 @@
 import functools
 import logging
 import re
+import shlex
 import stat as _stat
 import awswrangler as wr
 from fastmcp import FastMCP
@@ -78,6 +79,16 @@ def _guarded(tool_fn):
 # command interpolate those fields so the user can paste the line rather
 # than decode placeholders; none of them is ever handed the password.
 #
+# Every interpolated field goes through ``shlex.quote``. These messages are
+# command lines an agent is told to have a human paste into a terminal, and
+# this server's own charter makes table comments authoritative — so comment
+# text is an input channel that can influence which `host` an agent passes
+# here. Raw, a host of ``h.example.com; curl … | sh #`` turns one printed
+# line into two commands. Benign values need it just as much: a space or a
+# metacharacter in any of host / user / dbname / profile would otherwise
+# silently produce a different command. ``port`` is typed ``int`` at every
+# site that builds one of these lines, so it needs no quoting.
+#
 # All five describe a state in which NOTHING was persisted: setup_via_dialog
 # collects the password before it touches config.toml or the keychain, so a
 # failure here leaves both stores exactly as they were. The recovery hint is
@@ -123,9 +134,11 @@ def _build_permission_denied_response(
             f"exists yet, run `tccutil reset AppleEvents` from a terminal "
             f"to force a fresh permission prompt on next attempt. Fallback: "
             f"have the user run `redshift-comment-mcp set-fields --profile "
-            f"{profile} --host {host} --port {port} --user {user} --dbname "
-            f"{dbname}` and then pipe the password via `redshift-comment-mcp "
-            f"set-password --profile {profile} --stdin`, both from a terminal."
+            f"{shlex.quote(profile)} --host {shlex.quote(host)} --port {port} "
+            f"--user {shlex.quote(user)} --dbname "
+            f"{shlex.quote(dbname)}` and then pipe the password via "
+            f"`redshift-comment-mcp set-password --profile "
+            f"{shlex.quote(profile)} --stdin`, both from a terminal."
         ),
     }
 
@@ -144,9 +157,11 @@ def _build_dialog_unavailable_response(
             f"profile '{profile}' is exactly as it was before this call. "
             f"Tell the user the dialog isn't available and instruct them "
             f"to run both of these in a terminal themselves: "
-            f"`redshift-comment-mcp set-fields --profile {profile} --host "
-            f"{host} --port {port} --user {user} --dbname {dbname}`, then "
-            f"`redshift-comment-mcp set-password --profile {profile} "
+            f"`redshift-comment-mcp set-fields --profile "
+            f"{shlex.quote(profile)} --host {shlex.quote(host)} --port {port} "
+            f"--user {shlex.quote(user)} --dbname {shlex.quote(dbname)}`, then "
+            f"`redshift-comment-mcp set-password --profile "
+            f"{shlex.quote(profile)} "
             f"--stdin` (piping the password). DO NOT "
             f"pass the password as a tool argument or shell argument — "
             f"that leaks it to chat / process args / shell history."
@@ -167,9 +182,11 @@ def _build_platform_unsupported_response(
             f"(only macOS and Linux are wired). Nothing was written: "
             f"profile '{profile}' is exactly as it was before this call. "
             f"Tell the user to configure it from their terminal instead: "
-            f"`redshift-comment-mcp set-fields --profile {profile} --host "
-            f"{host} --port {port} --user {user} --dbname {dbname}`, then "
-            f"`redshift-comment-mcp set-password --profile {profile} "
+            f"`redshift-comment-mcp set-fields --profile "
+            f"{shlex.quote(profile)} --host {shlex.quote(host)} --port {port} "
+            f"--user {shlex.quote(user)} --dbname {shlex.quote(dbname)}`, then "
+            f"`redshift-comment-mcp set-password --profile "
+            f"{shlex.quote(profile)} "
             f"--stdin` (pipe the password via stdin)."
         ),
     }
@@ -1542,8 +1559,9 @@ the only chat-leak-free paths.
                     "message": (
                         f"Failed to write profile fields to config.toml "
                         f"(exception class: {type(e).__name__}). {state} The "
-                        f"underlying error was logged server-side with "
-                        f"full detail; it is not included in this response "
+                        f"underlying error text was logged server-side (text "
+                        f"only, no traceback — a frame dump would carry the "
+                        f"password); it is not included in this response "
                         f"to avoid leaking sensitive context through the "
                         f"MCP wire. Most likely causes: config directory "
                         f"not writable, disk full, or filesystem error."
@@ -1593,10 +1611,11 @@ the only chat-leak-free paths.
                     f"was saved before this call, so both stores are "
                     f"untouched. Have the user re-run both halves from a "
                     f"terminal: `redshift-comment-mcp set-fields --profile "
-                    f"{profile} --host {host} --port {port} --user {user} "
-                    f"--dbname {dbname}`, then pipe the password via "
-                    f"`redshift-comment-mcp set-password --profile {profile} "
-                    f"--stdin`."
+                    f"{shlex.quote(profile)} --host {shlex.quote(host)} "
+                    f"--port {port} --user {shlex.quote(user)} "
+                    f"--dbname {shlex.quote(dbname)}`, then pipe the password "
+                    f"via `redshift-comment-mcp set-password --profile "
+                    f"{shlex.quote(profile)} --stdin`."
                     if restored else
                     f"Profile '{profile}' fields reached config.toml and "
                     f"could NOT be rolled back (the restore failed too, and "
@@ -1604,8 +1623,9 @@ the only chat-leak-free paths.
                     f"the new cluster while the keychain holds the previous "
                     f"password — have the user check config.toml. The fields "
                     f"are in place, so have them pipe the password via "
-                    f"`redshift-comment-mcp set-password --profile {profile} "
-                    f"--stdin` from a terminal to finish the pair."
+                    f"`redshift-comment-mcp set-password --profile "
+                    f"{shlex.quote(profile)} --stdin` from a terminal to "
+                    f"finish the pair."
                 )
                 return {
                     "error": "keychain_write_failed",

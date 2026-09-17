@@ -1644,6 +1644,62 @@ class TestSetupViaDialogTool:
         assert result["status"] == "dialog_unavailable"
         assert "--stdin" in result["message"]
 
+    def test_setup_via_dialog_recovery_command_shell_quotes_its_fields(
+        self, monkeypatch
+    ):
+        """The recovery hints print a command line the agent tells the user to
+        paste into a terminal, so every interpolated field must be shell-quoted.
+
+        This tool's own threat model is why: the server's charter makes table
+        comments authoritative, so comment text is an input channel that can
+        influence which `host` an agent passes here. Interpolated raw, a host of
+        ``h.example.com; curl … | sh #`` turns the printed line into two
+        commands, and one human paste executes the second. Benign values break
+        it too — any host / user / dbname / profile containing a space or a
+        shell metacharacter silently produces a different command.
+
+        `port` is not quoted: it is typed ``int`` at every call site that builds
+        one of these lines, so it cannot carry a metacharacter.
+        """
+        import shlex
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: (None, "unavailable"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        hostile = {
+            "host": "h; touch /tmp/pwned #",
+            "user": "u; touch /tmp/pwned #",
+            "dbname": "d; touch /tmp/pwned #",
+            "profile": "p; touch /tmp/pwned #",
+        }
+        result = setup_via_dialog(port=5439, **hostile)
+
+        assert result["status"] == "dialog_unavailable"
+        msg = result["message"]
+        for flag, value in (
+            ("--host", hostile["host"]),
+            ("--user", hostile["user"]),
+            ("--dbname", hostile["dbname"]),
+            ("--profile", hostile["profile"]),
+        ):
+            assert f"{flag} {shlex.quote(value)}" in msg, (
+                f"`{flag}` must be interpolated through shlex.quote so the "
+                f"pasted command line cannot be split into a second command"
+            )
+            assert f"{flag} {value}" not in msg, (
+                f"`{flag}` is interpolated raw: the printed command line runs "
+                f"`touch /tmp/pwned` when the user pastes it"
+            )
+
     def test_setup_via_dialog_permission_denied_status_carries_actionable_message(
         self, monkeypatch
     ):
@@ -2036,6 +2092,19 @@ class TestSetupViaDialogTool:
             "block must be paired with `set-fields`: nothing was written, so "
             "set-password alone leaves a password with no fields, or re-keys "
             "an existing profile's password with the new cluster's"
+        )
+        # The count equality above counts `set-password --profile`, so
+        # re-adding the exact stale hint this change removed — "OR fall back
+        # to `set-password --stdin` from a terminal", which carries no
+        # `--profile` — leaves both counters equal and the assertion green.
+        # The unpaired form has to be named outright. This literal cannot
+        # match the paired form, which reads `set-password --profile X
+        # --stdin`.
+        assert "set-password --stdin" not in recovery, (
+            "an unpaired `set-password --stdin` hint is back in the SETUP "
+            "RECOVERY block: with nothing written, it stores a password for "
+            "a profile that has no fields, or re-keys an existing profile's "
+            "still-valid password with the new cluster's"
         )
         assert "DO NOT pass the password as a tool argument" in recovery
 
