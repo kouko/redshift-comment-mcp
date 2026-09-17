@@ -2420,6 +2420,234 @@ class TestSetupViaDialogConnectionVerification:
         }
 
 
+def _raise_write_profile_failure(*_a, **_kw):
+    """Stand-in for an unwritable config dir / full disk."""
+    raise PermissionError("config directory not writable")
+
+
+def _raise_keychain_failure(*_a, **_kw):
+    """Stand-in for a keychain backend refusing the write."""
+    raise RuntimeError("keychain refused the write")
+
+
+# Every response shape setup_via_dialog can return, as of v0.10.0.
+#
+# Each row: (case id, stub overrides, call-arg overrides, (discriminator key,
+# discriminator value), exact top-level key set). The key sets were read off
+# ``git show v0.10.0:src/redshift_comment_mcp/redshift_tools.py`` and are
+# unchanged at HEAD.
+_SETUP_RESPONSE_SHAPES = [
+    (
+        "configured",
+        {},
+        {},
+        ("status", "configured"),
+        {"status", "profile", "host", "port", "user", "dbname", "tested",
+         "message"},
+    ),
+    (
+        "configured_but_connection_failed",
+        {"connection": (False, "Connection timed out (host unreachable)")},
+        {},
+        ("status", "configured_but_connection_failed"),
+        {"status", "profile", "host", "port", "user", "dbname", "tested",
+         "connection_error", "message"},
+    ),
+    (
+        "dialog_cancelled",
+        {"dialog": (None, "cancelled")},
+        {},
+        ("status", "dialog_cancelled"),
+        {"status", "profile", "message"},
+    ),
+    (
+        "permission_denied",
+        {"dialog": (None, "permission_denied")},
+        {},
+        ("status", "permission_denied"),
+        {"status", "profile", "platform", "message"},
+    ),
+    (
+        "dialog_unavailable",
+        {"dialog": (None, "unavailable")},
+        {},
+        ("status", "dialog_unavailable"),
+        {"status", "profile", "platform", "message"},
+    ),
+    (
+        "platform_unsupported",
+        {"dialog": (None, "unsupported")},
+        {},
+        ("status", "platform_unsupported"),
+        {"status", "profile", "platform", "message"},
+    ),
+    (
+        "empty_password",
+        {"dialog": ("", "ok")},
+        {},
+        ("status", "empty_password"),
+        {"status", "profile", "message"},
+    ),
+    (
+        "missing_field",
+        {},
+        {"host": ""},
+        ("error", "missing_field"),
+        {"error", "exception_class", "message"},
+    ),
+    (
+        "write_profile_failed",
+        {"write_profile": _raise_write_profile_failure},
+        {},
+        ("error", "write_profile_failed"),
+        {"error", "exception_class", "message"},
+    ),
+    (
+        "keychain_write_failed",
+        {"set_password": _raise_keychain_failure},
+        {},
+        ("error", "keychain_write_failed"),
+        {"error", "exception_class", "message"},
+    ),
+]
+
+
+class TestSetupViaDialogResponseShapeContract:
+    """Structural pin on all ten setup_via_dialog responses.
+
+    These are the tool's wire contract: agents (and the skills in
+    skills/redshift-setup/) branch on the `status` / `error` value and read
+    named fields off the response. Renaming a field or a status string is a
+    breaking change that no other test would catch — the existing tests each
+    assert one or two keys of the shape they happen to exercise, so a dropped
+    or added key slips through.
+
+    Deliberately NOT pinned: the `message` prose. Four of those messages were
+    rewritten when the write ordering changed, and more may change; freezing
+    wording here would turn every copy edit into a test failure. What is
+    pinned is the discriminator value and the exact top-level key set.
+    """
+
+    def _make_tools(self):
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def provider():
+            raise ConfigurationError("not yet")
+        return RedshiftTools(provider)
+
+    @staticmethod
+    def _stub(monkeypatch, *, dialog=("dialog-secret", "ok"),
+              write_profile=None, set_password=None, connection=(True, None)):
+        """Stub the whole chain; each case overrides just the step it bends."""
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            write_profile or (lambda name, **kw: None),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.set_password',
+            set_password or (lambda name, pw: None),
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: dialog,
+        )
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._test_redshift_connection',
+            lambda *a, **kw: connection,
+        )
+
+    def _call(self, monkeypatch, stub, call_overrides):
+        self._stub(monkeypatch, **stub)
+        setup_via_dialog = _get_tool_fn(self._make_tools(), 'setup_via_dialog')
+        kwargs = {
+            'host': 'h.example.com',
+            'user': 'alice',
+            'dbname': 'analytics',
+            'profile': 'prod',
+            'port': 5439,
+        }
+        kwargs.update(call_overrides)
+        return setup_via_dialog(**kwargs)
+
+    @pytest.mark.parametrize(
+        "case_id,stub,call_overrides,discriminator,expected_keys",
+        _SETUP_RESPONSE_SHAPES,
+        ids=[row[0] for row in _SETUP_RESPONSE_SHAPES],
+    )
+    def test_response_shape_unchanged(self, monkeypatch, case_id, stub,
+                                      call_overrides, discriminator,
+                                      expected_keys):
+        result = self._call(monkeypatch, stub, call_overrides)
+
+        disc_key, disc_value = discriminator
+        assert result.get(disc_key) == disc_value, (
+            f"{case_id}: the {disc_key!r} string agents branch on changed — "
+            f"got {result.get(disc_key)!r}. Full response: {result}"
+        )
+        assert set(result) == expected_keys, (
+            f"{case_id}: top-level key set changed. "
+            f"missing={expected_keys - set(result)} "
+            f"unexpected={set(result) - expected_keys}. "
+            f"These keys are the tool's wire contract; renaming or dropping "
+            f"one breaks every agent that reads it."
+        )
+
+    def test_success_writes_both_stores_and_reports_tested_true(self, monkeypatch):
+        """A3 positive: a fully successful call still writes host/port/user/
+        dbname AND the password, and still reports the connection result."""
+        write_calls = []
+        set_pw_calls = []
+        self._stub(
+            monkeypatch,
+            write_profile=lambda name, **kw: write_calls.append((name, kw)),
+            set_password=lambda name, pw: set_pw_calls.append((name, pw)),
+            connection=(True, None),
+        )
+        setup_via_dialog = _get_tool_fn(self._make_tools(), 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h.example.com', user='alice',
+                                  dbname='analytics', profile='prod', port=5439)
+
+        assert write_calls == [
+            ('prod', {'host': 'h.example.com', 'port': 5439,
+                      'user': 'alice', 'dbname': 'analytics'}),
+        ]
+        assert set_pw_calls == [('prod', 'dialog-secret')]
+        assert result["status"] == "configured"
+        assert result["tested"] is True
+        assert result["profile"] == "prod"
+        assert result["host"] == "h.example.com"
+        assert result["port"] == 5439
+        assert result["user"] == "alice"
+        assert result["dbname"] == "analytics"
+        # No connection_error key on the success shape — its presence is what
+        # distinguishes the failed-connection shape from this one.
+        assert "connection_error" not in result
+
+    def test_connection_failure_reports_tested_false_with_error(self, monkeypatch):
+        """A3 negative: both stores were written, but the connection test
+        failed — the tool must say so rather than claim `configured`."""
+        write_calls = []
+        set_pw_calls = []
+        self._stub(
+            monkeypatch,
+            write_profile=lambda name, **kw: write_calls.append((name, kw)),
+            set_password=lambda name, pw: set_pw_calls.append((name, pw)),
+            connection=(False, "Connection timed out (host unreachable)"),
+        )
+        setup_via_dialog = _get_tool_fn(self._make_tools(), 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h.example.com', user='alice',
+                                  dbname='analytics', profile='prod', port=5439)
+
+        assert len(write_calls) == 1
+        assert len(set_pw_calls) == 1
+        assert result["status"] == "configured_but_connection_failed"
+        assert result["tested"] is False
+        assert result["connection_error"] == "Connection timed out (host unreachable)"
+        assert result["profile"] == "prod"
+
+
 class TestGetSetupStatusTool:
     """The read-only setup-status tool. Safe to call at session start;
     returns non-secrets only; agents use it to decide whether to call
