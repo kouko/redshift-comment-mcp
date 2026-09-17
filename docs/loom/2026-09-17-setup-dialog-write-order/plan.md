@@ -3,11 +3,11 @@ intent: 2026-09-17-setup-dialog-write-order@7605037
 charter: 1.0
 
 ## Current State Evidence
-- Forward: `redshift_tools.py:1327` writes fields, `:1350` opens the dialog, `:1364` stores the password, `:1386` tests the connection.
+- Forward: `redshift_tools.py:1327` writes fields, `:1350` opens the dialog, `:1364` stores the password, `:1404` tests the connection.
 - Reverse: none exists. No code path restores a profile after `write_profile` succeeds.
 - Error: `redshift_tools.py:1356-1361` returns on four reason-keyed failures and on empty password, all after `:1327`.
 - Data: `config.py:86` replaces the whole profile dict; `config.py:118` overwrites the keychain entry only on success.
-- Boundary: `tests/test_tools.py:1541` covers all six responses; none asserts config.toml or keychain content after a failure.
+- Boundary: `tests/test_tools.py:1541` covers the response bodies; none asserts config.toml or keychain content after a failure.
 
 ## Task DAG
 
@@ -16,7 +16,7 @@ charter: 1.0
 - Test: A1 positive: cancel-leaves-toml-identical; negative: success-writes-toml. A2 positive: cancel-leaves-keychain; negative: success-writes-keychain. A4 positive: red-against-pre-change; boundary: all-five-failure-reasons.
 - Risk: moving `write_profile` after the dialog makes `write_profile_failed` reachable only after the user types a password; agent-decided — the security property outranks failing fast on an unwritable config directory.
 
-**W0-02 Pin the six response shapes, and bump the two version fields**  after: W0-01  acceptance: 3
+**W0-02 Pin the ten response shapes, and bump the two version fields**  after: W0-01  acceptance: 3
 - Files: tests/test_tools.py, .claude-plugin/plugin.json, pyproject.toml
 - Test: A3 positive: success-returns-configured-with-tested-true; negative: connection-failure-returns-configured-but-connection-failed.
 - Risk: W0-01 rewrote four response messages, so pinning prose would lock in wording; agent-decided — pin status strings and field names only. Bump is PATCH 0.10.0 to 0.10.1.

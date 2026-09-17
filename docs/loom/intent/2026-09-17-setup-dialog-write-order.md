@@ -1,7 +1,7 @@
 # setup_via_dialog must not leave a half-written profile behind
 originator: kouko
 kind: engineering
-needs-design: no — no interface surface changes; the tool's argument list and all six response shapes stay identical, and config.toml's format is unchanged. Only the order of two internal writes moves.
+needs-design: no — no interface surface changes; the tool's argument list and all ten response shapes stay identical, and config.toml's format is unchanged. Only the order of two internal writes moves.
 evidence: [docs/loom/audits/2026-09-17-credential-audit.md]
 status: confirmed 2026-09-17
 publication: automatic — authorized 2026-09-17 by kouko
@@ -40,18 +40,20 @@ profile store exactly as it was before the call.
 2. After such a call, the keychain entry for the named profile is unchanged.
 3. A `setup_via_dialog` call that completes successfully still writes
    host/port/user/dbname and the password, and still reports the connection-test
-   result, with all six response shapes unchanged from v0.10.0.
+   result, with all ten response shapes unchanged from v0.10.0.
 4. The failure case is covered by a test that fails against the pre-change code.
 
 ## Constraints
 - The password value must not be written to argv, logs, stdout, or any MCP
   response, as the repository already requires.
-- The six documented response shapes (`configured`,
+- The ten documented response shapes keep their existing field names and their
+  `status` / `error` strings: seven `status` values (`configured`,
   `configured_but_connection_failed`, `dialog_cancelled`, `permission_denied`,
-  `dialog_unavailable`, `platform_unsupported`, `empty_password`) keep their
-  existing field names and status strings.
-- Tests run under `uv run pytest`; the live-cluster tiers stay opt-in behind
-  `REDSHIFT_INTEGRATION=1`.
+  `dialog_unavailable`, `platform_unsupported`, `empty_password`) and three
+  `error` values (`missing_field`, `write_profile_failed`,
+  `keychain_write_failed`).
+- Tests run under `uv run --extra dev pytest`; the live-cluster tiers stay
+  opt-in behind `REDSHIFT_INTEGRATION=1`.
 
 ## Out of scope
 - How the server chooses between inline and profile connection modes.
