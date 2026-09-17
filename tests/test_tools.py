@@ -1864,6 +1864,51 @@ class TestSetupViaDialogTool:
         # ...but message remains actionable
         assert "--stdin" in result["message"]
 
+    def test_setup_via_dialog_keychain_write_failed_keeps_password_out_of_log(
+        self, monkeypatch, tmp_path, caplog
+    ):
+        """Same backend, the other exit: the server log.
+
+        The sibling test above pins the RESPONSE clean while the log line
+        beside it interpolated the very exception whose args carry the
+        password. The intent's constraint names logs alongside responses, and
+        a keychain backend's exception args are outside this repo's control —
+        so only the exception CLASS may be logged from this branch.
+        """
+        import logging as _logging
+
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        caplog.set_level(_logging.DEBUG)
+
+        password_marker = "the-actual-password-this-must-never-leak"
+        monkeypatch.setattr(
+            'redshift_comment_mcp.config.write_profile',
+            lambda name, **kw: None,
+        )
+
+        def failing_set(name, pw):
+            raise RuntimeError(f"backend rejected password {pw!r}")
+        monkeypatch.setattr('redshift_comment_mcp.config.set_password', failing_set)
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: (password_marker, "ok"),
+        )
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(host='h', user='u', dbname='d')
+
+        assert result["error"] == "keychain_write_failed"
+        # Render each record the way a handler would, so an exc_info-rendered
+        # traceback (whose last line is str(e)) counts as logged text.
+        formatter = _logging.Formatter()
+        logged = "\n".join(formatter.format(record) for record in caplog.records)
+        assert password_marker not in logged, (
+            "the password reached the server log via the keychain backend's "
+            "exception args — the constraint covers logs, not just responses"
+        )
+
     def test_setup_via_dialog_keychain_specific_exception_hints(self, monkeypatch):
         """Snyk guidance: catch specific keyring exception types where
         possible. setup_via_dialog maps known exception class names to
@@ -2152,6 +2197,98 @@ class TestSetupViaDialogPersistsNothingWithoutPassword:
         assert config_path.read_bytes() == before_bytes
         assert storage == before_storage
 
+    def test_keychain_write_failure_restores_config_toml_byte_identical(
+        self, monkeypatch, populated_stores
+    ):
+        """The same half-write, one step later: `write_profile` lands, then
+        `set_password` raises — a locked macOS keychain is an ordinary state.
+
+        Without a rollback config.toml points at the NEW host while the
+        keychain still holds the PREVIOUS profile's still-valid password, and
+        `get_setup_status` reports ``configured: true`` for a credential pair
+        that never existed together. A failed `set_password` means no password
+        was stored, so the intent's outcome covers it.
+        """
+        config_path, storage = populated_stores
+        before_bytes = config_path.read_bytes()
+        before_storage = dict(storage)
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("a-brand-new-password", "ok"),
+        )
+
+        def refuse(name, pw):
+            raise RuntimeError("keychain is locked")
+        monkeypatch.setattr('redshift_comment_mcp.config.set_password', refuse)
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='prod', port=5440,
+        )
+
+        assert result["error"] == "keychain_write_failed", f"got: {result}"
+        assert config_path.read_bytes() == before_bytes, (
+            "config.toml was left pointing at the new host while the keychain "
+            "still holds the old password — the half-written profile survives "
+            "a keychain failure"
+        )
+        assert storage == before_storage
+        from redshift_comment_mcp import config as cfg
+        assert cfg.read_profile("prod")["host"] == "old.example.com"
+
+    def test_keychain_write_failure_removes_a_config_toml_it_created(
+        self, monkeypatch, tmp_path
+    ):
+        """The absence branch of the same rollback.
+
+        When there was no config.toml at all before the call, "exactly as it
+        was" means the file is gone again — not left holding a profile whose
+        password never made it to the keychain.
+        """
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+
+        storage: dict = {}
+        import keyring as _kr
+        monkeypatch.setattr(
+            _kr, "set_password",
+            lambda service, user, password: storage.__setitem__((service, user), password),
+        )
+        monkeypatch.setattr(
+            _kr, "get_password",
+            lambda service, user: storage.get((service, user)),
+        )
+
+        from redshift_comment_mcp import config as cfg
+        config_path = cfg.config_path()
+        assert not config_path.exists(), "fixture precondition: no config yet"
+
+        monkeypatch.setattr(
+            'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
+            lambda profile: ("a-brand-new-password", "ok"),
+        )
+
+        def refuse(name, pw):
+            raise RuntimeError("keychain is locked")
+        monkeypatch.setattr('redshift_comment_mcp.config.set_password', refuse)
+
+        tools = self._make_tools()
+        setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
+
+        result = setup_via_dialog(
+            host='new.example.com', user='newuser',
+            dbname='newdb', profile='fresh', port=5440,
+        )
+
+        assert result["error"] == "keychain_write_failed", f"got: {result}"
+        assert not config_path.exists(), (
+            "a config.toml created by the rolled-back write was left behind"
+        )
+        assert storage == {}
+
 
 class TestDegradedModeContractAdditional:
     """Round-2 coverage: end-to-end bootstrap-then-use, lazy-property direct
@@ -2433,9 +2570,16 @@ def _raise_keychain_failure(*_a, **_kw):
 # Every response shape setup_via_dialog can return, as of v0.10.0.
 #
 # Each row: (case id, stub overrides, call-arg overrides, (discriminator key,
-# discriminator value), exact top-level key set). The key sets were read off
-# ``git show v0.10.0:src/redshift_comment_mcp/redshift_tools.py`` and are
-# unchanged at HEAD.
+# discriminator value), exact top-level key set, expected values). The key
+# sets were read off ``git show v0.10.0:src/redshift_comment_mcp/redshift_tools.py``
+# and are unchanged at HEAD.
+#
+# `expected values` is a per-key map checked by value AND by type; ``{}``
+# means the row pins its key set only. `configured_but_connection_failed`
+# echoes the caller's fields back, and nothing else in the suite asserts what
+# those echoed values are — so ``"port": str(port)`` or a user/dbname swap
+# would keep every key name and slip through. Its sibling `configured` is
+# value-pinned by test_success_writes_both_stores_and_reports_tested_true.
 _SETUP_RESPONSE_SHAPES = [
     (
         "configured",
@@ -2444,6 +2588,7 @@ _SETUP_RESPONSE_SHAPES = [
         ("status", "configured"),
         {"status", "profile", "host", "port", "user", "dbname", "tested",
          "message"},
+        {},
     ),
     (
         "configured_but_connection_failed",
@@ -2452,6 +2597,9 @@ _SETUP_RESPONSE_SHAPES = [
         ("status", "configured_but_connection_failed"),
         {"status", "profile", "host", "port", "user", "dbname", "tested",
          "connection_error", "message"},
+        {"profile": "prod", "host": "h.example.com", "port": 5439,
+         "user": "alice", "dbname": "analytics", "tested": False,
+         "connection_error": "Connection timed out (host unreachable)"},
     ),
     (
         "dialog_cancelled",
@@ -2459,6 +2607,7 @@ _SETUP_RESPONSE_SHAPES = [
         {},
         ("status", "dialog_cancelled"),
         {"status", "profile", "message"},
+        {},
     ),
     (
         "permission_denied",
@@ -2466,6 +2615,7 @@ _SETUP_RESPONSE_SHAPES = [
         {},
         ("status", "permission_denied"),
         {"status", "profile", "platform", "message"},
+        {},
     ),
     (
         "dialog_unavailable",
@@ -2473,6 +2623,7 @@ _SETUP_RESPONSE_SHAPES = [
         {},
         ("status", "dialog_unavailable"),
         {"status", "profile", "platform", "message"},
+        {},
     ),
     (
         "platform_unsupported",
@@ -2480,6 +2631,7 @@ _SETUP_RESPONSE_SHAPES = [
         {},
         ("status", "platform_unsupported"),
         {"status", "profile", "platform", "message"},
+        {},
     ),
     (
         "empty_password",
@@ -2487,6 +2639,7 @@ _SETUP_RESPONSE_SHAPES = [
         {},
         ("status", "empty_password"),
         {"status", "profile", "message"},
+        {},
     ),
     (
         "missing_field",
@@ -2494,6 +2647,7 @@ _SETUP_RESPONSE_SHAPES = [
         {"host": ""},
         ("error", "missing_field"),
         {"error", "exception_class", "message"},
+        {},
     ),
     (
         "write_profile_failed",
@@ -2501,6 +2655,7 @@ _SETUP_RESPONSE_SHAPES = [
         {},
         ("error", "write_profile_failed"),
         {"error", "exception_class", "message"},
+        {},
     ),
     (
         "keychain_write_failed",
@@ -2508,6 +2663,7 @@ _SETUP_RESPONSE_SHAPES = [
         {},
         ("error", "keychain_write_failed"),
         {"error", "exception_class", "message"},
+        {},
     ),
 ]
 
@@ -2525,7 +2681,9 @@ class TestSetupViaDialogResponseShapeContract:
     Deliberately NOT pinned: the `message` prose. Four of those messages were
     rewritten when the write ordering changed, and more may change; freezing
     wording here would turn every copy edit into a test failure. What is
-    pinned is the discriminator value and the exact top-level key set.
+    pinned is the discriminator value, the exact top-level key set, and — for
+    rows that carry an expected-value map — the value and type behind each
+    named key.
     """
 
     def _make_tools(self):
@@ -2570,13 +2728,13 @@ class TestSetupViaDialogResponseShapeContract:
         return setup_via_dialog(**kwargs)
 
     @pytest.mark.parametrize(
-        "case_id,stub,call_overrides,discriminator,expected_keys",
+        "case_id,stub,call_overrides,discriminator,expected_keys,expected_values",
         _SETUP_RESPONSE_SHAPES,
         ids=[row[0] for row in _SETUP_RESPONSE_SHAPES],
     )
     def test_response_shape_unchanged(self, monkeypatch, case_id, stub,
                                       call_overrides, discriminator,
-                                      expected_keys):
+                                      expected_keys, expected_values):
         result = self._call(monkeypatch, stub, call_overrides)
 
         disc_key, disc_value = discriminator
@@ -2591,6 +2749,15 @@ class TestSetupViaDialogResponseShapeContract:
             f"These keys are the tool's wire contract; renaming or dropping "
             f"one breaks every agent that reads it."
         )
+        for key, expected in expected_values.items():
+            actual = result[key]
+            assert actual == expected and type(actual) is type(expected), (
+                f"{case_id}: {key!r} is {actual!r} ({type(actual).__name__}), "
+                f"expected {expected!r} ({type(expected).__name__}). The key "
+                f"set is unchanged, so only a value pin catches this — a "
+                f"stringified port or two swapped fields read as valid to "
+                f"every agent consuming the response."
+            )
 
     def test_success_writes_both_stores_and_reports_tested_true(self, monkeypatch):
         """A3 positive: a fully successful call still writes host/port/user/

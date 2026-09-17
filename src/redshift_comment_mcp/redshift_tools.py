@@ -186,6 +186,45 @@ _DIALOG_FAILURE_BUILDERS: Dict[str, Callable[..., Dict[str, Any]]] = {
     "unsupported": _build_platform_unsupported_response,
 }
 
+
+def _snapshot_config_bytes(path) -> Optional[bytes]:
+    """Raw bytes of config.toml, or ``None`` when the file does not exist.
+
+    Raw bytes rather than the parsed profile dict: restoring them gives byte
+    identity for free, with no re-serialisation round trip that would drop
+    comments, key order or unknown keys. ``None`` records the file's absence,
+    which is a state that has to be restorable too.
+    """
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
+
+
+def _restore_config_bytes(path, snapshot: Optional[bytes]) -> bool:
+    """Put config.toml back to ``snapshot``; ``None`` means delete it again.
+
+    Returns True when the file is back to its pre-call state. Deliberately
+    NOT ``config.delete_profile``: that also deletes the keychain entry, and
+    the entry this rollback protects is the one that must stay untouched.
+    """
+    try:
+        if _snapshot_config_bytes(path) == snapshot:
+            return True
+        if snapshot is None:
+            path.unlink(missing_ok=True)
+        else:
+            path.write_bytes(snapshot)
+        return True
+    except OSError as e:
+        logger.error(
+            f"setup_via_dialog: could not restore config.toml after a failed "
+            f"password write (exception class: {type(e).__name__}); the "
+            f"profile fields may be left pointing at the new host"
+        )
+        return False
+
+
 # 分頁設定
 DEFAULT_MAX_ITEMS = 50  # 預設最大回傳筆數（超過時自動截斷）
 
@@ -1378,16 +1417,31 @@ the only chat-leak-free paths.
             if not password:
                 return _build_empty_password_response(profile=profile)
 
+            # Snapshot config.toml before it is touched. The keychain write
+            # can still fail after this one succeeds (a locked macOS keychain
+            # is an ordinary state), which would leave the fields pointing at
+            # the NEW host while the keychain still holds the PREVIOUS
+            # profile's still-valid password — the same half-written profile
+            # the dialog-first ordering removes, reached one step later.
+            config_file = cfg.config_path()
+            config_snapshot = _snapshot_config_bytes(config_file)
+
             try:
                 cfg.write_profile(profile, host=host, port=port, user=user, dbname=dbname)
             except Exception as e:
                 # Per CWE-209 / OWASP Error Handling Cheat Sheet: log the
-                # full exception server-side, but return only the exception
-                # CLASS to the client. The class name is diagnostic-useful
+                # exception server-side, but return only the exception CLASS
+                # to the client. The class name is diagnostic-useful
                 # (PermissionError vs OSError vs ...) without including any
                 # exception args, which could in theory carry sensitive
                 # info (file paths, environment values, etc.).
-                logger.error(f"setup_via_dialog: write_profile failed: {e}", exc_info=True)
+                #
+                # No `exc_info=True`: the password is a live local of this
+                # very frame, and any handler that renders frame locals
+                # (rich, better-exceptions, a custom formatter) would write
+                # it into the server log. `write_profile` is never handed the
+                # password, so its own exception text is safe to log.
+                logger.error(f"setup_via_dialog: write_profile failed: {e}")
                 return {
                     "error": "write_profile_failed",
                     "exception_class": type(e).__name__,
@@ -1405,35 +1459,53 @@ the only chat-leak-free paths.
             try:
                 cfg.set_password(profile, password)
             except Exception as e:
-                # Same CWE-209 discipline as write_profile_failed above: log
-                # full exception server-side, return only the exception
-                # class name + a sanitized message. Keychain backends are
-                # third-party (macOS Security framework, gnome-keyring,
-                # KWallet, etc.) and their exception args' contents are
-                # outside our control — assume they may carry context we
-                # don't want crossing the MCP wire.
-                logger.error(f"setup_via_dialog: set_password failed: {e}", exc_info=True)
+                # No password was stored, so the call must leave the profile
+                # store exactly as it found it: roll config.toml back to the
+                # bytes captured before write_profile ran.
+                restored = _restore_config_bytes(config_file, config_snapshot)
+                # Same CWE-209 discipline as write_profile_failed above, one
+                # notch stricter. This is the single call that receives the
+                # password; keychain backends are third-party (macOS Security
+                # framework, gnome-keyring, KWallet, etc.) and their
+                # exception args are outside this repo's control, so a
+                # backend that echoes the password would put it in both
+                # `str(e)` and the last line of an `exc_info=True` traceback.
+                # Only the exception class is logged.
+                exc_class = type(e).__name__
+                logger.error(
+                    f"setup_via_dialog: set_password failed for profile "
+                    f"'{profile}' (exception class: {exc_class})"
+                )
                 # Surface specific keyring exceptions when recognisable
                 # (per Snyk guidance: catch keyring.errors.PasswordSetError
                 # / KeyringLocked separately for more actionable diagnosis).
-                exc_class = type(e).__name__
                 hint = {
                     "PasswordSetError": "Keychain rejected the write (locked, missing entitlement, or backend refused).",
                     "KeyringLocked": "OS keychain is currently locked; unlock it and retry.",
                     "InitError": "Keyring backend failed to initialize on this host.",
                     "NoKeyringError": "No keyring backend is available on this host.",
                 }.get(exc_class, "Underlying keychain write failed.")
+                rollback = (
+                    f"Profile '{profile}' was rolled back to exactly what "
+                    f"was saved before this call, so both stores are untouched."
+                    if restored else
+                    f"Profile '{profile}' fields reached config.toml and "
+                    f"could NOT be rolled back (the restore failed too, and "
+                    f"was logged server-side), so the fields may point at "
+                    f"the new cluster while the keychain holds the previous "
+                    f"password — have the user check config.toml."
+                )
                 return {
                     "error": "keychain_write_failed",
                     "exception_class": exc_class,
                     "message": (
-                        f"{hint} Profile '{profile}' fields were saved to "
-                        f"config.toml but the password was NOT stored. The "
-                        f"underlying error was logged server-side with full "
-                        f"detail; it is not included here per chat-leak "
-                        f"hygiene. Have the user pipe the password via "
-                        f"`redshift-comment-mcp set-password --profile "
-                        f"{profile} --stdin` from a terminal as a fallback."
+                        f"{hint} {rollback} The password was NOT stored. The "
+                        f"keychain error was logged server-side by exception "
+                        f"class; its text is withheld because a backend can "
+                        f"echo the value it was handed. Have the user pipe "
+                        f"the password via `redshift-comment-mcp set-password "
+                        f"--profile {profile} --stdin` from a terminal as a "
+                        f"fallback."
                     ),
                 }
 
