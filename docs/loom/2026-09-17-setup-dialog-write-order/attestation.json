@@ -1,0 +1,99 @@
+{
+  "schema": "loom-attestation/v2",
+  "change_id": "2026-09-17-setup-dialog-write-order",
+  "content_digest": "8e3873b6a6791aa101594880fdec46b1d530bf38",
+  "executions": [
+    {
+      "kind": "package-tests",
+      "command": "uv run --extra dev pytest tests/ --ignore=tests/integration --ignore=tests/e2e",
+      "artifact": "",
+      "result": "pass",
+      "command_digest": "c129b320ba001a481050c8325e67ffc68a89155656950ff0fcafc8002d704d99"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_concurrent_setup.py -q",
+      "artifact": "docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_concurrent_setup.py",
+      "result": "pass",
+      "command_digest": "bc66aad00ab06902ae9528abf435d074651aa4e69c7fa41424c1a5f76f090b55"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_config_toml_byte_identity.py -q",
+      "artifact": "docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_config_toml_byte_identity.py",
+      "result": "pass",
+      "command_digest": "2dcf5b990c80e460f8ed2f0c62a5633802edfad84d79c94316aee6dc893cc694"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_empty_password_boundary.py -q",
+      "artifact": "docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_empty_password_boundary.py",
+      "result": "pass",
+      "command_digest": "b4034f88535c059ffc46ce06eea37105127e41d30c05ca9411475524b02f8721"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_half_write_windows.py -q",
+      "artifact": "docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_half_write_windows.py",
+      "result": "pass",
+      "command_digest": "13264dc04026d6b6e76a22f505e63dd7a0c523a20efe1e7f75a61dcbe3b73e5b"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_response_shape_drift.py -q",
+      "artifact": "docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_response_shape_drift.py",
+      "result": "pass",
+      "command_digest": "1ce1dcac2d332871d77def3043974c3d8ce933754978630cef51254e63541b17"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_rollback_fidelity.py -q",
+      "artifact": "docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_rollback_fidelity.py",
+      "result": "pass",
+      "command_digest": "e0f11985ed8a3cb4e1479c4f47faee7ed631bf954dca02338a80a59c80c84929"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_secret_leakage.py -q",
+      "artifact": "docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/probe_secret_leakage.py",
+      "result": "pass",
+      "command_digest": "a6f141b97e6eee243fda72209c049e2a4c6ef624953937bf182fac886789f01a"
+    }
+  ],
+  "verdicts": [
+    {
+      "reviewer": "closing-code",
+      "vendor": "anthropic",
+      "model": "opus",
+      "lens": "code",
+      "verdict": "PASS",
+      "findings": []
+    },
+    {
+      "reviewer": "closing-docs",
+      "vendor": "anthropic",
+      "model": "opus",
+      "lens": "docs",
+      "verdict": "PASS",
+      "findings": []
+    }
+  ],
+  "findings": [
+    {
+      "severity": "important",
+      "anchor": "src/redshift_comment_mcp/config.py:78-87",
+      "text": "Adversary finding B: write_profile is an unlocked read-modify-write; 8 concurrent calls lost 7 profiles while the keychain kept all 8 passwords. Pre-existing; re-filed to 2026-09-17-credential-resolution-hardening."
+    },
+    {
+      "severity": "nit",
+      "anchor": "src/redshift_comment_mcp/redshift_tools.py:1400",
+      "text": "Adversary finding E: `if not password` accepts whitespace-only passwords. Pre-existing; re-filed to the same follow-up change."
+    },
+    {
+      "severity": "nit",
+      "anchor": "src/redshift_comment_mcp/config.py:78-87",
+      "text": "Adversary finding F: the success path rewrites config.toml through the TOML round trip, dropping comments and unknown keys. Pre-existing; re-filed to the same follow-up change."
+    }
+  ],
+  "selection": null
+}
