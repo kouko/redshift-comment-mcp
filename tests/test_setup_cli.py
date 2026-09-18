@@ -255,14 +255,20 @@ def test_delete_profile_locked_keychain_returns_2(tmp_xdg, fake_keyring, monkeyp
     and there is nothing to retry, while this means the profile is still whole
     and the same command works once the keychain is unlocked. A skill that
     branches on the exit code must be able to tell those apart.
+
+    The password is set first, so this is a *present* entry. The real macOS
+    backend's ``delete_password`` wraps a locked keychain in the same
+    ``PasswordDeleteError`` it would raise for "no such entry" — unlike
+    ``get_password``, which tells the two apart — so that is the exception
+    this stands in with, not ``KeyringLocked``.
     """
     config.write_profile("default", host="h", port=5439, user="u", dbname="d")
     config.set_password("default", "secret")
     monkeypatch.setattr("builtins.input", lambda _: "y")
 
     def _locked(service, user):
-        from keyring.errors import KeyringLocked
-        raise KeyringLocked("the keychain is locked")
+        from keyring.errors import PasswordDeleteError
+        raise PasswordDeleteError("the keychain is locked")
 
     import keyring as _kr
     monkeypatch.setattr(_kr, "delete_password", _locked)

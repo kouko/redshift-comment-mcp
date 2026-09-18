@@ -125,14 +125,15 @@ _lock_depth = threading.local()
 
 
 class KeychainDeleteError(RuntimeError):
-    """Raised when a profile's stored password could not be removed.
+    """Raised when a profile's stored password could not be checked or removed.
 
     :func:`delete_profile` keeps its ``bool`` return — ``True`` deleted,
     ``False`` no such profile — because every caller already reads ``False`` as
-    "did not exist". A keychain that refuses the delete is neither of those, so
-    it travels out of band instead of being folded into the bool: the store is
-    left untouched, and the caller is told why rather than being handed a
-    ``False`` it would report as "profile did not exist".
+    "did not exist". A keychain that refuses the presence check or the delete
+    is neither of those, so it travels out of band instead of being folded
+    into the bool: the store is left untouched, and the caller is told why
+    rather than being handed a ``False`` it would report as "profile did not
+    exist".
 
     Not a ``ConfigurationError``: nothing about the configuration is wrong, the
     keychain is simply unavailable (typically locked), and retrying after
@@ -394,6 +395,14 @@ def _replace_atomically(
     the umask, which can only remove bits, so the file is never more permissive
     than 0600 at any instant; the explicit chmod puts the mode back where a
     restrictive umask narrowed it, on the path the READMEs actually name.
+
+    That chmod runs after ``os.replace`` — the point of no return — so a
+    failure there is tolerated the same way :func:`_fsync_directory` already
+    tolerates its own ``OSError``, rather than propagated. The rename has
+    already made the new content the durable file at ``target``; raising here
+    would report that completed write to the caller as a failure. Because
+    the file can only ever be at or under 0600 going in, the worst a failed
+    chmod leaves behind is a mode stricter than 0600 — never more permissive.
     """
     target = _resolved_target(path)
     _sweep_stale_temp_files(target.parent, prefix)
@@ -410,7 +419,10 @@ def _replace_atomically(
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
-    target.chmod(0o600)
+    try:
+        target.chmod(0o600)
+    except OSError:
+        pass
     _fsync_directory(target.parent)
 
 
@@ -451,9 +463,19 @@ def delete_profile(name: str) -> bool:
        remaining interface that lists it, let alone deletes it. This order
        fails the other way: a complete, still-listed profile the user can
        delete again once the keychain is unlocked.
-    2. **Absence is checked before the keychain is touched at all.** Otherwise
-       ``delete_profile("typo")`` against a locked keychain would raise where
-       it used to answer False.
+    2. **Absence is checked before the keychain is touched at all** — first
+       against config.toml (no keychain call at all for a name that was never
+       a profile), then against the keychain itself via ``get_password``
+       before ``delete_password`` is ever called. The second check exists
+       because the two calls do not agree on what a locked keychain looks
+       like: on the real macOS backend, ``get_password`` tells "not found"
+       (returns ``None``) apart from "locked" (raises ``KeyringLocked``), but
+       ``delete_password`` collapses both into the same
+       ``PasswordDeleteError`` — so catching that class from ``delete_password``
+       cannot distinguish "nothing to strand" from "a real entry I could not
+       reach," and treating it as the former let a locked keychain masquerade
+       as an absent one. ``get_password``'s result is compared inline and
+       never bound to a name, so no password value becomes a local variable.
     3. **The pointer is cleared last**, only after the fields are really gone,
        and only while it still names the deleted profile. An active-profile
        pointer beats the lone-profile fallback in
@@ -479,22 +501,34 @@ def delete_profile(name: str) -> bool:
         return False
 
     try:
-        keyring.delete_password(KEYRING_SERVICE, name)
-    except keyring.errors.PasswordDeleteError:
-        # No entry for this profile. Nothing to strand, so this is not a
-        # failure — a profile whose password was never stored is deletable.
-        pass
+        # Compared inline rather than bound to a name — a named local would
+        # hold the actual password string, which this module must never do
+        # beyond the keychain calls themselves.
+        entry_is_absent = keyring.get_password(KEYRING_SERVICE, name) is None
     except Exception as e:  # noqa: BLE001 — see below
-        # Deliberately broader than KeyringError: a locked or unavailable
-        # keychain surfaces as KeyringLocked, NoKeyringError or InitError, and
-        # individual backends raise their own classes on top. Nothing is
-        # swallowed — every one of them is re-raised as KeychainDeleteError
-        # with the original attached — and the store has not been touched yet.
         raise KeychainDeleteError(
-            f"could not delete the keychain password for profile '{name}' "
-            f"({type(e).__name__}); the profile was left intact — unlock the "
-            f"keychain and delete it again"
+            f"could not check the keychain for profile '{name}' before "
+            f"deleting it ({type(e).__name__}); the profile was left intact "
+            f"— unlock the keychain and delete it again"
         ) from e
+
+    if not entry_is_absent:
+        try:
+            keyring.delete_password(KEYRING_SERVICE, name)
+        except Exception as e:  # noqa: BLE001 — see below
+            # Deliberately broader than KeyringError: a locked or unavailable
+            # keychain surfaces as KeyringLocked, NoKeyringError, InitError or
+            # — on the real macOS backend — PasswordDeleteError itself, and
+            # individual backends raise their own classes on top. Presence
+            # was already confirmed above, so nothing here means "no entry"
+            # any more; every exception is a real failure. Nothing is
+            # swallowed — every one is re-raised as KeychainDeleteError with
+            # the original attached — and the store has not been touched yet.
+            raise KeychainDeleteError(
+                f"could not delete the keychain password for profile '{name}' "
+                f"({type(e).__name__}); the profile was left intact — unlock the "
+                f"keychain and delete it again"
+            ) from e
 
     with _store_lock():
         profiles = read_all()

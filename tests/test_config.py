@@ -164,6 +164,45 @@ def test_write_profile_midwrite_failure_keeps_previous_bytes(tmp_xdg, monkeypatc
     assert _config_dir_entries() == ["config.toml", "config.toml.lock"]
 
 
+def test_write_profile_chmod_failure_after_rename_does_not_report_the_write_failed(
+    tmp_xdg, monkeypatch
+):
+    """A ``chmod`` failure AFTER the rename must not turn a completed write
+    into a reported failure.
+
+    ``os.replace`` is the point of no return: once it returns, the new
+    content is durably the file at ``target``. The old code called
+    ``target.chmod(0o600)`` unguarded right after that, so a failure there
+    propagated out of ``write_profile`` even though the write had already
+    succeeded — the caller would see an exception for a write that, in fact,
+    landed. ``mkstemp`` already creates the temp file at 0600 masked by the
+    umask (which can only remove bits), so the file is never more permissive
+    than 0600 even if this ``chmod`` never runs at all.
+    """
+    config.write_profile("prod", host="prod.example.com", port=5439, user="u", dbname="d")
+
+    real_chmod = Path.chmod
+
+    def boom_once_on_config_toml(self, mode, *args, **kwargs):
+        if self.name == "config.toml":
+            raise OSError(errno.EPERM, "Operation not permitted")
+        return real_chmod(self, mode, *args, **kwargs)
+
+    with monkeypatch.context() as m:
+        m.setattr(Path, "chmod", boom_once_on_config_toml)
+        # Must not raise: the rename underneath already completed.
+        config.write_profile(
+            "staging", host="staging.example.com", port=5439, user="u", dbname="d"
+        )
+
+    assert config.read_all() == {
+        "prod": {"host": "prod.example.com", "port": 5439, "user": "u", "dbname": "d"},
+        "staging": {
+            "host": "staging.example.com", "port": 5439, "user": "u", "dbname": "d",
+        },
+    }, "the content did not actually land despite the chmod failure being tolerated"
+
+
 def test_write_profile_success_replaces_content(tmp_xdg):
     """The negative case: a successful write really does replace the content."""
     config.write_profile("default", host="old.example.com", port=5439, user="u", dbname="d")
@@ -666,17 +705,24 @@ FIELDS = {"host": "h", "port": 5439, "user": "u", "dbname": "d"}
 
 
 def _keyring_locked_on_delete(monkeypatch):
-    """Make ``keyring.delete_password`` fail the way a locked keychain does.
+    """Make ``keyring.delete_password`` fail the way a locked keychain does
+    on the real macOS backend, for a profile whose password IS present.
 
-    ``KeyringLocked`` is the class the OS backends raise when the user has not
-    unlocked the keychain — it is *not* a ``PasswordDeleteError``, so the
-    pre-change ``except PasswordDeleteError`` never caught it.
+    On ``keyring``'s macOS backend, ``get_password`` distinguishes "not
+    found" (``api.NotFound`` -> None) from "locked" (``api.KeychainDenied``
+    -> ``KeyringLocked``) — but ``delete_password`` does not: every
+    ``api.Error``, ``KeychainDenied`` included, comes out as the same
+    ``PasswordDeleteError``. So a locked keychain on a *present* entry is
+    exactly ``PasswordDeleteError``, indistinguishable at that call from "no
+    entry" — which is why presence has to be checked with ``get_password``
+    first rather than inferred from the exception class ``delete_password``
+    raises.
     """
     import keyring as _kr
-    from keyring.errors import KeyringLocked
+    from keyring.errors import PasswordDeleteError
 
     def _delete(service, user):
-        raise KeyringLocked("keychain is locked")
+        raise PasswordDeleteError("keychain is locked")
 
     monkeypatch.setattr(_kr, "delete_password", _delete)
 
