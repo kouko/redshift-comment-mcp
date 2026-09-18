@@ -9,9 +9,11 @@ publication: automatic — authorized 2026-09-18 by kouko
 ## Problem
 `config.py` writes the whole profile store by reading every profile, mutating
 one entry in memory, and rewriting the file from scratch (`write_profile` at
-:78-89, `delete_profile` at :92-108). Three defects follow, all confirmed by
-executable probes that are red on `main` today, now filed under this change at
-`docs/loom/2026-09-18-config-store-integrity/evidence/probes/`.
+:78-89, `delete_profile` at :92-108). Three defects follow. The first has a
+committed probe, red on `main` today, filed under this change at
+`docs/loom/2026-09-18-config-store-integrity/evidence/probes/`; the second was
+reproduced by a closing reviewer and the third was found by the credential
+audit, and neither has a test yet.
 
 1. **Concurrent writes lose profiles.** Nothing serialises the
    read-modify-write. Eight concurrent `setup_via_dialog` calls for eight
@@ -53,8 +55,8 @@ profiles.
    succeeded.
 4. Deleting the profile named by the active-profile pointer leaves no pointer
    naming it.
-5. The three probes listed in Problem pass, and each is red against the
-   pre-change code.
+5. The committed concurrency probe filed under this change passes, and is red
+   against the pre-change code.
 6. Every profile the store held before an operation, other than one being
    deleted, is present and unchanged after it.
 7. The profile store is documented as written only by this project's own tools,
