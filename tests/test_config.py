@@ -12,6 +12,10 @@ import pytest
 
 from redshift_comment_mcp import config
 
+# The real module, kept aside so a test that blanks ``config._fcntl`` can put a
+# working one back and check the bookkeeping survived the round trip.
+_real_fcntl = config._fcntl
+
 
 @pytest.fixture
 def tmp_xdg(tmp_path: Path, monkeypatch):
@@ -412,6 +416,219 @@ def test_write_degrades_to_unlocked_when_fcntl_is_unavailable(tmp_xdg, monkeypat
 
     assert config.read_profile("default")["host"] == "h"
     assert _config_dir_entries() == ["config.toml"], "no lock file without fcntl"
+
+
+def _lock_file_is_flocked() -> bool:
+    """Is ``config.toml.lock`` held right now, as seen from a fresh descriptor?
+
+    ``flock`` attaches to the open file description, not to the process, so a
+    ``LOCK_NB`` attempt on a descriptor this helper opens itself conflicts with
+    a lock the *same* process holds through another one. That is what makes it
+    a usable witness for "the re-entrant path really did take the lock" — and
+    ``LOCK_NB`` means a wrong answer fails the suite instead of hanging it.
+    """
+    import fcntl
+
+    fd = os.open(config._lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            return True
+        fcntl.flock(fd, fcntl.LOCK_UN)
+        return False
+    finally:
+        os.close(fd)
+
+
+def test_store_lock_is_reentrant_on_one_thread(tmp_xdg):
+    """Boundary: taking the store lock twice on one thread must not deadlock.
+
+    ``flock`` serialises open file descriptions and ``_store_lock`` opens a
+    fresh descriptor per call, so a second acquisition on the same thread would
+    block on the first with nothing left running to release it. The thread is
+    then unrecoverable short of killing the process, and the symptom is a hang
+    rather than an exception — the worst shape a failure can take in a server a
+    user is waiting on. No caller nests today; this pins the day one does.
+
+    The nesting runs on a daemon thread joined with a timeout so that a
+    regression fails this test rather than wedging the whole suite.
+    """
+    pytest.importorskip("fcntl")
+
+    finished = threading.Event()
+    yielded: list[bool] = []
+    held_inside: list[bool] = []
+
+    def nested() -> None:
+        with config._store_lock() as outer:
+            yielded.append(outer)
+            with config._store_lock() as inner:
+                yielded.append(inner)
+                held_inside.append(_lock_file_is_flocked())
+        finished.set()
+
+    runner = threading.Thread(target=nested, daemon=True)
+    runner.start()
+    runner.join(timeout=5)
+
+    assert finished.is_set(), (
+        "a re-entrant _store_lock on one thread never returned: the second "
+        "acquisition blocked on the first, and any future code path that calls "
+        "write_profile or delete_profile from inside the store lock would hang "
+        "the MCP server with no error"
+    )
+    assert yielded == [True, True], (
+        f"the nested acquisition should report the lock as held, got {yielded!r}"
+    )
+    assert held_inside == [True], (
+        "the lock file was not actually locked inside the nested acquisition"
+    )
+
+
+def test_store_lock_releases_only_when_the_outermost_holder_exits(tmp_xdg):
+    """The inner exit must not release the lock the outer holder still owns.
+
+    Re-entrancy that released on the way out of the *inner* block would be
+    worse than the deadlock it replaces: the read-modify-write would carry on
+    with the protection silently off.
+    """
+    pytest.importorskip("fcntl")
+
+    seen: list[bool] = []
+
+    def nested() -> None:
+        with config._store_lock():
+            with config._store_lock():
+                pass
+            seen.append(_lock_file_is_flocked())
+
+    runner = threading.Thread(target=nested, daemon=True)
+    runner.start()
+    runner.join(timeout=5)
+
+    assert seen == [True], (
+        "leaving the inner store lock released the lock the outer holder still "
+        f"owns (observed held={seen!r})"
+    )
+    assert not _lock_file_is_flocked(), (
+        "the outermost holder exited without releasing the lock"
+    )
+
+
+def test_store_lock_reentrancy_is_per_thread_not_global(tmp_xdg):
+    """Two threads must still exclude each other while one holds the lock.
+
+    A depth counter kept in module state rather than thread-local state would
+    make a *second thread* look like a nested acquisition and walk straight
+    into the critical section — turning the deadlock fix into the concurrent
+    profile loss the lock exists to prevent.
+
+    The contender is joined with a timeout rather than blocked on: if the
+    exclusion is off it enters immediately, and if it is on it is still parked
+    when the assertion runs, so this case fails rather than hangs either way.
+    """
+    pytest.importorskip("fcntl")
+
+    holding, release = threading.Event(), threading.Event()
+    second_entered: list[bool] = []
+
+    def first() -> None:
+        with config._store_lock():
+            with config._store_lock():
+                holding.set()
+                release.wait(timeout=10)
+
+    def second() -> None:
+        with config._store_lock():
+            second_entered.append(True)
+
+    holder = threading.Thread(target=first, daemon=True)
+    holder.start()
+    try:
+        assert holding.wait(timeout=10), "the first thread never took the lock"
+        contender = threading.Thread(target=second, daemon=True)
+        contender.start()
+        contender.join(timeout=2)
+        entered_while_held = bool(second_entered)
+    finally:
+        release.set()
+        holder.join(timeout=10)
+
+    contender.join(timeout=10)
+
+    assert not entered_while_held, (
+        "a second thread entered the store lock while the first still held it: "
+        "the re-entrancy bookkeeping is shared across threads instead of being "
+        "thread-local, so two read-modify-write cycles run over one config.toml"
+    )
+    assert second_entered == [True], "the second thread never acquired after the release"
+
+
+def test_store_lock_depth_unwinds_when_the_body_raises(tmp_xdg):
+    """Boundary: an exception inside the lock must not leave the depth inflated.
+
+    A counter that only decremented on the happy path would make every later
+    acquisition on that thread look nested — yielding without ever taking the
+    lock, so the store would run unserialised for the life of the process with
+    nothing raised anywhere.
+    """
+    pytest.importorskip("fcntl")
+
+    outcome: list[str] = []
+
+    def body() -> None:
+        with pytest.raises(RuntimeError):
+            with config._store_lock():
+                with config._store_lock():
+                    raise RuntimeError("inner boom")
+        with pytest.raises(RuntimeError):
+            with config._store_lock():
+                raise RuntimeError("outer boom")
+        # If either raise leaked a level, this acquisition is treated as nested
+        # and never touches flock.
+        with config._store_lock():
+            outcome.append("held" if _lock_file_is_flocked() else "unlocked")
+
+    runner = threading.Thread(target=body, daemon=True)
+    runner.start()
+    runner.join(timeout=5)
+
+    assert outcome == ["held"], (
+        "after an exception unwound the store lock, a fresh acquisition did not "
+        f"actually take it (observed {outcome!r}) — the depth counter leaked"
+    )
+    assert not _lock_file_is_flocked(), "the lock outlived its last holder"
+
+
+def test_store_lock_is_reentrant_when_fcntl_is_unavailable(tmp_xdg, monkeypatch):
+    """The non-POSIX path nests too: still unserialised, still no crash, no leak.
+
+    Windows has no ``fcntl``, so both levels degrade to False. What matters is
+    that nesting there neither raises nor disturbs the bookkeeping the POSIX
+    path depends on.
+    """
+    pytest.importorskip("fcntl")
+    monkeypatch.setattr(config, "_fcntl", None)
+
+    yielded: list[bool] = []
+    with config._store_lock() as outer:
+        yielded.append(outer)
+        with config._store_lock() as inner:
+            yielded.append(inner)
+
+    assert yielded == [False, False], (
+        f"the degraded path should report unserialised at every level, got {yielded!r}"
+    )
+    assert not config._lock_path().exists(), "a lock file appeared with fcntl absent"
+
+    monkeypatch.setattr(config, "_fcntl", _real_fcntl)
+    with config._store_lock() as restored:
+        assert restored is True, (
+            "the degraded nesting corrupted the bookkeeping: the next real "
+            "acquisition was treated as nested and never took the lock"
+        )
+        assert _lock_file_is_flocked(), "the restored acquisition did not lock"
 
 
 def test_password_set_get_roundtrip(fake_keyring):

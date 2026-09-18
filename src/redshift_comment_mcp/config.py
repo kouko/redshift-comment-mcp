@@ -43,6 +43,12 @@ Write serialisation (POSIX only):
     protection silently off. The directory is the nearest inode a ``rm`` of the
     lock file cannot detach, so it carries the exclusion across that delete.
 
+    The lock is re-entrant on a single thread: a caller that takes it while
+    already holding it proceeds instead of blocking on its own descriptor,
+    which would hang that thread forever with no exception. The depth is
+    tracked per thread, so two *threads* still exclude each other, and only the
+    outermost holder releases.
+
     ``delete_profile`` holds it across its active-profile pointer step too, but
     not across its keychain call — that one can block on an OS unlock prompt
     for human-length time, and the keychain is keyed per profile with no
@@ -76,6 +82,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -109,6 +116,12 @@ _STALE_TEMP_AGE_SECONDS = 24 * 60 * 60
 # covers a racing replacement; more would only prolong a churn loop that the
 # fallback handles anyway.
 _DIR_LOCK_ATTEMPTS = 3
+
+# How deep the calling thread currently is inside :func:`_store_lock`. Kept per
+# thread — a counter shared between threads would read a *second thread* as a
+# nested acquisition and wave it into the critical section, which is the
+# concurrent profile loss the lock exists to prevent.
+_lock_depth = threading.local()
 
 
 class KeychainDeleteError(RuntimeError):
@@ -227,9 +240,37 @@ def _store_lock() -> Iterator[bool]:
     Both are released in a ``finally``, so a write that raises releases them on
     the way out; leaking one would wedge every later write in the process tree
     until the process died.
+
+    Re-entrant on one thread. ``flock`` serialises open file descriptions and
+    this opens a fresh descriptor per call, so a second acquisition on a thread
+    that already holds the lock would block on its own first one, with nothing
+    left running to release it: an unrecoverable hang rather than an exception,
+    inside a server someone is waiting on. A thread-local depth counter makes
+    the nested acquisition yield without re-acquiring, and the outermost holder
+    owns both descriptors and both releases — releasing at the inner exit would
+    be worse than the deadlock, since the enclosing read-modify-write would
+    carry on with the protection silently off.
+
+    The counter is *thread-local* by construction: a shared one would read a
+    second thread as a nested acquisition and let it straight into the critical
+    section. It moves only around the locked ``yield``, so the degraded paths
+    below cannot leave a later caller believing a lock is held when none is,
+    and it unwinds in a ``finally`` so a body that raises does not inflate it.
+
+    The module avoids nesting today rather than relying on this — ``read_all``
+    takes no lock, and ``delete_profile`` re-reads the pointer under the lock
+    for that reason — so this is insurance against a future caller, not a
+    licence to nest freely.
     """
     if _fcntl is None:
         yield False
+        return
+    if getattr(_lock_depth, "depth", 0):
+        _lock_depth.depth += 1
+        try:
+            yield True
+        finally:
+            _lock_depth.depth -= 1
         return
     p = _lock_path()
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -251,9 +292,11 @@ def _store_lock() -> Iterator[bool]:
             yield False
             return
         dir_fd = _lock_config_dir(p.parent)
+        _lock_depth.depth = getattr(_lock_depth, "depth", 0) + 1
         try:
             yield True
         finally:
+            _lock_depth.depth -= 1
             if dir_fd is not None:
                 os.close(dir_fd)
     finally:
