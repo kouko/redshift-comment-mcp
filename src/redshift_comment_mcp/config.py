@@ -36,6 +36,13 @@ Write serialisation (POSIX only):
     still read the same starting state, and the second rename then drops the
     first one's profile with no error anywhere.
 
+    The same lock is taken on the config *directory's* inode as well, right
+    after the lock file's. A lock on a file is only as durable as its name:
+    delete ``config.toml.lock`` while a writer holds it and the next writer
+    creates a new inode at that name, locks that, and runs concurrently — the
+    protection silently off. The directory is the nearest inode a ``rm`` of the
+    lock file cannot detach, so it carries the exclusion across that delete.
+
     ``delete_profile`` holds it across its active-profile pointer step too, but
     not across its keychain call — that one can block on an OS unlock prompt
     for human-length time, and the keychain is keyed per profile with no
@@ -97,6 +104,12 @@ _CONFIG_TEMP_PREFIX = ".config.toml."
 _POINTER_TEMP_PREFIX = ".active-profile."
 _STALE_TEMP_AGE_SECONDS = 24 * 60 * 60
 
+# How many times :func:`_lock_config_dir` re-takes the directory lock when the
+# directory it locked turns out not to be the one at that name any more. Three
+# covers a racing replacement; more would only prolong a churn loop that the
+# fallback handles anyway.
+_DIR_LOCK_ATTEMPTS = 3
+
 
 class KeychainDeleteError(RuntimeError):
     """Raised when a profile's stored password could not be removed.
@@ -155,6 +168,49 @@ def _lock_path() -> Path:
     return config_path().with_name("config.toml.lock")
 
 
+def _lock_config_dir(directory: Path) -> Optional[int]:
+    """Exclusively lock the config directory's inode; return the held fd or None.
+
+    ``flock`` serialises holders of an *inode*, but :func:`_lock_path` names a
+    *file*. Delete ``config.toml.lock`` while a writer holds it — a single
+    ``rm``, or any cleanup script that tidies "empty" files — and the next
+    writer creates a brand-new inode at that same name, locks that instead, and
+    runs its read-modify-write beside the first one's. Both then rewrite the
+    whole store and the later rename drops the earlier one's profile, with
+    nothing raised anywhere: the protection is off and nobody can tell.
+
+    The directory holding both files is the nearest inode that ``rm`` cannot
+    detach from its name, so the exclusion that has to survive the delete rides
+    on it. Locking it in addition to the lock file (never instead of it) keeps
+    the file the READMEs describe a real, observable lock, and keeps the
+    acquisition order the same for every caller, so the pair cannot deadlock.
+
+    The ``fstat``/``stat`` pair is the same hazard one level up: between the
+    ``open`` and the ``flock`` the directory itself can be replaced, leaving
+    this lock on an orphan. Then the file we locked is no longer the file at
+    that name, and the only remedy is to take the lock again on whatever is
+    there now — bounded, because an ``rm -r``/``mkdir`` loop would otherwise
+    spin here forever inside a write. Exhausting the attempts, or a filesystem
+    that refuses a directory lock at all, falls back to the lock file alone:
+    the protection this module had before, not a new hazard.
+    """
+    for _ in range(_DIR_LOCK_ATTEMPTS):
+        try:
+            fd = os.open(directory, os.O_RDONLY)
+        except OSError:
+            return None
+        try:
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
+            held, at_name = os.fstat(fd), os.stat(directory)
+        except OSError:
+            os.close(fd)
+            return None
+        if (held.st_dev, held.st_ino) == (at_name.st_dev, at_name.st_ino):
+            return fd
+        os.close(fd)
+    return None
+
+
 @contextmanager
 def _store_lock() -> Iterator[bool]:
     """Hold an exclusive lock across a whole read-modify-write of the store.
@@ -163,9 +219,14 @@ def _store_lock() -> Iterator[bool]:
     the caller is therefore running unserialised — see the module docstring for
     why that degradation is preferred to failing the write.
 
-    The lock is released in a ``finally``, so a write that raises releases it
-    on the way out; leaking it would wedge every later write in the process
-    tree until the process died.
+    Two inodes are locked, in this order every time: the lock file, then the
+    directory both it and config.toml live in. The second is what keeps the
+    first honest when the lock file is deleted mid-write — see
+    :func:`_lock_config_dir`.
+
+    Both are released in a ``finally``, so a write that raises releases them on
+    the way out; leaking one would wedge every later write in the process tree
+    until the process died.
     """
     if _fcntl is None:
         yield False
@@ -189,7 +250,12 @@ def _store_lock() -> Iterator[bool]:
         except OSError:
             yield False
             return
-        yield True
+        dir_fd = _lock_config_dir(p.parent)
+        try:
+            yield True
+        finally:
+            if dir_fd is not None:
+                os.close(dir_fd)
     finally:
         os.close(fd)
 

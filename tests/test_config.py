@@ -342,6 +342,63 @@ def test_lock_is_released_when_the_write_raises(tmp_xdg, monkeypatch):
         os.close(fd)
 
 
+def test_lock_still_excludes_after_the_lock_file_is_deleted_mid_write(tmp_xdg):
+    """Boundary: ``rm config.toml.lock`` under a live writer must not disarm the lock.
+
+    ``flock`` serialises holders of an *inode*, while ``_store_lock`` reaches
+    for a *name*. Delete the lock file while writer A holds it and writer B
+    creates a fresh inode at the same name, locks that instead, and runs its
+    read-modify-write beside A's — both then rewrite the whole store and the
+    later rename drops the earlier one's profile, with nothing raised anywhere.
+
+    The second holder is joined with a timeout rather than blocked on: if the
+    exclusion is off it enters immediately, and if it is on it is still parked
+    when the assertion runs, so this case fails rather than hangs either way.
+    """
+    pytest.importorskip("fcntl")
+
+    holding, release = threading.Event(), threading.Event()
+    first_locked: list[bool] = []
+    second_entered: list[bool] = []
+
+    def first() -> None:
+        with config._store_lock() as locked:
+            first_locked.append(locked)
+            holding.set()
+            release.wait(timeout=10)
+
+    def second() -> None:
+        with config._store_lock():
+            second_entered.append(True)
+
+    holder = threading.Thread(target=first)
+    holder.start()
+    try:
+        assert holding.wait(timeout=10), "the first writer never took the lock"
+        assert first_locked == [True], f"the first writer degraded: {first_locked}"
+
+        lock_file = config._lock_path()
+        assert lock_file.exists(), "no lock file to delete"
+        lock_file.unlink()
+
+        contender = threading.Thread(target=second, daemon=True)
+        contender.start()
+        contender.join(timeout=2)
+        entered_while_held = bool(second_entered)
+    finally:
+        release.set()
+        holder.join(timeout=10)
+
+    contender.join(timeout=10)
+
+    assert not entered_while_held, (
+        "a second writer entered the store lock while the first still held it, "
+        "because the lock file had been unlinked and the name now points at a "
+        "brand-new inode — two read-modify-write cycles over one config.toml"
+    )
+    assert second_entered == [True], "the second writer never acquired after the release"
+
+
 def test_write_degrades_to_unlocked_when_fcntl_is_unavailable(tmp_xdg, monkeypatch):
     """Where POSIX locking is absent the write still lands — it is just unserialised.
 

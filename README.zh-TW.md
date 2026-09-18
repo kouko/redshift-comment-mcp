@@ -269,7 +269,7 @@ uv tool install redshift-comment-mcp
 |---|---|---|
 | `~/.config/redshift-comment-mcp/config.toml` | 非機密 profile 欄位 | `0600` |
 | `~/.config/redshift-comment-mcp/active-profile` | 一行純文字指標，記錄哪個 profile 是 active。**檔案不存在 ↔ server 用 `default`**（單 profile 標準狀態，多數使用者不會看到此檔）。 | `0600` |
-| `~/.config/redshift-comment-mcp/config.toml.lock` | 空的鎖檔，僅 POSIX；Windows 上沒有 `fcntl`，這個檔不會出現，寫入也不會被序列化。整個 profile 寫入期間、以及刪除當中改寫 config.toml 的那一段會被持有，避免兩個同時進行的操作互相蓋掉對方的 profile；keychain 那一步在鎖外面跑，因為它可能卡在 OS 的解鎖對話框很久。第一次寫入時建立並留著。建議就讓它留著：正在寫入的 server 可能正卡在那個對話框後面，「沒有任何操作在跑」從外面看不出來。刪掉不會壞掉，下一次寫入會再建一個，但當下正持有它的那個寫入就失去保護了。 | `0600` |
+| `~/.config/redshift-comment-mcp/config.toml.lock` | 空的鎖檔，僅 POSIX；Windows 上沒有 `fcntl`，這個檔不會出現，寫入也不會被序列化。整個 profile 寫入期間、以及刪除當中改寫 config.toml 的那一段會被持有，避免兩個同時進行的操作互相蓋掉對方的 profile；keychain 那一步在鎖外面跑，因為它可能卡在 OS 的解鎖對話框很久。第一次寫入時建立並留著。刪掉它是安全的：每個寫入同時也會鎖住 config 目錄本身，刪這個檔拔不掉那一層，所以當下正持有鎖的寫入仍然受保護，檔案會在下一次寫入時重新建立。 | `0600` |
 | OS keychain（`redshift-comment-mcp` / `<profile>`） | 密碼 | OS 管理 |
 
 ### config.toml 由工具管理 —— 手動編輯前先看這段
