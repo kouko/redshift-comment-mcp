@@ -27,9 +27,9 @@ charter: 1.0
 - Risk: broadening the except changes `delete_profile`'s contract from "returns bool" to "can raise"; agent-decided — keep the bool and surface the failure, since callers already treat False as "did not exist".
 
 **W0-04 Document the store as machine-managed, bump both versions**  after: W0-03  acceptance: 7
-- Files: README.md, README.ja.md, README.zh-TW.md, src/redshift_comment_mcp/config.py, src/redshift_comment_mcp/redshift_tools.py, .claude-plugin/plugin.json, pyproject.toml
+- Files: README.md, README.ja.md, README.zh-TW.md, src/redshift_comment_mcp/redshift_tools.py, src/redshift_comment_mcp/setup_cli.py, .claude-plugin/plugin.json, pyproject.toml, tests/test_setup_cli.py
 - Test: A7 positive: readme-states-tool-managed-in-all-three-languages; negative: version-fields-stay-in-sync.
-- Risk: W0-01 made the rollback comment at redshift_tools.py:1532-1540 assert the opposite of the code; this change broke it, so it fixes it. A config.toml header comment would be dropped by the next write.
+- Risk: this change left three rough edges of its own — a rollback comment that now asserts the opposite of the code, an uncaught KeychainDeleteError in the delete CLI, and an undocumented config.toml.lock file. It closes all three.
 
 ## Questions asked
 ① — consequence — 設定檔是「機器管的」還是「人會去改的」？前者退掉那支測試並寫進文件，後者要加 tomlkit 相依套件
