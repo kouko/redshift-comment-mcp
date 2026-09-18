@@ -73,6 +73,22 @@ import tomli_w
 KEYRING_SERVICE = "redshift-comment-mcp"
 
 
+class KeychainDeleteError(RuntimeError):
+    """Raised when a profile's stored password could not be removed.
+
+    :func:`delete_profile` keeps its ``bool`` return — ``True`` deleted,
+    ``False`` no such profile — because every caller already reads ``False`` as
+    "did not exist". A keychain that refuses the delete is neither of those, so
+    it travels out of band instead of being folded into the bool: the store is
+    left untouched, and the caller is told why rather than being handed a
+    ``False`` it would report as "profile did not exist".
+
+    Not a ``ConfigurationError``: nothing about the configuration is wrong, the
+    keychain is simply unavailable (typically locked), and retrying after
+    unlocking it is the fix.
+    """
+
+
 class ConfigurationError(ValueError):
     """Raised when the resolved profile is missing fields or keychain password.
 
@@ -200,25 +216,64 @@ def write_profile(name: str, *, host: str, port: int, user: str, dbname: str) ->
 
 
 def delete_profile(name: str) -> bool:
-    """Remove a profile from config.toml AND its keyring password.
+    """Remove a profile's keyring password, then its fields, then a pointer to it.
 
-    Returns True if profile existed, False otherwise.
+    Returns True if the profile existed, False otherwise. Raises
+    :class:`KeychainDeleteError` — leaving the store exactly as it was — when
+    the keychain refuses to delete the password.
+
+    Three orderings matter here:
+
+    1. **The password goes first.** Removing the fields first and the password
+       second means a keychain failure leaves a password stored under a name
+       that no longer appears in ``list_profiles`` — a credential with no
+       remaining interface that lists it, let alone deletes it. This order
+       fails the other way: a complete, still-listed profile the user can
+       delete again once the keychain is unlocked.
+    2. **Absence is checked before the keychain is touched at all.** Otherwise
+       ``delete_profile("typo")`` against a locked keychain would raise where
+       it used to answer False.
+    3. **The pointer is cleared last**, only after the fields are really gone.
+       An active-profile pointer beats the lone-profile fallback in
+       :func:`resolve_active_profile`, so a pointer left naming a deleted
+       profile makes the server raise "not configured" until a human deletes
+       the file by hand.
 
     The keychain call sits outside :func:`_store_lock`: it can block on an OS
     unlock prompt for human-length time, and the lock exists to protect
     config.toml's read-modify-write, not the keychain — which is keyed per
     profile and has no whole-store rewrite to lose.
     """
+    if name not in read_all():
+        return False
+
+    try:
+        keyring.delete_password(KEYRING_SERVICE, name)
+    except keyring.errors.PasswordDeleteError:
+        # No entry for this profile. Nothing to strand, so this is not a
+        # failure — a profile whose password was never stored is deletable.
+        pass
+    except Exception as e:  # noqa: BLE001 — see below
+        # Deliberately broader than KeyringError: a locked or unavailable
+        # keychain surfaces as KeyringLocked, NoKeyringError or InitError, and
+        # individual backends raise their own classes on top. Nothing is
+        # swallowed — every one of them is re-raised as KeychainDeleteError
+        # with the original attached — and the store has not been touched yet.
+        raise KeychainDeleteError(
+            f"could not delete the keychain password for profile '{name}' "
+            f"({type(e).__name__}); the profile was left intact — unlock the "
+            f"keychain and delete it again"
+        ) from e
+
     with _store_lock():
         profiles = read_all()
         if name not in profiles:
             return False
         del profiles[name]
         _write_all(profiles)
-    try:
-        keyring.delete_password(KEYRING_SERVICE, name)
-    except keyring.errors.PasswordDeleteError:
-        pass
+
+    if read_active_profile() == name:
+        clear_active_profile()
     return True
 
 

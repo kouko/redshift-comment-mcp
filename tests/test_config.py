@@ -385,6 +385,129 @@ def test_delete_profile_tolerates_missing_keyring_entry(tmp_xdg, fake_keyring):
     assert config.delete_profile("default") is True
 
 
+# ===== delete removes the password first (acceptance 3, 4) =====
+
+FIELDS = {"host": "h", "port": 5439, "user": "u", "dbname": "d"}
+
+
+def _keyring_locked_on_delete(monkeypatch):
+    """Make ``keyring.delete_password`` fail the way a locked keychain does.
+
+    ``KeyringLocked`` is the class the OS backends raise when the user has not
+    unlocked the keychain — it is *not* a ``PasswordDeleteError``, so the
+    pre-change ``except PasswordDeleteError`` never caught it.
+    """
+    import keyring as _kr
+    from keyring.errors import KeyringLocked
+
+    def _delete(service, user):
+        raise KeyringLocked("keychain is locked")
+
+    monkeypatch.setattr(_kr, "delete_password", _delete)
+
+
+def test_delete_profile_keychain_failure_keeps_fields_and_reports(
+    tmp_xdg, fake_keyring, monkeypatch
+):
+    """A locked keychain must leave a whole profile, and be reported.
+
+    Acceptance 3's positive case. The failure has to reach the caller as
+    something it can act on — exiting as if the delete succeeded would leave a
+    password stored under a name no interface lists any more.
+    """
+    config.write_profile("default", **FIELDS)
+    config.set_password("default", "s3cret")
+    _keyring_locked_on_delete(monkeypatch)
+
+    with pytest.raises(config.KeychainDeleteError):
+        config.delete_profile("default")
+
+    assert config.read_profile("default") == FIELDS, "fields must survive"
+    assert fake_keyring[(config.KEYRING_SERVICE, "default")] == "s3cret"
+
+
+def test_delete_profile_removes_the_password_before_the_fields(
+    tmp_xdg, fake_keyring, monkeypatch
+):
+    """Acceptance 3's ordering half, observed from inside the store write."""
+    config.write_profile("default", **FIELDS)
+    config.set_password("default", "s3cret")
+
+    observed: dict[str, object] = {}
+    real_write_all = config._write_all
+
+    def spy(profiles):
+        observed["password_at_write"] = config.get_password("default")
+        return real_write_all(profiles)
+
+    monkeypatch.setattr(config, "_write_all", spy)
+
+    assert config.delete_profile("default") is True
+    assert observed["password_at_write"] is None, "password still stored at write time"
+    assert config.read_profile("default") is None
+    assert config.get_password("default") is None
+
+
+def test_delete_profile_missing_never_touches_the_keychain(
+    tmp_xdg, fake_keyring, monkeypatch
+):
+    """Acceptance 3's negative boundary: an absent profile changes nothing.
+
+    Deleting the password first must not start reaching into the keychain for
+    names that were never configured — on a locked keychain that would turn
+    today's quiet ``False`` into a raised failure.
+    """
+    import keyring as _kr
+
+    calls: list[tuple[str, str]] = []
+    monkeypatch.setattr(_kr, "delete_password", lambda s, u: calls.append((s, u)))
+
+    assert config.delete_profile("not-there") is False
+    assert calls == []
+
+
+def test_delete_profile_clears_pointer_that_named_it(tmp_xdg, fake_keyring):
+    """Acceptance 4's positive case.
+
+    An explicit pointer beats the lone-profile fallback in
+    ``resolve_active_profile``, so a pointer left naming a deleted profile
+    wedges the server until a human removes the file by hand.
+    """
+    config.write_profile("prod", **FIELDS)
+    config.set_password("prod", "s3cret")
+    config.write_active_profile("prod")
+
+    assert config.delete_profile("prod") is True
+    assert config.read_active_profile() is None
+    assert not config.active_profile_path().exists()
+
+
+def test_delete_profile_keeps_pointer_that_named_another(tmp_xdg, fake_keyring):
+    """Acceptance 4's negative case: another profile's pointer is untouched."""
+    config.write_profile("dev", **FIELDS)
+    config.write_profile("prod", **FIELDS)
+    config.write_active_profile("prod")
+
+    assert config.delete_profile("dev") is True
+    assert config.read_active_profile() == "prod"
+    assert config.active_profile_path().stat().st_mode & 0o777 == 0o600
+
+
+def test_delete_profile_keychain_failure_leaves_the_pointer(
+    tmp_xdg, fake_keyring, monkeypatch
+):
+    """Nothing was deleted, so the pointer must still name the live profile."""
+    config.write_profile("prod", **FIELDS)
+    config.set_password("prod", "s3cret")
+    config.write_active_profile("prod")
+    _keyring_locked_on_delete(monkeypatch)
+
+    with pytest.raises(config.KeychainDeleteError):
+        config.delete_profile("prod")
+
+    assert config.read_active_profile() == "prod"
+
+
 # ===== active-profile pointer =====
 
 
