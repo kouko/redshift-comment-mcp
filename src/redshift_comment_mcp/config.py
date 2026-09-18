@@ -29,6 +29,7 @@ Active-profile selection (which profile the MCP server uses on startup):
 from __future__ import annotations
 
 import os
+import tempfile
 from pathlib import Path
 from typing import Any, Optional
 
@@ -75,18 +76,48 @@ def read_profile(name: str) -> Optional[dict[str, Any]]:
     return read_all().get(name)
 
 
-def write_profile(name: str, *, host: str, port: int, user: str, dbname: str) -> None:
-    """Merge a profile into config.toml, creating the file/dir if needed.
+def _write_all(profiles: dict[str, dict[str, Any]]) -> None:
+    """Replace the whole profile store atomically.
 
-    Sets file mode 600 to match the secret-adjacent security posture.
+    Serialises into a temp file, fsyncs it, sets mode 600 on it, then
+    ``os.replace()``s it over config.toml. Writing straight into config.toml
+    would truncate it before the first byte of new content lands, so a
+    serialisation or disk failure mid-write would leave a partial file and
+    destroy every other profile in it.
+
+    The temp file goes in the config directory itself, never the system temp
+    dir: ``os.replace`` is atomic only within one filesystem, and ``/tmp`` is
+    routinely a different one. A failure before the rename removes the temp
+    file and leaves config.toml — content and mode — untouched, and a
+    concurrent reader only ever sees the whole old file or the whole new one.
     """
     p = config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=".config.toml.", suffix=".tmp", dir=str(p.parent)
+    )
+    tmp = Path(tmp_name)
+    try:
+        with os.fdopen(fd, "wb") as f:
+            tomli_w.dump({"profile": profiles}, f)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.chmod(0o600)
+        os.replace(tmp, p)
+    except BaseException:
+        tmp.unlink(missing_ok=True)
+        raise
+
+
+def write_profile(name: str, *, host: str, port: int, user: str, dbname: str) -> None:
+    """Merge a profile into config.toml, creating the file/dir if needed.
+
+    Sets file mode 600 to match the secret-adjacent security posture. The
+    write is atomic — see :func:`_write_all`.
+    """
     profiles = read_all()
     profiles[name] = {"host": host, "port": port, "user": user, "dbname": dbname}
-    with p.open("wb") as f:
-        tomli_w.dump({"profile": profiles}, f)
-    p.chmod(0o600)
+    _write_all(profiles)
 
 
 def delete_profile(name: str) -> bool:
@@ -98,9 +129,7 @@ def delete_profile(name: str) -> bool:
     if name not in profiles:
         return False
     del profiles[name]
-    p = config_path()
-    with p.open("wb") as f:
-        tomli_w.dump({"profile": profiles}, f)
+    _write_all(profiles)
     try:
         keyring.delete_password(KEYRING_SERVICE, name)
     except keyring.errors.PasswordDeleteError:

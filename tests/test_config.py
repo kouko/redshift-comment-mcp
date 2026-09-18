@@ -1,6 +1,7 @@
 """Tests for the config / profile / keyring layer."""
 from __future__ import annotations
 
+import errno
 import os
 from pathlib import Path
 
@@ -90,6 +91,143 @@ def test_list_profiles_sorted(tmp_xdg):
     config.write_profile("zeta", host="h", port=5439, user="u", dbname="d")
     config.write_profile("alpha", host="h", port=5439, user="u", dbname="d")
     assert config.list_profiles() == ["alpha", "zeta"]
+
+
+# ===== atomic config.toml writes (acceptance 2, 6) =====
+
+
+def _dump_torn_mid_value(monkeypatch, *, then):
+    """Patch ``tomli_w.dump`` to stop mid-value, run ``then``, then finish.
+
+    The cut lands two bytes past the first ``"`` in the serialised output, so
+    the partial bytes always end inside an unterminated string — never on a
+    clean table boundary that would still parse. The bytes are flushed and
+    fsynced before ``then`` runs, so ``then`` observes the exact instant a torn
+    write is visible on disk.
+
+    This is what makes the "reader never sees a partial file" property
+    deterministic: rather than racing a thread against the writer and hoping to
+    catch the window, the reader is invoked *inside* the window on every run.
+    """
+    import tomli_w
+
+    real_dumps = tomli_w.dumps
+
+    def fake_dump(obj, fp, **kwargs):
+        payload = real_dumps(obj).encode()
+        cut = payload.index(b'"') + 2
+        fp.write(payload[:cut])
+        fp.flush()
+        os.fsync(fp.fileno())
+        then()
+        fp.write(payload[cut:])
+
+    monkeypatch.setattr(tomli_w, "dump", fake_dump)
+
+
+def _config_dir_entries() -> list[str]:
+    return sorted(q.name for q in config.config_path().parent.iterdir())
+
+
+def test_write_profile_midwrite_failure_keeps_previous_bytes(tmp_xdg, monkeypatch):
+    """An ENOSPC-shaped failure mid-write must leave the previous file intact.
+
+    Also the acceptance-6 failure case: the *unrelated* sibling profile must
+    survive a failed write of another profile.
+    """
+    config.write_profile("prod", host="prod.example.com", port=5439, user="u", dbname="d")
+    config.write_profile("dev", host="dev.example.com", port=5439, user="u", dbname="d")
+    before_bytes = config.config_path().read_bytes()
+    before_mode = config.config_path().stat().st_mode & 0o777
+    before_profiles = config.read_all()
+
+    def out_of_space():
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    _dump_torn_mid_value(monkeypatch, then=out_of_space)
+
+    with pytest.raises(OSError):
+        config.write_profile(
+            "staging", host="staging.example.com", port=5439, user="u", dbname="d"
+        )
+
+    assert config.config_path().read_bytes() == before_bytes
+    assert config.config_path().stat().st_mode & 0o777 == before_mode
+    assert config.read_all() == before_profiles
+    assert _config_dir_entries() == ["config.toml"]
+
+
+def test_write_profile_success_replaces_content(tmp_xdg):
+    """The negative case: a successful write really does replace the content."""
+    config.write_profile("default", host="old.example.com", port=5439, user="u", dbname="d")
+    config.write_profile("default", host="new.example.com", port=5440, user="u2", dbname="d2")
+
+    assert config.read_profile("default") == {
+        "host": "new.example.com",
+        "port": 5440,
+        "user": "u2",
+        "dbname": "d2",
+    }
+    assert config.config_path().stat().st_mode & 0o777 == 0o600
+    assert _config_dir_entries() == ["config.toml"]
+
+
+def test_sibling_profiles_survive_a_write(tmp_xdg):
+    """Acceptance 6: every other profile is present and unchanged after a write."""
+    config.write_profile("prod", host="prod.example.com", port=5439, user="pu", dbname="pd")
+    config.write_profile("dev", host="dev.example.com", port=5439, user="du", dbname="dd")
+    prod_before = config.read_profile("prod")
+
+    config.write_profile("dev", host="dev2.example.com", port=5440, user="du", dbname="dd")
+
+    assert config.read_profile("prod") == prod_before
+    assert config.read_profile("dev")["host"] == "dev2.example.com"
+    assert sorted(config.read_all()) == ["dev", "prod"]
+
+
+def test_reader_never_sees_a_partial_file(tmp_xdg, monkeypatch):
+    """Boundary: a reader mid-write sees the whole old file or the whole new one."""
+    config.write_profile("prod", host="prod.example.com", port=5439, user="u", dbname="d")
+    config.write_profile("dev", host="dev.example.com", port=5439, user="u", dbname="d")
+    before = config.read_all()
+    observed: dict[str, object] = {}
+
+    def read_while_the_write_is_in_flight():
+        try:
+            observed["profiles"] = config.read_all()
+        except Exception as exc:  # noqa: BLE001 — recorded, then asserted on
+            observed["error"] = exc
+
+    _dump_torn_mid_value(monkeypatch, then=read_while_the_write_is_in_flight)
+
+    config.write_profile(
+        "staging", host="staging.example.com", port=5439, user="u", dbname="d"
+    )
+
+    assert "error" not in observed, f"reader hit a torn file: {observed.get('error')!r}"
+    assert observed["profiles"] == before
+    assert sorted(config.read_all()) == ["dev", "prod", "staging"]
+
+
+def test_delete_profile_midwrite_failure_keeps_previous_bytes(
+    tmp_xdg, fake_keyring, monkeypatch
+):
+    """delete_profile's write goes through the same atomic path."""
+    config.write_profile("prod", host="prod.example.com", port=5439, user="u", dbname="d")
+    config.write_profile("dev", host="dev.example.com", port=5439, user="u", dbname="d")
+    before_bytes = config.config_path().read_bytes()
+
+    def out_of_space():
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    _dump_torn_mid_value(monkeypatch, then=out_of_space)
+
+    with pytest.raises(OSError):
+        config.delete_profile("dev")
+
+    assert config.config_path().read_bytes() == before_bytes
+    assert sorted(config.read_all()) == ["dev", "prod"]
+    assert _config_dir_entries() == ["config.toml"]
 
 
 def test_password_set_get_roundtrip(fake_keyring):
