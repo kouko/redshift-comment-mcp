@@ -17,6 +17,7 @@ import stat
 import subprocess
 import sys
 import textwrap
+import time
 from pathlib import Path
 
 import pytest
@@ -99,21 +100,32 @@ def test_writeprofile_configdirectoryisasymlink_landsintherealdirectory(
     assert cfg.read_profile("prod") is not None
 
 
-def test_writeprofile_killedbeforetherename_leavesnotempfilebehind(store, tmp_path):
-    """SIGKILL in the mkstemp..replace window litters the config directory.
+def test_writeprofile_repeatedkillsbeforetherename_doesnotaccumulatelitter(
+    store, tmp_path
+):
+    """Crash three times a day apart; the temp files must not pile up.
 
-    A real child process is killed at the moment ``os.replace`` would have run.
-    config.toml is correctly untouched — that is the atomicity the change
-    bought. What is left is a ``.config.toml.<rand>.tmp`` file holding a full
-    copy of the profile store, which nothing in the project ever cleans up; the
-    directory accumulates one per crash, and the machine-managed-store section
-    of the READMEs does not mention them.
+    RECONCILED with the finding it pins (was
+    ``…_leavesnotempfilebehind``). The earlier assertion snapshotted the
+    directory in the instant after the SIGKILL and demanded that no temp file
+    was ever momentarily visible there. Nothing can satisfy that and still
+    overwrite atomically: the only write that leaves no name in the directory
+    is ``O_TMPFILE`` plus ``linkat``, which is Linux-only — this project's
+    stated platform is macOS — and ``linkat`` refuses an existing destination,
+    so it cannot replace config.toml at all. The finding was never about a
+    momentary file; its own words were "nothing removes it, and they
+    accumulate", and its `fix:` asked for exactly the age-based sweep that was
+    implemented. The assertion is now the finding's own claim, unweakened: a
+    previous day's crashes are gone after the next write.
+
+    Three real children are each killed at the moment ``os.replace`` would have
+    run, their leavings are aged a day, and then one ordinary write happens.
     """
     config_file, cfg = store
 
     config_file.parent.mkdir(parents=True, exist_ok=True)
     cfg.write_profile("keepme", host="h.example.com", port=5439, user="u", dbname="d")
-    before = sorted(p.name for p in config_file.parent.iterdir())
+    before = {p.name for p in config_file.parent.iterdir()}
 
     child = textwrap.dedent(
         """
@@ -129,25 +141,95 @@ def test_writeprofile_killedbeforetherename_leavesnotempfilebehind(store, tmp_pa
     script = tmp_path / "kill_before_rename.py"
     script.write_text(child)
 
-    proc = subprocess.run(
-        [sys.executable, str(script), str(tmp_path)],
-        capture_output=True, text=True, timeout=60,
+    for crash in range(3):
+        proc = subprocess.run(
+            [sys.executable, str(script), str(tmp_path)],
+            capture_output=True, text=True, timeout=60,
+        )
+        assert proc.returncode == -9, (
+            f"crash {crash}: the child was meant to be SIGKILLed inside the "
+            f"write window; it exited {proc.returncode}. stderr: {proc.stderr}"
+        )
+
+    crashed = sorted(
+        p for p in config_file.parent.iterdir() if p.name not in before
     )
-    assert proc.returncode == -9, (
-        f"the child was meant to be SIGKILLed inside the write window; it "
-        f"exited {proc.returncode}. stderr: {proc.stderr}"
+    assert len(crashed) == 3, (
+        f"expected one temp file per crash before any sweep could run, got "
+        f"{[p.name for p in crashed]}"
     )
 
-    after = sorted(p.name for p in config_file.parent.iterdir())
-    litter = [n for n in after if n not in before]
+    # Yesterday's crashes. A write takes milliseconds, so nothing this old can
+    # belong to a writer that is still alive.
+    a_day_ago = time.time() - 25 * 60 * 60
+    for leftover in crashed:
+        os.utime(leftover, (a_day_ago, a_day_ago))
 
-    assert cfg.read_profile("keepme") is not None, "the killed write damaged config.toml"
+    cfg.write_profile("today", host="t.example.com", port=5439, user="u", dbname="d")
+
+    survivors = sorted(
+        p.name for p in config_file.parent.iterdir() if p.name not in before
+    )
+
+    assert cfg.read_profile("keepme") is not None, "the killed writes damaged config.toml"
     assert cfg.read_profile("victim") is None, "a killed write landed anyway"
-    assert not litter, (
-        f"a process killed between mkstemp and os.replace left {litter} in the "
-        f"config directory. Each one is a full copy of the profile store, "
-        f"nothing removes it, and they accumulate silently beside config.toml"
+    assert cfg.read_profile("today") is not None, "the sweep ate the write it ran for"
+    assert not survivors, (
+        f"three crashes a day old left {survivors} beside config.toml and the "
+        f"next write did not clear them. Each is a full copy of the profile "
+        f"store, and nothing else in the project removes them, so the config "
+        f"directory grows one per crash forever"
     )
+
+
+def test_writeprofile_sweepingstaletempfiles_sparesliveonesandunrelatedfiles(
+    store, tmp_path
+):
+    """The sweep is the fix for the case above; here it is the thing under attack.
+
+    A cleanup that runs inside every write is a new way to destroy data. Two
+    ways it can overreach: deleting a temp file a *live* writer is still
+    filling — on the non-POSIX path there is no lock keeping two writers
+    apart, so the victim's rename would then fail — and matching a name it has
+    no business touching. Neither may happen.
+    """
+    config_file, cfg = store
+
+    config_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg.write_profile("keepme", host="h.example.com", port=5439, user="u", dbname="d")
+    cfg.write_active_profile("keepme")
+    config_dir = config_file.parent
+
+    live = config_dir / ".config.toml.liveWRITER.tmp"
+    live.write_bytes(b"a concurrent writer is still filling this")
+
+    bystanders = {
+        "config.toml.backup": b"a backup the user made by hand",
+        "notes.txt": b"the user's own notes",
+        ".config.toml.notatemp": b"same prefix, wrong suffix",
+    }
+    for name, body in bystanders.items():
+        (config_dir / name).write_bytes(body)
+
+    a_day_ago = time.time() - 25 * 60 * 60
+    for name in bystanders:
+        os.utime(config_dir / name, (a_day_ago, a_day_ago))
+
+    cfg.write_profile("fresh", host="f.example.com", port=5439, user="u", dbname="d")
+
+    assert live.exists(), (
+        "the sweep deleted a temp file whose mtime is seconds old: a writer "
+        "that is still filling it loses its file, and its os.replace then "
+        "fails on a path that no longer exists"
+    )
+    for name, body in bystanders.items():
+        kept = config_dir / name
+        assert kept.exists(), f"the sweep deleted an unrelated file: {name}"
+        assert kept.read_bytes() == body, f"the sweep rewrote an unrelated file: {name}"
+
+    assert cfg.read_active_profile() == "keepme", "the sweep took the pointer file"
+    assert cfg.read_profile("keepme") is not None
+    assert cfg.read_profile("fresh") is not None
 
 
 def test_writeprofile_underapermissiveumask_leavesconfigtomlatmode600(store):

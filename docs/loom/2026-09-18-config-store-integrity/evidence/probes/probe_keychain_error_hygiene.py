@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import ast
 import sys
-import traceback
 from pathlib import Path
 
 import pytest
@@ -126,16 +125,28 @@ def test_deleteprofile_thekeychainerrorpath_isreachablefromthecli(store, monkeyp
 # ----- what the error carries -----
 
 
-def test_keychaindeleteerror_backendechoingthesecret_keepsitoutofthetraceback(
-    store, monkeypatch
+def test_keychaindeleteerror_backendechoingasecret_keepsitoutofeveryusersurface(
+    store, monkeypatch, capsys
 ):
-    """A backend whose own exception text quotes the secret leaks it downstream.
+    """A backend whose exception text quotes a secret: where can it reach?
 
-    ``raise KeychainDeleteError(...) from e`` keeps ``e`` reachable through
-    ``__cause__``, and any formatted traceback — a server log, an unhandled
-    crash, ``logging.exception`` — prints the cause's message verbatim above
-    the new one. ``KeychainDeleteError``'s own message is clean; the chain it
-    carries is only as clean as the backend.
+    RECONCILED with the finding it pins (was
+    ``…_keepsitoutofthetraceback``). That assertion demanded the secret be
+    absent from ``traceback.format_exc()``, which is unreachable at the same
+    time as the sibling case's ``__cause__ is boom``: ``__cause__`` is always
+    rendered, so the only way to strip it is to mutate the backend exception's
+    ``args`` before re-raising — throwing away the real diagnostic for every
+    user on every keychain failure, to defend against a payload no backend
+    has. ``keyring.delete_password(service, username)`` is never handed a
+    password. My own finding said so and recorded ``fix: None required``; the
+    assertion, not the finding, was wrong.
+
+    What is pinned instead is every surface a user or a log actually sees:
+    nothing the backend said is copied into the new exception's own message or
+    args, and nothing reaches stderr through the CLI. The chain is asserted
+    positively, as the deliberate design it is — which is also what makes the
+    remaining exposure visible rather than quietly dropped: a caller that
+    renders the full chain renders whatever the backend put in it.
     """
     _config_file, cfg, _keychain = store
     _seed(cfg)
@@ -145,26 +156,49 @@ def test_keychaindeleteerror_backendechoingthesecret_keepsitoutofthetraceback(
     class _ChattyBackend(Exception):
         pass
 
+    chatty_text = f"SecKeychainItemDelete failed for prod: {SECRET}"
+
     def chatty(service, user):
-        raise _ChattyBackend(f"SecKeychainItemDelete failed for {user}: {SECRET}")
+        raise _ChattyBackend(chatty_text)
 
     monkeypatch.setattr(keyring, "delete_password", chatty)
 
-    try:
+    with pytest.raises(cfg.KeychainDeleteError) as caught:
         cfg.delete_profile("prod")
-    except cfg.KeychainDeleteError:
-        rendered = traceback.format_exc()
-        own_message = str(sys.exc_info()[1])
-        own_args = repr(sys.exc_info()[1].args)
 
-    assert SECRET not in own_message, f"KeychainDeleteError's message quotes the secret"
+    own_message = str(caught.value)
+    own_args = repr(caught.value.args)
+
+    assert SECRET not in own_message, "KeychainDeleteError's message quotes the secret"
     assert SECRET not in own_args, "KeychainDeleteError's args quote the secret"
-    assert SECRET not in rendered, (
-        "the formatted traceback of KeychainDeleteError contains the secret: "
-        "`raise ... from e` chains the backend's own exception, and every "
-        "traceback rendering of the new error prints the cause's message first. "
-        "The CLI only prints str(e) so this does not leak there, but any "
-        "logger.exception or unhandled crash on this path does"
+    assert chatty_text not in own_message, (
+        "the backend's own text was copied verbatim into KeychainDeleteError's "
+        "message, so whatever a backend puts in it travels wherever the new "
+        "error is printed — including the CLI, which prints str(e)"
+    )
+    assert type(caught.value.__cause__).__name__ == "_ChattyBackend", (
+        "the backend exception is no longer the chained cause — deliberate "
+        "design (config.py raises `from e`) and the only record of what "
+        "really failed"
+    )
+
+    # The one rendering a user is ever shown: the CLI's own handler.
+    import argparse
+
+    from redshift_comment_mcp import setup_cli
+
+    monkeypatch.setattr("builtins.input", lambda *_a: "y")
+    code = setup_cli.cmd_delete_profile(argparse.Namespace(profile="prod"))
+    printed = capsys.readouterr()
+
+    assert code == 2
+    assert SECRET not in printed.err and SECRET not in printed.out, (
+        "the CLI's delete-profile output carries the secret the backend put in "
+        "its exception text"
+    )
+    assert "_ChattyBackend" in printed.err, (
+        "the CLI names no cause at all, so a user cannot tell a locked "
+        "keychain from a broken backend"
     )
 
 
