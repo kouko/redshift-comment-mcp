@@ -25,15 +25,43 @@ Active-profile selection (which profile the MCP server uses on startup):
     Single-profile users never see this file — its absence means
     "use 'default'". The ``/redshift-switch-profile`` skill writes /
     removes the file; multi-profile users are the only ones it affects.
+
+Write serialisation (POSIX only):
+
+    ``write_profile`` and ``delete_profile`` are read-modify-write cycles —
+    read every profile, change one entry, rewrite the whole file — so each
+    holds an exclusive ``fcntl.flock`` across all three steps, on a sibling
+    lock file ``config.toml.lock`` (mode 600, beside config.toml in the config
+    directory). Locking only the write step would not help: two callers can
+    still read the same starting state, and the second rename then drops the
+    first one's profile with no error anywhere.
+
+    Where POSIX locking is unavailable — ``fcntl`` missing (Windows), or a
+    filesystem that refuses the lock — the write degrades to the unserialised
+    path rather than failing. Concurrent writers can then still lose a
+    profile, which is the behaviour those platforms had before the lock
+    existed, not a new hazard. No third-party locking dependency is added.
+
+    Readers (``read_all``, ``read_profile``, ``get_password``) take no lock.
+    The atomic rename in :func:`_write_all` already gives them either the
+    whole old file or the whole new one, so queueing behind a writer would buy
+    them nothing — and making ``read_all`` take the lock would deadlock every
+    writer, since writers call it from inside their own critical section.
 """
 from __future__ import annotations
 
 import os
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Iterator, Optional
 
 import keyring
+
+try:
+    import fcntl as _fcntl
+except ImportError:  # pragma: no cover — non-POSIX (Windows)
+    _fcntl = None  # type: ignore[assignment]
 
 try:
     import tomllib
@@ -76,6 +104,55 @@ def read_profile(name: str) -> Optional[dict[str, Any]]:
     return read_all().get(name)
 
 
+def _lock_path() -> Path:
+    """Path of the lock file that serialises writes to the profile store.
+
+    A sibling of config.toml rather than config.toml itself: ``_write_all``
+    renames a new file over the old one, so a lock held on config.toml's inode
+    would be a lock on a file that no longer has that name.
+    """
+    return config_path().with_name("config.toml.lock")
+
+
+@contextmanager
+def _store_lock() -> Iterator[bool]:
+    """Hold an exclusive lock across a whole read-modify-write of the store.
+
+    Yields True while the lock is held, False when it could not be taken and
+    the caller is therefore running unserialised — see the module docstring for
+    why that degradation is preferred to failing the write.
+
+    The lock is released in a ``finally``, so a write that raises releases it
+    on the way out; leaking it would wedge every later write in the process
+    tree until the process died.
+    """
+    if _fcntl is None:
+        yield False
+        return
+    p = _lock_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        fd = os.open(p, os.O_RDWR | os.O_CREAT, 0o600)
+    except OSError:
+        yield False
+        return
+    try:
+        try:
+            # O_CREAT's mode is masked by the umask; this pins 0600 to match
+            # config.toml's posture whatever the umask happened to be.
+            os.fchmod(fd, 0o600)
+        except OSError:
+            pass
+        try:
+            _fcntl.flock(fd, _fcntl.LOCK_EX)
+        except OSError:
+            yield False
+            return
+        yield True
+    finally:
+        os.close(fd)
+
+
 def _write_all(profiles: dict[str, dict[str, Any]]) -> None:
     """Replace the whole profile store atomically.
 
@@ -113,23 +190,31 @@ def write_profile(name: str, *, host: str, port: int, user: str, dbname: str) ->
     """Merge a profile into config.toml, creating the file/dir if needed.
 
     Sets file mode 600 to match the secret-adjacent security posture. The
-    write is atomic — see :func:`_write_all`.
+    write is atomic — see :func:`_write_all` — and the read-modify-write around
+    it is serialised — see :func:`_store_lock`.
     """
-    profiles = read_all()
-    profiles[name] = {"host": host, "port": port, "user": user, "dbname": dbname}
-    _write_all(profiles)
+    with _store_lock():
+        profiles = read_all()
+        profiles[name] = {"host": host, "port": port, "user": user, "dbname": dbname}
+        _write_all(profiles)
 
 
 def delete_profile(name: str) -> bool:
     """Remove a profile from config.toml AND its keyring password.
 
     Returns True if profile existed, False otherwise.
+
+    The keychain call sits outside :func:`_store_lock`: it can block on an OS
+    unlock prompt for human-length time, and the lock exists to protect
+    config.toml's read-modify-write, not the keychain — which is keyed per
+    profile and has no whole-store rewrite to lose.
     """
-    profiles = read_all()
-    if name not in profiles:
-        return False
-    del profiles[name]
-    _write_all(profiles)
+    with _store_lock():
+        profiles = read_all()
+        if name not in profiles:
+            return False
+        del profiles[name]
+        _write_all(profiles)
     try:
         keyring.delete_password(KEYRING_SERVICE, name)
     except keyring.errors.PasswordDeleteError:

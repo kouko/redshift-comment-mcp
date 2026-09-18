@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import errno
 import os
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -154,7 +156,7 @@ def test_write_profile_midwrite_failure_keeps_previous_bytes(tmp_xdg, monkeypatc
     assert config.config_path().read_bytes() == before_bytes
     assert config.config_path().stat().st_mode & 0o777 == before_mode
     assert config.read_all() == before_profiles
-    assert _config_dir_entries() == ["config.toml"]
+    assert _config_dir_entries() == ["config.toml", "config.toml.lock"]
 
 
 def test_write_profile_success_replaces_content(tmp_xdg):
@@ -169,7 +171,7 @@ def test_write_profile_success_replaces_content(tmp_xdg):
         "dbname": "d2",
     }
     assert config.config_path().stat().st_mode & 0o777 == 0o600
-    assert _config_dir_entries() == ["config.toml"]
+    assert _config_dir_entries() == ["config.toml", "config.toml.lock"]
 
 
 def test_sibling_profiles_survive_a_write(tmp_xdg):
@@ -227,7 +229,131 @@ def test_delete_profile_midwrite_failure_keeps_previous_bytes(
 
     assert config.config_path().read_bytes() == before_bytes
     assert sorted(config.read_all()) == ["dev", "prod"]
-    assert _config_dir_entries() == ["config.toml"]
+    assert _config_dir_entries() == ["config.toml", "config.toml.lock"]
+
+
+# ===== serialised read-modify-write (acceptance 1, 5) =====
+
+
+def _widen_the_write_window(monkeypatch, delay: float = 0.02):
+    """Make ``_write_all`` take ``delay`` seconds, lengthening the RMW window.
+
+    ``write_profile`` is read -> mutate -> write. The profile-losing
+    interleaving is "every writer reads before any writer writes", and left to
+    chance it is a race one *usually* wins. Injecting a delay in front of the
+    write turns it into the certain outcome of an unserialised implementation,
+    so the failure is reproducible rather than lucky.
+
+    It costs a correct implementation nothing but time: the delay lands inside
+    the critical section, so the eight writes queue and the test takes
+    8 x ``delay``. Nothing in the assertion depends on how long that is.
+    """
+    real_write_all = config._write_all
+
+    def slow_write_all(profiles):
+        time.sleep(delay)
+        real_write_all(profiles)
+
+    monkeypatch.setattr(config, "_write_all", slow_write_all)
+
+
+def test_concurrent_writes_of_distinct_profiles_keep_every_one(tmp_xdg, monkeypatch):
+    """Acceptance 1: eight concurrent writers, eight names, none lost."""
+    names = [f"profile{i}" for i in range(8)]
+    barrier = threading.Barrier(len(names))
+    errors: list[BaseException] = []
+    _widen_the_write_window(monkeypatch)
+
+    def run(name: str) -> None:
+        try:
+            barrier.wait(timeout=10)
+            config.write_profile(
+                name, host=f"{name}.example.com", port=5439, user=name, dbname=name
+            )
+        except BaseException as exc:  # noqa: BLE001 — recorded, asserted below
+            errors.append(exc)
+
+    threads = [threading.Thread(target=run, args=(n,)) for n in names]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=30)
+
+    assert not errors, f"a concurrent write raised: {errors}"
+    assert not any(t.is_alive() for t in threads), "a writer never finished"
+
+    written = config.read_all()
+    assert sorted(written) == sorted(names)
+    for name in names:
+        assert written[name]["host"] == f"{name}.example.com"
+
+
+def test_single_writer_is_unaffected_by_the_lock(tmp_xdg):
+    """Negative case: serialising must not change what one writer alone does."""
+    config.write_profile("prod", host="prod.example.com", port=5439, user="u", dbname="d")
+    config.write_profile("dev", host="dev.example.com", port=5440, user="u2", dbname="d2")
+
+    assert sorted(config.read_all()) == ["dev", "prod"]
+    assert config.read_profile("dev") == {
+        "host": "dev.example.com",
+        "port": 5440,
+        "user": "u2",
+        "dbname": "d2",
+    }
+    assert config.config_path().stat().st_mode & 0o777 == 0o600
+    assert _config_dir_entries() == ["config.toml", "config.toml.lock"]
+
+
+def test_lock_file_is_mode_600(tmp_xdg):
+    """The lock file sits beside config.toml, so it keeps the same posture."""
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    assert config._lock_path().stat().st_mode & 0o777 == 0o600
+
+
+def test_lock_is_released_when_the_write_raises(tmp_xdg, monkeypatch):
+    """Boundary: a failed write must not leave the store locked forever.
+
+    The lock is probed from a second descriptor with ``LOCK_NB`` rather than by
+    issuing another write: a leaked lock would make a blocking re-acquire HANG
+    the suite instead of failing it, and a hang is not a test result.
+    """
+    fcntl = pytest.importorskip("fcntl")
+    config.write_profile("prod", host="prod.example.com", port=5439, user="u", dbname="d")
+
+    def out_of_space():
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    _dump_torn_mid_value(monkeypatch, then=out_of_space)
+
+    with pytest.raises(OSError):
+        config.write_profile(
+            "staging", host="staging.example.com", port=5439, user="u", dbname="d"
+        )
+
+    fd = os.open(config._lock_path(), os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            pytest.fail("the store lock was still held after the write raised")
+        fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
+def test_write_degrades_to_unlocked_when_fcntl_is_unavailable(tmp_xdg, monkeypatch):
+    """Where POSIX locking is absent the write still lands — it is just unserialised.
+
+    Windows has no ``fcntl``. Refusing to write there would be a worse failure
+    than the concurrency hazard the lock removes, and no third-party locking
+    dependency is added to cover it.
+    """
+    monkeypatch.setattr(config, "_fcntl", None)
+
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+
+    assert config.read_profile("default")["host"] == "h"
+    assert _config_dir_entries() == ["config.toml"], "no lock file without fcntl"
 
 
 def test_password_set_get_roundtrip(fake_keyring):
