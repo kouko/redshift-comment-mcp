@@ -285,7 +285,34 @@ The two READMEs to read next:
 |---|---|---|
 | `~/.config/redshift-comment-mcp/config.toml` | Non-secret profile fields | `0600` |
 | `~/.config/redshift-comment-mcp/active-profile` | One-line pointer to the active profile name. **Absent ↔ server uses `default`** (canonical single-profile state — most users never see this file). | `0600` |
+| `~/.config/redshift-comment-mcp/config.toml.lock` | Empty lock file. Held for the duration of a profile write or delete so two of them running at once can't drop each other's profiles. Appears on the first write and stays; safe to delete while nothing is running, and recreated on the next write. | `0600` |
 | OS keychain (`redshift-comment-mcp` / `<profile>`) | Passwords | OS-managed |
+
+### config.toml is machine-managed — read this before hand-editing it
+
+`config.toml` is **written only by this project's own tools**: the
+`setup` / `set-fields` / `delete-profile` subcommands, the
+`/redshift-setup` skill, and the `setup_via_dialog` MCP tool.
+(`set-password` and `/redshift-switch-profile` don't touch it — they write
+the OS keychain and the `active-profile` pointer respectively.) Every one
+of those writers rewrites the whole file from the profiles it just read,
+so **anything the project doesn't recognise — your comments, your
+blank-line grouping, extra keys — is dropped on the next write**. That's the designed behaviour, not a bug:
+the file is a store this project owns, not a config file meant to be
+authored by hand.
+
+Hand-editing still works (it's plain TOML, and the schema below is
+stable) — just expect only the recognised keys to survive, and keep
+anything you'd want to remember somewhere else. A write of one profile
+never disturbs another profile's fields.
+
+```toml
+[profile.prod]
+host = "my-cluster.abc123.us-east-1.redshift.amazonaws.com"
+port = 5439
+user = "alice"
+dbname = "analytics"
+```
 
 ## Recommended DB GRANTs (defense-in-depth)
 

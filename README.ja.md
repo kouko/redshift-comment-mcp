@@ -285,7 +285,34 @@ uv tool install redshift-comment-mcp
 |---|---|---|
 | `~/.config/redshift-comment-mcp/config.toml` | 非機密プロファイルフィールド | `0600` |
 | `~/.config/redshift-comment-mcp/active-profile` | アクティブプロファイル名を記録する 1 行のテキストポインタ。**ファイル不在 ↔ サーバーは `default` を使用**（シングルプロファイル正規状態。多くのユーザーはこのファイルを目にしない）。 | `0600` |
+| `~/.config/redshift-comment-mcp/config.toml.lock` | 空のロックファイル。プロファイルの書き込み・削除の間だけ保持され、同時に走った 2 つの操作が互いのプロファイルを消し合わないようにする。最初の書き込みで作成されそのまま残る。何も動いていなければ削除して構わない（次の書き込みで再作成される）。 | `0600` |
 | OS キーチェーン（`redshift-comment-mcp` / `<profile>`） | パスワード | OS 管理 |
+
+### config.toml は機械が管理するファイル — 手で編集する前に
+
+`config.toml` には**本プロジェクト自身のツールだけが書き込みます**。
+`setup` / `set-fields` / `delete-profile` の各サブコマンド、
+`/redshift-setup` スキル、そして `setup_via_dialog` MCP ツールです
+（`set-password` と `/redshift-switch-profile` はこのファイルに触りません。
+前者は OS キーチェーン、後者は `active-profile` ポインタだけを書きます）。
+いずれも読み込んだプロファイルから**ファイル全体を書き直す**ため、
+本プロジェクトが認識しないもの——コメント、空行によるグルーピング、
+独自のキー——は**次の書き込みで失われます**。
+これは不具合ではなく設計どおりの挙動です。このファイルは人が手で書くための
+設定ファイルではなく、本プロジェクトが所有するストアだからです。
+
+手で編集すること自体はできます（中身はただの TOML で、下記のスキーマは
+安定しています）。ただし残るのは認識されるキーだけだと理解したうえで、
+覚えておきたいメモは別の場所に残してください。あるプロファイルへの書き込みが
+別のプロファイルのフィールドを壊すことはありません。
+
+```toml
+[profile.prod]
+host = "my-cluster.abc123.us-east-1.redshift.amazonaws.com"
+port = 5439
+user = "alice"
+dbname = "analytics"
+```
 
 ## 推奨される DB GRANT 設定（多層防御）
 

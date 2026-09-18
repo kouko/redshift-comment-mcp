@@ -269,7 +269,31 @@ uv tool install redshift-comment-mcp
 |---|---|---|
 | `~/.config/redshift-comment-mcp/config.toml` | 非機密 profile 欄位 | `0600` |
 | `~/.config/redshift-comment-mcp/active-profile` | 一行純文字指標，記錄哪個 profile 是 active。**檔案不存在 ↔ server 用 `default`**（單 profile 標準狀態，多數使用者不會看到此檔）。 | `0600` |
+| `~/.config/redshift-comment-mcp/config.toml.lock` | 空的鎖檔。寫入或刪除 profile 的期間會被持有，避免兩個同時進行的操作互相蓋掉對方的 profile。第一次寫入時建立並留著；沒有任何操作在跑時可以安全刪掉，下一次寫入會再建一個。 | `0600` |
 | OS keychain（`redshift-comment-mcp` / `<profile>`） | 密碼 | OS 管理 |
+
+### config.toml 由工具管理 —— 手動編輯前先看這段
+
+`config.toml` **只由本專案自己的工具寫入**：`setup` / `set-fields` /
+`delete-profile` 子指令、`/redshift-setup` skill，以及 `setup_via_dialog`
+MCP tool。（`set-password` 和 `/redshift-switch-profile` 不會動到這個檔案，
+它們分別只寫 OS keychain 和 `active-profile` 指標檔。）這些寫入者每一個
+都是把讀進來的 profile **整份重寫回去**，所以本專案不認得的東西——你寫的
+註解、用空行做的分組、額外的 key——都會**在下一次寫入時被丟棄**。
+這是設計如此，不是 bug：這個檔案是本專案自己管的資料存放處，不是給人
+手寫的設定檔。
+
+手動編輯還是做得到（內容就是純 TOML，下面的 schema 也是穩定的），只是
+要先知道只有認得的 key 會留下來，想記住的東西請寫在別的地方。寫入某個
+profile 不會動到另一個 profile 的欄位。
+
+```toml
+[profile.prod]
+host = "my-cluster.abc123.us-east-1.redshift.amazonaws.com"
+port = 5439
+user = "alice"
+dbname = "analytics"
+```
 
 ## 建議的 DB GRANT 設定（縱深防禦）
 

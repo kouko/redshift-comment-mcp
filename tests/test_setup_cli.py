@@ -246,6 +246,39 @@ def test_delete_profile_missing_returns_1(tmp_xdg, fake_keyring, monkeypatch, ca
     assert "did not exist" in capsys.readouterr().err
 
 
+def test_delete_profile_locked_keychain_returns_2(tmp_xdg, fake_keyring, monkeypatch, capsys):
+    """A keychain that refuses the delete is reported, not dumped as a traceback.
+
+    ``config.delete_profile`` raises ``KeychainDeleteError`` rather than
+    stranding a password behind deleted fields, so the CLI has to say so. The
+    exit code is deliberately NOT 1: "did not exist" means the name was wrong
+    and there is nothing to retry, while this means the profile is still whole
+    and the same command works once the keychain is unlocked. A skill that
+    branches on the exit code must be able to tell those apart.
+    """
+    config.write_profile("default", host="h", port=5439, user="u", dbname="d")
+    config.set_password("default", "secret")
+    monkeypatch.setattr("builtins.input", lambda _: "y")
+
+    def _locked(service, user):
+        from keyring.errors import KeyringLocked
+        raise KeyringLocked("the keychain is locked")
+
+    import keyring as _kr
+    monkeypatch.setattr(_kr, "delete_password", _locked)
+
+    rc = setup_cli.main(["delete-profile", "--profile", "default"])
+    assert rc == 2
+    # One readouterr() — a second call would return empty buffers and make the
+    # stdout assertion below pass no matter what was printed.
+    captured = capsys.readouterr()
+    assert "keychain" in captured.err.lower()
+    assert "Deleted profile" not in captured.out
+    # Nothing was destroyed, and the message must not imply otherwise.
+    assert config.read_profile("default") is not None
+    assert config.get_password("default") == "secret"
+
+
 # ===== set-password =====
 
 
