@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import errno
 import os
+import stat
 import threading
 import time
 from pathlib import Path
@@ -672,3 +673,298 @@ def test_resolve_active_profile_pointer_file_overrides_single_profile_fallback(
     config.write_profile("ichef-prod", host="h", port=5439, user="u", dbname="d")
     config.write_active_profile("ghost-profile")
     assert config.resolve_active_profile() == "ghost-profile"
+
+
+# ===== the rename destination: symlinks, litter, durability =====
+
+
+def _link_config_toml_to(tmp_xdg: Path, target: Path) -> Path:
+    """Make config.toml a symlink to ``target`` and return the link path."""
+    p = config.config_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.symlink_to(target)
+    return p
+
+
+def test_write_profile_through_a_symlinked_config_toml_keeps_the_link(tmp_xdg):
+    """A config.toml symlinked into a dotfiles checkout must survive the write.
+
+    ``os.replace(tmp, p)`` acts on the *name*: it unlinks the link and drops a
+    regular file in its place, so every later write lands somewhere the user's
+    dotfiles repo cannot see, with no error. The pre-change writer opened the
+    path and followed the link.
+    """
+    target = tmp_xdg / "dotfiles" / "config.toml"
+    target.parent.mkdir(parents=True)
+    target.write_text('[profile.prod]\nhost = "old"\nport = 5439\n'
+                      'user = "u"\ndbname = "d"\n')
+    link = _link_config_toml_to(tmp_xdg, target)
+
+    config.write_profile("prod", host="new", port=5439, user="u", dbname="d")
+
+    assert link.is_symlink(), "the write replaced the symlink with a regular file"
+    assert "new" in target.read_text(), "the symlink target never got the write"
+
+
+def test_write_profile_through_a_dangling_symlink_creates_the_target(tmp_xdg):
+    """A link whose target does not exist yet must be written *through*, not over."""
+    target = tmp_xdg / "dotfiles" / "config.toml"  # neither file nor parent exists
+    link = _link_config_toml_to(tmp_xdg, target)
+
+    config.write_profile("prod", host="h", port=5439, user="u", dbname="d")
+
+    assert link.is_symlink(), "the write replaced the dangling link with a file"
+    assert target.is_file(), "the link target was never created"
+    assert config.read_profile("prod")["host"] == "h"
+
+
+def test_write_profile_puts_its_temp_file_in_the_resolved_parent(tmp_xdg, monkeypatch):
+    """The temp file must follow the rename destination, not the config dir.
+
+    ``os.replace`` is atomic only within one filesystem. Once the destination
+    is the symlink's target, a temp file left behind in the config directory
+    can be on a different device and the rename stops being atomic — or fails
+    outright with EXDEV.
+    """
+    target = tmp_xdg / "dotfiles" / "config.toml"
+    target.parent.mkdir(parents=True)
+    target.write_text("")
+    _link_config_toml_to(tmp_xdg, target)
+
+    import tempfile as _tempfile
+
+    seen: list[str] = []
+    real_mkstemp = _tempfile.mkstemp
+
+    def recording_mkstemp(*args, **kwargs):
+        seen.append(kwargs.get("dir"))
+        return real_mkstemp(*args, **kwargs)
+
+    monkeypatch.setattr(_tempfile, "mkstemp", recording_mkstemp)
+    config.write_profile("prod", host="h", port=5439, user="u", dbname="d")
+
+    assert seen == [str(target.parent)], (
+        f"the temp file was created in {seen}, not beside the file the rename "
+        f"actually lands on ({target.parent})"
+    )
+
+
+def test_write_profile_sweeps_stale_temp_files(tmp_xdg):
+    """Temp files a killed process left behind must not accumulate forever."""
+    config.write_profile("keepme", host="h", port=5439, user="u", dbname="d")
+    config_dir = config.config_path().parent
+
+    stale = config_dir / ".config.toml.abc123.tmp"
+    stale.write_text("a full copy of the store from a crash two days ago")
+    old = time.time() - 48 * 3600
+    os.utime(stale, (old, old))
+
+    config.write_profile("prod", host="h", port=5439, user="u", dbname="d")
+
+    assert not stale.exists(), (
+        "a two-day-old .config.toml.*.tmp survived a write; each one holds a "
+        "full copy of the profile store and nothing else ever removes it"
+    )
+    assert config.read_profile("keepme") is not None
+
+
+def test_write_profile_keeps_temp_files_a_live_writer_may_still_own(tmp_xdg):
+    """The sweep is age-gated, so it cannot pull the rug from a write in flight."""
+    config.write_profile("keepme", host="h", port=5439, user="u", dbname="d")
+    config_dir = config.config_path().parent
+
+    fresh = config_dir / ".config.toml.def456.tmp"
+    fresh.write_text("a write that started a moment ago")
+
+    config.write_profile("prod", host="h", port=5439, user="u", dbname="d")
+
+    assert fresh.exists(), "the sweep removed a temp file young enough to be live"
+
+
+def test_write_profile_fsyncs_the_config_directory(tmp_xdg, monkeypatch):
+    """The rename is durable only once the directory holding it is fsynced."""
+    config_dir = config.config_path().parent
+    config_dir.mkdir(parents=True, exist_ok=True)
+    dir_inode = config_dir.stat().st_ino
+
+    synced: list[int] = []
+    real_fsync = os.fsync
+
+    def recording_fsync(fd):
+        try:
+            synced.append(os.fstat(fd).st_ino)
+        except OSError:
+            pass
+        return real_fsync(fd)
+
+    monkeypatch.setattr(os, "fsync", recording_fsync)
+    config.write_profile("prod", host="h", port=5439, user="u", dbname="d")
+
+    assert dir_inode in synced, (
+        "only the temp file's contents were fsynced; a power loss right after "
+        "a successful write can lose the rename that made it visible"
+    )
+
+
+# ===== the active-profile pointer gets the same protections =====
+
+
+def test_clear_active_profile_survives_the_pointer_vanishing_mid_call(
+    tmp_xdg, monkeypatch
+):
+    """``if exists(): unlink()`` raises when someone wins the race in between.
+
+    ``delete_profile`` clears the pointer after the password and the fields are
+    already gone, so this turns a delete that in fact succeeded into an uncaught
+    ``FileNotFoundError``.
+    """
+    config.write_active_profile("prod")
+
+    real_exists = Path.exists
+
+    def vanishing_exists(self, *args, **kwargs):
+        present = real_exists(self, *args, **kwargs)
+        if present and self.name == "active-profile":
+            os.unlink(str(self))
+        return present
+
+    monkeypatch.setattr(Path, "exists", vanishing_exists)
+    config.clear_active_profile()  # must not raise
+
+    monkeypatch.setattr(Path, "exists", real_exists)
+    assert config.active_profile_path().exists() is False
+
+
+def test_read_active_profile_answers_none_when_the_pointer_already_vanished(
+    tmp_xdg, monkeypatch
+):
+    """``if exists(): read_text()`` raises when the file goes in between too.
+
+    Same race as :func:`clear_active_profile`, on the reader that
+    ``delete_profile`` consults before it clears. A stale ``exists()`` that
+    still says "present" is exactly what a reader observes when it loses that
+    race.
+    """
+    config.active_profile_path().parent.mkdir(parents=True, exist_ok=True)
+    real_exists = Path.exists
+
+    def stale_exists(self, *args, **kwargs):
+        if self.name == "active-profile":
+            return True
+        return real_exists(self, *args, **kwargs)
+
+    with monkeypatch.context() as m:
+        m.setattr(Path, "exists", stale_exists)
+        assert config.read_active_profile() is None
+
+
+def test_delete_profile_leaves_a_pointer_re_aimed_mid_delete_alone(
+    tmp_xdg, fake_keyring, monkeypatch
+):
+    """A switch that completes during the delete must not be silently reverted.
+
+    The pointer read and the pointer clear had nothing held across them, so a
+    ``/redshift-switch-profile`` landing in between had its result thrown away
+    and the server fell back to the implicit rule — a different cluster than the
+    user asked for.
+    """
+    config.write_profile("prod", host="h", port=5439, user="u", dbname="d")
+    config.write_profile("dev", host="d", port=5439, user="u", dbname="d")
+    config.set_password("prod", "pw")
+    config.write_active_profile("prod")
+
+    real_read = config.read_active_profile
+    switched: list[bool] = []
+
+    def read_then_switch():
+        answer = real_read()
+        if not switched:
+            switched.append(True)
+            config.write_active_profile("dev")
+        return answer
+
+    with monkeypatch.context() as m:
+        m.setattr(config, "read_active_profile", read_then_switch)
+        assert config.delete_profile("prod") is True
+
+    assert config.read_active_profile() == "dev", (
+        "the user's switch to 'dev' was reverted by a delete of 'prod'"
+    )
+
+
+def test_delete_profile_still_clears_a_pointer_nobody_touched(tmp_xdg, fake_keyring):
+    """The re-check must not cost the clear in the ordinary case."""
+    config.write_profile("prod", host="h", port=5439, user="u", dbname="d")
+    config.set_password("prod", "pw")
+    config.write_active_profile("prod")
+
+    assert config.delete_profile("prod") is True
+    assert config.read_active_profile() is None
+
+
+def test_write_active_profile_replaces_the_pointer_by_rename(tmp_xdg):
+    """Truncate-then-write lets a reader see a zero-length pointer.
+
+    ``read_active_profile`` maps empty to None and ``resolve_active_profile``
+    then falls through to the implicit rule. A rename gives the reader either
+    the whole old name or the whole new one; the inode changing is what proves
+    the file was replaced rather than rewritten in place.
+    """
+    config.write_active_profile("prod")
+    pointer = config.active_profile_path()
+    before = pointer.stat().st_ino
+
+    config.write_active_profile("dev")
+
+    assert pointer.stat().st_ino != before, (
+        "the pointer kept its inode across a rewrite: it was truncated in "
+        "place, so a concurrent reader can observe it empty"
+    )
+    assert config.read_active_profile() == "dev"
+
+
+def test_write_active_profile_failed_replace_keeps_the_previous_pointer(
+    tmp_xdg, monkeypatch
+):
+    """A failure before the rename leaves the old pointer and no litter."""
+    config.write_active_profile("prod")
+    before = _config_dir_entries()
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("disk full")
+
+    with monkeypatch.context() as m:
+        m.setattr(os, "replace", boom)
+        with pytest.raises(RuntimeError):
+            config.write_active_profile("dev")
+
+    assert config.read_active_profile() == "prod"
+    assert _config_dir_entries() == before
+
+
+def test_write_active_profile_never_holds_its_contents_at_mode_644(
+    tmp_xdg, monkeypatch
+):
+    """``write_text`` creates at 0644 under the default umask, chmod second."""
+    config.active_profile_path().parent.mkdir(parents=True, exist_ok=True)
+    observed: list[int] = []
+
+    real_chmod = Path.chmod
+
+    def observing_chmod(self, mode, *args, **kwargs):
+        if self.name == "active-profile":
+            observed.append(stat.S_IMODE(self.stat().st_mode))
+        return real_chmod(self, mode, *args, **kwargs)
+
+    previous = os.umask(0o022)
+    try:
+        with monkeypatch.context() as m:
+            m.setattr(Path, "chmod", observing_chmod)
+            config.write_active_profile("prod")
+    finally:
+        os.umask(previous)
+
+    assert observed, "write_active_profile never chmods the pointer"
+    assert observed[0] == 0o600, (
+        f"the pointer held its contents at {oct(observed[0])} before the chmod"
+    )

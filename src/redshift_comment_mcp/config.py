@@ -36,6 +36,15 @@ Write serialisation (POSIX only):
     still read the same starting state, and the second rename then drops the
     first one's profile with no error anywhere.
 
+    ``delete_profile`` holds it across its active-profile pointer step too, but
+    not across its keychain call — that one can block on an OS unlock prompt
+    for human-length time, and the keychain is keyed per profile with no
+    whole-store rewrite to lose. The pointer is the one file written from
+    inside the lock (the delete's own ``clear_active_profile``) *and* from
+    outside it (``write_active_profile``, which ``/redshift-switch-profile``
+    calls), so the delete re-reads it immediately before clearing rather than
+    trusting an earlier read.
+
     Where POSIX locking is unavailable — ``fcntl`` missing (Windows), or a
     filesystem that refuses the lock — the write degrades to the unserialised
     path rather than failing. Concurrent writers can then still lose a
@@ -47,14 +56,23 @@ Write serialisation (POSIX only):
     whole old file or the whole new one, so queueing behind a writer would buy
     them nothing — and making ``read_all`` take the lock would deadlock every
     writer, since writers call it from inside their own critical section.
+
+Atomic writes:
+
+    Every file this module writes — config.toml and the active-profile pointer
+    alike — goes through :func:`_replace_atomically`: a temp file beside the
+    destination, fsynced, renamed over it, then the destination's directory
+    fsynced. Symlinks are resolved first, so a store kept in a dotfiles
+    checkout keeps its link and its target keeps receiving the writes.
 """
 from __future__ import annotations
 
 import os
 import tempfile
+import time
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, BinaryIO, Callable, Iterator, Optional
 
 import keyring
 
@@ -71,6 +89,13 @@ except ImportError:
 import tomli_w
 
 KEYRING_SERVICE = "redshift-comment-mcp"
+
+# Temp files every atomic write goes through, and the age past which one can
+# only be crash litter — see :func:`_sweep_stale_temp_files`.
+_TEMP_SUFFIX = ".tmp"
+_CONFIG_TEMP_PREFIX = ".config.toml."
+_POINTER_TEMP_PREFIX = ".active-profile."
+_STALE_TEMP_AGE_SECONDS = 24 * 60 * 60
 
 
 class KeychainDeleteError(RuntimeError):
@@ -169,37 +194,124 @@ def _store_lock() -> Iterator[bool]:
         os.close(fd)
 
 
-def _write_all(profiles: dict[str, dict[str, Any]]) -> None:
-    """Replace the whole profile store atomically.
+def _resolved_target(p: Path) -> Path:
+    """Where a write to ``p`` has to land, with symlinks on the way followed.
 
-    Serialises into a temp file, fsyncs it, sets mode 600 on it, then
-    ``os.replace()``s it over config.toml. Writing straight into config.toml
-    would truncate it before the first byte of new content lands, so a
-    serialisation or disk failure mid-write would leave a partial file and
-    destroy every other profile in it.
+    ``os.replace`` acts on the *name*: aimed at a symlink it unlinks the link
+    and leaves a regular file in its place, so a store kept in a dotfiles
+    checkout silently stops being written to — no error, and every later write
+    lands outside the repo the user tracks. Resolving first keeps the link and
+    puts the bytes in the file it names.
 
-    The temp file goes in the config directory itself, never the system temp
-    dir: ``os.replace`` is atomic only within one filesystem, and ``/tmp`` is
-    routinely a different one. A failure before the rename removes the temp
-    file and leaves config.toml — content and mode — untouched, and a
-    concurrent reader only ever sees the whole old file or the whole new one.
+    Resolution is non-strict, so a dangling link resolves to the target it
+    promises and the write creates it. Both the config directory and the
+    resolved parent are created: the second can be somewhere else entirely, and
+    the temp file must be created *there* or ``os.replace`` crosses a
+    filesystem boundary and stops being atomic.
     """
-    p = config_path()
     p.parent.mkdir(parents=True, exist_ok=True)
+    target = Path(os.path.realpath(p))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    return target
+
+
+def _sweep_stale_temp_files(directory: Path, prefix: str) -> None:
+    """Delete temp files a process was killed before it could rename.
+
+    A SIGKILL, an OOM kill or a power loss between ``mkstemp`` and
+    ``os.replace`` leaves a full copy of what was being written, and nothing
+    else in the project ever removes it: the config directory accumulates one
+    per crash, each holding the whole profile store.
+
+    The threshold is 24 hours. A write here takes milliseconds — the only
+    human-length pause in this module is the keychain's unlock prompt, which
+    happens outside every write — so nothing younger can still belong to a
+    writer that is alive, including one on the unserialised non-POSIX path
+    where no lock keeps us apart. A day is also short enough that litter never
+    outlives a single day's crashes. Errors are ignored throughout: a sweep
+    that cannot run must never fail the write it was trying to tidy up for.
+    """
+    cutoff = time.time() - _STALE_TEMP_AGE_SECONDS
+    try:
+        entries = list(directory.iterdir())
+    except OSError:
+        return
+    for entry in entries:
+        if not (entry.name.startswith(prefix) and entry.name.endswith(_TEMP_SUFFIX)):
+            continue
+        try:
+            if entry.stat().st_mtime < cutoff:
+                entry.unlink()
+        except OSError:
+            continue
+
+
+def _fsync_directory(directory: Path) -> None:
+    """Flush a directory entry so a completed rename survives power loss.
+
+    Fsyncing the temp file makes its *contents* durable. The rename that gives
+    those contents the real name lives in the directory, and is not durable
+    until the directory itself is flushed — so a crash right after a write that
+    reported success can come back with the pre-write file, or none at all.
+
+    ``OSError`` is tolerated: some filesystems refuse fsync on a directory, and
+    the write it would have made durable has already succeeded.
+    """
+    try:
+        fd = os.open(str(directory), os.O_RDONLY)
+    except OSError:
+        return
+    try:
+        os.fsync(fd)
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def _replace_atomically(
+    path: Path, write_body: Callable[[BinaryIO], Any], *, prefix: str
+) -> None:
+    """Write ``path`` through a temp file in its own directory and one rename.
+
+    Writing straight into the destination truncates it before the first byte of
+    new content lands, so a serialisation or disk failure mid-write leaves a
+    partial file and a concurrent reader can observe it. Here a reader only
+    ever sees the whole old file or the whole new one, and a failure before the
+    rename removes the temp file and leaves the destination untouched.
+
+    The mode is pinned to 600 on the destination after the rename rather than
+    on the temp file before it. ``mkstemp`` already creates at 0600 masked by
+    the umask, which can only remove bits, so the file is never more permissive
+    than 0600 at any instant; the explicit chmod puts the mode back where a
+    restrictive umask narrowed it, on the path the READMEs actually name.
+    """
+    target = _resolved_target(path)
+    _sweep_stale_temp_files(target.parent, prefix)
     fd, tmp_name = tempfile.mkstemp(
-        prefix=".config.toml.", suffix=".tmp", dir=str(p.parent)
+        prefix=prefix, suffix=_TEMP_SUFFIX, dir=str(target.parent)
     )
     tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "wb") as f:
-            tomli_w.dump({"profile": profiles}, f)
+            write_body(f)
             f.flush()
             os.fsync(f.fileno())
-        tmp.chmod(0o600)
-        os.replace(tmp, p)
+        os.replace(tmp, target)
     except BaseException:
         tmp.unlink(missing_ok=True)
         raise
+    target.chmod(0o600)
+    _fsync_directory(target.parent)
+
+
+def _write_all(profiles: dict[str, dict[str, Any]]) -> None:
+    """Replace the whole profile store atomically — see :func:`_replace_atomically`."""
+    _replace_atomically(
+        config_path(),
+        lambda f: tomli_w.dump({"profile": profiles}, f),
+        prefix=_CONFIG_TEMP_PREFIX,
+    )
 
 
 def write_profile(name: str, *, host: str, port: int, user: str, dbname: str) -> None:
@@ -233,16 +345,26 @@ def delete_profile(name: str) -> bool:
     2. **Absence is checked before the keychain is touched at all.** Otherwise
        ``delete_profile("typo")`` against a locked keychain would raise where
        it used to answer False.
-    3. **The pointer is cleared last**, only after the fields are really gone.
-       An active-profile pointer beats the lone-profile fallback in
+    3. **The pointer is cleared last**, only after the fields are really gone,
+       and only while it still names the deleted profile. An active-profile
+       pointer beats the lone-profile fallback in
        :func:`resolve_active_profile`, so a pointer left naming a deleted
        profile makes the server raise "not configured" until a human deletes
-       the file by hand.
+       the file by hand — and a pointer cleared after someone re-aimed it
+       throws away a ``/redshift-switch-profile`` that already reported
+       success. The pointer is therefore read twice: once inside the lock to
+       decide whether this delete is the reason it would go stale, and again
+       immediately before the unlink to confirm nobody re-aimed it in between.
+       The re-read narrows the window to two syscalls rather than closing it:
+       closing it would mean serialising the pointer writers on this same lock,
+       and ``clear_active_profile`` runs inside it, so that would deadlock
+       every delete of the active profile.
 
     The keychain call sits outside :func:`_store_lock`: it can block on an OS
     unlock prompt for human-length time, and the lock exists to protect
     config.toml's read-modify-write, not the keychain — which is keyed per
-    profile and has no whole-store rewrite to lose.
+    profile and has no whole-store rewrite to lose. Everything that touches a
+    file is inside the lock, including the pointer.
     """
     if name not in read_all():
         return False
@@ -269,11 +391,11 @@ def delete_profile(name: str) -> bool:
         profiles = read_all()
         if name not in profiles:
             return False
+        pointer_named_it = read_active_profile() == name
         del profiles[name]
         _write_all(profiles)
-
-    if read_active_profile() == name:
-        clear_active_profile()
+        if pointer_named_it and read_active_profile() == name:
+            clear_active_profile()
     return True
 
 
@@ -307,20 +429,40 @@ def read_active_profile() -> Optional[str]:
     Absent file is the canonical state for single-profile users (server
     falls back to ``"default"``). Empty / whitespace-only file is treated
     the same as absent.
+
+    The absence is discovered by trying the read rather than by an ``exists()``
+    check first: anything that removes the pointer between the two — a
+    concurrent ``/redshift-switch-profile``, a :func:`delete_profile` clearing
+    it — turned a reader into a ``FileNotFoundError``. A dangling symlink
+    answers None either way.
     """
-    p = active_profile_path()
-    if not p.exists():
+    try:
+        name = active_profile_path().read_text().strip()
+    except FileNotFoundError:
         return None
-    name = p.read_text().strip()
     return name or None
 
 
 def write_active_profile(name: str) -> None:
-    """Write the active profile pointer file (mode 600)."""
-    p = active_profile_path()
-    p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(name + "\n")
-    p.chmod(0o600)
+    """Write the active profile pointer file (mode 600), atomically.
+
+    Through the same temp file and rename as config.toml — see
+    :func:`_replace_atomically`. Writing in place truncated the file before the
+    new name landed, and a reader in that window gets an empty file, which
+    :func:`read_active_profile` reports as "no pointer" and
+    :func:`resolve_active_profile` answers by falling through to the implicit
+    rule: a different cluster than the pointer names, with nothing logged.
+
+    No lock is taken, and neither does :func:`clear_active_profile`. That one
+    cannot: :func:`delete_profile` calls it from inside the store lock, which
+    is not re-entrant. Locking only the other half of the pair would serialise
+    nothing, so both stay unlocked and the delete re-reads the pointer instead.
+    """
+    _replace_atomically(
+        active_profile_path(),
+        lambda f: f.write((name + "\n").encode()),
+        prefix=_POINTER_TEMP_PREFIX,
+    )
 
 
 def clear_active_profile() -> None:
@@ -328,10 +470,16 @@ def clear_active_profile() -> None:
 
     Used when switching back to ``"default"`` — single-profile state
     canonically corresponds to "no pointer file".
+
+    ``missing_ok`` rather than a preceding ``exists()`` check: anything that
+    removes the pointer between the check and the unlink — a concurrent
+    ``/redshift-switch-profile``, a second delete of the same profile, a user
+    with the file open — turned the last step of a :func:`delete_profile` that
+    had already removed the password and the fields into an uncaught
+    ``FileNotFoundError``, which reaches the CLI as a traceback from a delete
+    that in fact succeeded.
     """
-    p = active_profile_path()
-    if p.exists():
-        p.unlink()
+    active_profile_path().unlink(missing_ok=True)
 
 
 def resolve_active_profile(cli_profile: Optional[str] = None) -> str:

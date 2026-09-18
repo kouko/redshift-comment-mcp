@@ -285,7 +285,7 @@ The two READMEs to read next:
 |---|---|---|
 | `~/.config/redshift-comment-mcp/config.toml` | Non-secret profile fields | `0600` |
 | `~/.config/redshift-comment-mcp/active-profile` | One-line pointer to the active profile name. **Absent ↔ server uses `default`** (canonical single-profile state — most users never see this file). | `0600` |
-| `~/.config/redshift-comment-mcp/config.toml.lock` | Empty lock file. Held for the duration of a profile write or delete so two of them running at once can't drop each other's profiles. Appears on the first write and stays; safe to delete while nothing is running, and recreated on the next write. | `0600` |
+| `~/.config/redshift-comment-mcp/config.toml.lock` | Empty lock file, POSIX only — where `fcntl` is unavailable (Windows) it is never created and writes run unserialised. Held across a whole profile write, and across the config.toml half of a delete; the keychain step runs outside it, because it can block on an OS unlock prompt for minutes. Appears on the first write and stays. Best left in place: a server mid-write can be parked behind that prompt, so "nothing is running" is not something you can check from outside. Deleting it is not fatal — the next write creates a new one — but a writer holding it at that moment stops being protected. | `0600` |
 | OS keychain (`redshift-comment-mcp` / `<profile>`) | Passwords | OS-managed |
 
 ### config.toml is machine-managed — read this before hand-editing it
