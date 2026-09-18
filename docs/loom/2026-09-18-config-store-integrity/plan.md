@@ -27,9 +27,9 @@ charter: 1.0
 - Risk: broadening the except changes `delete_profile`'s contract from "returns bool" to "can raise"; agent-decided — keep the bool and surface the failure, since callers already treat False as "did not exist".
 
 **W0-04 Document the store as machine-managed, bump both versions**  after: W0-03  acceptance: 7
-- Files: README.md, README.ja.md, README.zh-TW.md, src/redshift_comment_mcp/config.py, .claude-plugin/plugin.json, pyproject.toml, tests/test_repo_invariants.py
+- Files: README.md, README.ja.md, README.zh-TW.md, src/redshift_comment_mcp/config.py, src/redshift_comment_mcp/redshift_tools.py, .claude-plugin/plugin.json, pyproject.toml
 - Test: A7 positive: readme-states-tool-managed-in-all-three-languages; negative: version-fields-stay-in-sync.
-- Risk: a header comment inside config.toml would be dropped by the next write, which is the documented behaviour; agent-decided — document in the READMEs and the module docstring instead.
+- Risk: W0-01 made the rollback comment at redshift_tools.py:1532-1540 assert the opposite of the code; this change broke it, so it fixes it. A config.toml header comment would be dropped by the next write.
 
 ## Questions asked
 ① — consequence — 設定檔是「機器管的」還是「人會去改的」？前者退掉那支測試並寫進文件，後者要加 tomlkit 相依套件
@@ -41,3 +41,4 @@ pre-① — what — 11 項要不要切成兩個變更
 2. The lock closes the trigger PR #41 introduced, where a whole-file rollback could revert a concurrent write. Nothing else in the repo serialises against this module.
 3. Task splitting was agent-decided: eleven items across two subsystems would not converge inside one review episode's three content revisions.
 4. `probe_config_toml_byte_identity.py` was retired under risk 1; `probe_empty_password_boundary.py` stays with 2026-09-17-credential-resolution-hardening.
+5. An atomic write makes `setup_via_dialog`'s `write_profile_failed` rollback unreachable as a truncation repair, leaving it able only to revert another process's completed write. Whether that branch should exist is deferred to 2026-09-17-credential-resolution-hardening, which owns that file.
