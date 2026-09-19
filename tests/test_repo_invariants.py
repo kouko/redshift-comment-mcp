@@ -334,3 +334,54 @@ def test_skill_readme_trilingual_or_none(skill):
         f"README.md={en}, README.ja.md={ja}, README.zh-TW.md={zh}. "
         f"Add the missing ones or remove all."
     )
+
+
+# ===== the profile store is documented as machine-managed =====
+
+# Every write to config.toml rewrites the whole file from the profiles that
+# were read, so hand-written comments and any key this project does not
+# recognise are dropped. That is the decided behaviour, not a defect — which
+# only holds up if the person about to hand-edit the file is told first.
+#
+# Each language carries its own anchor because these are three idiomatic
+# READMEs, not one wording translated literally; the anchors pin the two facts
+# that must survive a rewrite (writes come only from this project's tools, and
+# what a hand edit therefore loses) rather than the sentence around them.
+MACHINE_MANAGED_ANCHORS = {
+    "README.md": [
+        "written only by this project's own tools",
+        "dropped on the next write",
+    ],
+    "README.ja.md": [
+        "本プロジェクト自身のツールだけが書き込みます",
+        "次の書き込みで失われます",
+    ],
+    "README.zh-TW.md": [
+        "只由本專案自己的工具寫入",
+        "下一次寫入時被丟棄",
+    ],
+}
+
+# W0-02 put a lock file beside config.toml. A person who finds a new file in
+# their own config directory has to be able to look it up.
+LOCK_FILE_NAME = "config.toml.lock"
+
+
+@pytest.mark.parametrize("readme", sorted(MACHINE_MANAGED_ANCHORS))
+def test_readme_documents_machine_managed_store(readme):
+    """All three READMEs say the profile store is written by tooling only."""
+    text = (REPO_ROOT / readme).read_text()
+
+    missing = [a for a in MACHINE_MANAGED_ANCHORS[readme] if a not in text]
+    assert not missing, (
+        f"{readme} no longer documents config.toml as machine-managed. "
+        f"Missing: {missing}. Someone about to hand-edit the store must be "
+        f"told there that the next write drops their edits; if the wording "
+        f"changed on purpose, update MACHINE_MANAGED_ANCHORS to match."
+    )
+
+    assert LOCK_FILE_NAME in text, (
+        f"{readme} does not mention {LOCK_FILE_NAME}. It appears in every "
+        f"user's config directory as soon as a profile is written or deleted, "
+        f"so it has to be findable in the docs."
+    )

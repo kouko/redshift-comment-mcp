@@ -1529,15 +1529,28 @@ the only chat-leak-free paths.
                 # snapshot is ever handed the password, so their own exception
                 # text is safe to log.
                 logger.error(f"setup_via_dialog: write_profile failed: {e}")
-                # `write_profile` opens config.toml "wb" — which truncates it
-                # — and only then serialises, so a failure BETWEEN those two
-                # steps leaves a fragment where the file was: the target
-                # profile destroyed, every unrelated profile sharing the file
-                # destroyed with it, and the keychain still holding the old
-                # password. Roll the snapshot back, and say which of the two
-                # states the caller is in rather than asserting the happier
-                # one. When the snapshot was never taken nothing had been
-                # written yet, so there is nothing to undo.
+                # `write_profile` serialises into a temp file in the config
+                # directory and renames it over config.toml, so a failure
+                # inside it cannot leave a fragment: the file is the whole old
+                # content or the whole new content, never half of either, and
+                # every unrelated profile sharing it survives. That is what
+                # this rollback used to repair, and no longer has to —
+                # `_restore_config_bytes` short-circuits to True when the file
+                # already matches the snapshot, which is now the ordinary case
+                # on this path.
+                #
+                # What is left is narrower and has a hazard of its own: the
+                # snapshot is taken OUTSIDE `write_profile`'s store lock, so a
+                # write another process completed in between is not this call's
+                # state to restore, and restoring it would revert that
+                # process's work. Whether this branch should still exist at all
+                # is deferred to 2026-09-17-credential-resolution-hardening,
+                # which owns this file (plan risk 5) — it is deliberately NOT
+                # removed here.
+                #
+                # Say which of the two states the caller is in rather than
+                # asserting the happier one. When the snapshot was never taken
+                # nothing had been written yet, so there is nothing to undo.
                 restored = (
                     _restore_config_bytes(config_file, config_snapshot)
                     if snapshot_taken and config_file is not None
@@ -1548,10 +1561,12 @@ the only chat-leak-free paths.
                     f"call — config.toml is back to its pre-call bytes and "
                     f"no password was stored."
                     if restored else
-                    f"config.toml could NOT be rolled back (the restore "
-                    f"failed too, and was logged server-side), so it may be "
-                    f"left truncated or half-written — have the user check "
-                    f"config.toml before retrying."
+                    f"config.toml could NOT be rolled back to its pre-call "
+                    f"bytes (the restore failed too, and was logged "
+                    f"server-side). It is not a fragment — every write to it "
+                    f"is a whole-file replace — but it is no longer confirmed "
+                    f"to be what this call started from, so have the user "
+                    f"check which profiles it holds before retrying."
                 )
                 return {
                     "error": "write_profile_failed",

@@ -2561,18 +2561,25 @@ class TestSetupViaDialogPersistsNothingWithoutPassword:
     def test_write_profile_failure_says_so_when_the_rollback_also_fails(
         self, monkeypatch, populated_stores
     ):
-        """The mirror of the test above: a truncating write whose rollback
-        ALSO fails must not report the state the successful rollback reports.
+        """The mirror of the test above: a failed write whose rollback ALSO
+        fails must not report the state the successful rollback reports.
 
         `write_profile_failed`'s message used to assert one state
         unconditionally; both branches of the new one are claims about the
         file on disk, so both have to be exercised or one of them is prose
         nobody ran.
+
+        `config.write_profile` is atomic now, so a failed write can no longer
+        be the thing that leaves config.toml unreadable — this test used to
+        reach the branch that way. The rollback is driven into its failure
+        branch the one way still reachable: the read it does to decide whether
+        a restore is needed at all raises.
         """
         from pathlib import Path as _Path
 
         config_path, _storage = populated_stores
         real_read_bytes = _Path.read_bytes
+        before_bytes = real_read_bytes(config_path)
 
         monkeypatch.setattr(
             'redshift_comment_mcp.setup_cli._collect_password_via_dialog',
@@ -2581,14 +2588,23 @@ class TestSetupViaDialogPersistsNothingWithoutPassword:
 
         import tomli_w
 
-        def truncating_dump(_obj, fp):
-            fp.write(b"[profile.pr")
+        def failing_dump(_obj, _fp):
             raise OSError(28, "No space left on device")
-        monkeypatch.setattr(tomli_w, "dump", truncating_dump)
+        monkeypatch.setattr(tomli_w, "dump", failing_dump)
 
-        def unwritable(self, _data):
-            raise PermissionError(13, "Permission denied", str(self))
-        monkeypatch.setattr(_Path, "write_bytes", unwritable)
+        # Read 1 is the pre-call snapshot and must succeed, or the rollback
+        # is skipped entirely. Read 2 is the rollback's own "does this even
+        # need restoring?" check — failing it drives `_restore_config_bytes`
+        # into its `except OSError` branch.
+        reads = []
+
+        def fail_second_read(self):
+            if str(self) == str(config_path):
+                reads.append(True)
+                if len(reads) > 1:
+                    raise OSError(5, "Input/output error", str(config_path))
+            return real_read_bytes(self)
+        monkeypatch.setattr(_Path, "read_bytes", fail_second_read)
 
         tools = self._make_tools()
         setup_via_dialog = _get_tool_fn(tools, 'setup_via_dialog')
@@ -2603,8 +2619,9 @@ class TestSetupViaDialogPersistsNothingWithoutPassword:
             f"the restore failed but the response still claims config.toml is "
             f"back to its pre-call bytes: {result['message']}"
         )
-        assert real_read_bytes(config_path) == b"[profile.pr", (
-            "fixture precondition: the file really is left truncated here"
+        assert real_read_bytes(config_path) == before_bytes, (
+            "the atomic write left config.toml exactly as it was, even though "
+            "the rollback could not confirm it"
         )
         assert "a-brand-new-password" not in str(result)
 

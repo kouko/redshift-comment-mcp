@@ -348,7 +348,22 @@ def cmd_delete_profile(args: argparse.Namespace) -> int:
     ):
         print("Aborted.")
         return 0
-    if config.delete_profile(name):
+    try:
+        deleted = config.delete_profile(name)
+    except config.KeychainDeleteError as e:
+        # `delete_profile` removes the password BEFORE the fields, so this
+        # means nothing was removed at all — the profile is still whole and
+        # still listed. Exit 2, not 1: 1 means "no such profile", where
+        # retrying is pointless, while this is a retry-after-unlocking. The
+        # exception text already names the profile and the underlying cause.
+        print(f"✗ {e}", file=sys.stderr)
+        print(
+            f"  Nothing was deleted. Unlock the OS keychain, then run "
+            f"`redshift-comment-mcp delete-profile --profile {name}` again.",
+            file=sys.stderr,
+        )
+        return 2
+    if deleted:
         print(f"✓ Deleted profile '{name}'.")
         return 0
     print(f"Profile '{name}' did not exist.", file=sys.stderr)

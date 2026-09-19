@@ -1,0 +1,112 @@
+{
+  "schema": "loom-attestation/v2",
+  "change_id": "2026-09-18-config-store-integrity",
+  "content_digest": "9498eceee901965bb0ac3ace1a17f2f342f137ca",
+  "executions": [
+    {
+      "kind": "package-tests",
+      "command": "uv run --extra dev pytest tests/ --ignore=tests/integration --ignore=tests/e2e",
+      "artifact": "",
+      "result": "pass",
+      "command_digest": "c129b320ba001a481050c8325e67ffc68a89155656950ff0fcafc8002d704d99"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_atomicity_hostile_fs.py -q",
+      "artifact": "docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_atomicity_hostile_fs.py",
+      "result": "pass",
+      "command_digest": "b91e1f1678da880c0430e357559e8b19082176fe4eaf7732a63acb6ec1fd238f"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_concurrent_setup.py -q",
+      "artifact": "docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_concurrent_setup.py",
+      "result": "pass",
+      "command_digest": "1a2000970df8cd4e9f26b9a69fd4b3cb820f9a388b90f4de3df5838562d27443"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_delete_and_pointer_races.py -q",
+      "artifact": "docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_delete_and_pointer_races.py",
+      "result": "pass",
+      "command_digest": "5a7b7b5108cd895bc97e8bcdbd290e9709391903ab0b3f8a0252ffc1b940ac54"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_keychain_error_hygiene.py -q",
+      "artifact": "docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_keychain_error_hygiene.py",
+      "result": "pass",
+      "command_digest": "7c8ed3400571f175aeb0e9f1f4548504864f750fc940e9d0bdd91b396f699801"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_lock_boundaries.py -q",
+      "artifact": "docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_lock_boundaries.py",
+      "result": "pass",
+      "command_digest": "caafc0e64b7b31340fcbe597d07d9002d6ecaa8fc19dccbaacce60a385b69653"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_readme_lock_claims.py -q",
+      "artifact": "docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_readme_lock_claims.py",
+      "result": "pass",
+      "command_digest": "783b69ca9d9fa5f311be8acf0fb31904403009bd2408217358255c76ff938006"
+    }
+  ],
+  "verdicts": [
+    {
+      "reviewer": "closing-code",
+      "vendor": "anthropic",
+      "model": "sonnet",
+      "lens": "code",
+      "verdict": "PASS_WITH_NOTES",
+      "findings": []
+    },
+    {
+      "reviewer": "closing-docs",
+      "vendor": "anthropic",
+      "model": "sonnet",
+      "lens": "docs",
+      "verdict": "PASS_WITH_NOTES",
+      "findings": []
+    }
+  ],
+  "findings": [
+    {
+      "severity": "important",
+      "anchor": "docs/loom/2026-09-18-config-store-integrity/evidence/probes/probe_readme_lock_claims.py:180",
+      "text": "test_readmelockrow_theemptinessclaim_matchesthefilecontents calls cfg.set_password('prod','pw') after isolate_config, which redirects only XDG_CONFIG_HOME and never calls install_fake_keychain. Every successful run writes a real entry into the machine's OS keychain under redshift-comment-mcp/prod and the probe's outcome depends on real keychain state. Verified contained: the other three keychain-touching probes stub correctly and two never touch it. Not fixed here because Round 3 is the episode's terminal digest and the file is the adversary's artifact."
+    },
+    {
+      "severity": "important",
+      "anchor": "docs/loom/2026-09-18-config-store-integrity/blind-run-report.md:313-316",
+      "text": "The report claims the keychain entry's timestamp predates the verification run and therefore was not caused by it. That reasoning is unsound: the macOS keyring backend's set_password deletes then re-adds, resetting cdat as well as mdat, so a timestamp cannot establish causation either way. What is established is that every successful run of the probe above rewrites the entry. Uncorrectable within this episode; recorded so the permanent record is not left with the weaker claim."
+    },
+    {
+      "severity": "nit",
+      "anchor": "src/redshift_comment_mcp/config.py :: _store_lock, _lock_config_dir",
+      "text": "Deleting the config directory itself mid-write defeats both locks. The retry catches a directory replaced between open and flock, not one removed while held."
+    },
+    {
+      "severity": "nit",
+      "anchor": "src/redshift_comment_mcp/config.py :: _lock_depth",
+      "text": "The re-entrancy counter is process-local, so a fork() while the lock is held would carry a non-zero depth into the child. No caller forks inside a write."
+    },
+    {
+      "severity": "nit",
+      "anchor": "src/redshift_comment_mcp/config.py :: delete_profile presence check",
+      "text": "Calls keyring.get_password(KEYRING_SERVICE, name) directly rather than the module's own get_password(name) wrapper, duplicating a one-line body. Below Rule of Three."
+    },
+    {
+      "severity": "nit",
+      "anchor": "src/redshift_comment_mcp/redshift_tools.py :: setup_via_dialog rollback",
+      "text": "Plan risk 5: with the write atomic, the write_profile_failed rollback can only revert another process's completed write. Deferred to 2026-09-17-credential-resolution-hardening, which owns that file."
+    },
+    {
+      "severity": "nit",
+      "anchor": "docs/loom/2026-09-18-config-store-integrity/plan.md :: Current State Evidence",
+      "text": "The Data line cites config.py:86 for the whole-table replace; at the base commit that line is the in-memory mutation and the replace is at :87-88."
+    }
+  ],
+  "selection": null
+}
