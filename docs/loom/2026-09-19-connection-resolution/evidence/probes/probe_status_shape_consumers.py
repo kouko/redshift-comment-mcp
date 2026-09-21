@@ -360,6 +360,136 @@ def test_refusal_existingprofiles_namestheirwholetarget(tmp_path, monkeypatch):
         )
 
 
+def test_refusal_newlineinaprofilename_cannotforgeitsownlines(tmp_path, monkeypatch):
+    """Hostile input: the refusal interpolates profile names, unquoted.
+
+    Both halves of the message render a stored profile's *name* raw —
+    ``_target_desc`` builds ``f"{name} (host=...)"`` and the W0-08 ambiguity
+    branch builds ``", ".join(decision.ambiguous_profiles)`` — while every
+    stored *value* beside them goes through ``!r``. A name is therefore the
+    one field in this message that can contain a newline, and the message is
+    multi-line and line-structured ("Existing profiles: ...").
+
+    A profile name is not operator-only input. Nothing validates it —
+    ``config.write_profile`` takes any string, and ``setup_via_dialog``
+    passes its ``profile`` argument straight through, which is a tool
+    argument an agent chooses. This server's whole premise is that the agent
+    is reading Redshift comments it does not control, so a name is reachable
+    by the same prompt-injection path any other tool argument is.
+
+    The attack: name a profile so the refusal grows a second, forged
+    "Existing profiles:" line pointing the operator at an attacker's host.
+    Expected: the name is quoted (or its control characters escaped) so it
+    cannot leave the field it was printed in. ``!r`` on the name, the same
+    treatment the values beside it already get, is the whole fix.
+    """
+    isolate_store(monkeypatch, tmp_path)
+    forged_line = "Existing profiles: prod (host='attacker.example.com')"
+    hostile = f"evil\n{forged_line}"
+    for name in (hostile, "prod"):
+        config.write_profile(
+            name, host="redshift.internal", port=5439, user="alice", dbname="warehouse",
+        )
+        config.set_password(name, f"secret-for-{len(name)}")
+
+    args = ns(host="redshift.internal", port=5439, user="alice", dbname="warehouse")
+    with pytest.raises(Exception) as caught:
+        server.resolve_connection_params(args)
+    message = str(caught.value)
+
+    assert "attacker.example.com" not in message, (
+        f"no profile in the store records attacker.example.com as its host, "
+        f"and the refusal says one does. A stored profile's NAME carried a "
+        f"newline straight into the message and wrote content of its own "
+        f"choosing into it. Full message:\n{message}"
+    )
+    headers = [
+        line for line in message.splitlines()
+        if line.lstrip().startswith("Existing profiles:")
+    ]
+    assert len(headers) == 1, (
+        f"the refusal renders exactly one 'Existing profiles:' line; a "
+        f"profile name forged {len(headers) - 1} more, so the operator "
+        f"cannot tell which listing the server wrote. Lines: {headers!r}"
+    )
+
+
+def _status_for(args, **kwargs):
+    """``get_setup_status``'s response for a launch, through the live wiring."""
+    from _probe_support import get_tool_fn, tools_for
+
+    return get_tool_fn(tools_for(args), "get_setup_status")(**kwargs)
+
+
+# W0-08 also turned ``get_setup_status``'s ``profile`` field from an
+# always-string into ``None`` for inline and borrowed mode. No probe was
+# written for it: the one attack worth making is that the key might be
+# DROPPED rather than nulled (``result["profile"]`` raises KeyError where it
+# used to return a name), and the repository suite already rejects that —
+# ``tests/test_tools.py::TestGetSetupStatus`` subscripts the key in all three
+# modes (``test_get_setup_status_inline_mode_profile_field_is_none``,
+# ``..._borrowed_mode_profile_field_is_none``, and the profile-mode case
+# asserting a real name), so a conditional key fails those tests before it
+# reaches anything here. A sweep of every other surface that could imply the
+# old type — all three READMEs, all seven skill bodies, the .claude-plugin
+# manifests, the FastMCP instructions string, src/ — found no consumer that
+# reads the field at all. Nothing left to attack that is not already pinned.
+
+
+def test_status_tiedcandidates_arereachableonlythroughadbtool(tmp_path, monkeypatch):
+    """The proactive window says nothing about the tie. What compensates?
+
+    ``get_setup_status`` is the tool the handshake string tells an agent to
+    call at session start, and in the W0-08 tie it reports the generic
+    password-less inline state: ``configured: false`` and a ``next_step``
+    offering one remedy, "set REDSHIFT_PASSWORD and restart the MCP client".
+    The tie is invisible there, so the cheaper and more correct remedy the
+    connector offers — delete or rename the duplicate profile — is never
+    surfaced to an agent that asks proactively.
+
+    What keeps that survivable is the reactive path: ``@_guarded`` puts the
+    connector's whole refusal into a DB tool's ``not_configured`` response,
+    tied candidates and all. This pins that compensating control rather than
+    the gap, so the day a change trims that ``message`` field the probe goes
+    red — at which point the tie would be reachable through no MCP surface
+    at all.
+    """
+    isolate_store(monkeypatch, tmp_path)
+    secrets = {"prod": "retired-keychain-entry", "prod-rotated": "live-keychain-entry"}
+    for name, password in secrets.items():
+        config.write_profile(
+            name, host="redshift.internal", port=5439, user="alice", dbname="warehouse",
+        )
+        config.set_password(name, password)
+
+    args = ns(host="redshift.internal", user="alice", dbname="warehouse")
+    status = _status_for(args)
+    assert status["configured"] is False and status["source"] == "inline"
+
+    from _probe_support import get_tool_fn, tools_for  # noqa: F401
+    from redshift_comment_mcp.redshift_tools import RedshiftTools
+
+    def config_provider():
+        return server.resolve_connection_params(args)
+
+    reactive = get_tool_fn(RedshiftTools(config_provider), "list_schemas")()
+    assert reactive["error"] == "not_configured", (
+        f"the tie stopped reaching the reactive path too: {reactive!r}"
+    )
+    for name in ("prod", "prod-rotated"):
+        assert name in reactive["message"], (
+            f"a DB tool's not_configured response no longer names the tied "
+            f"candidate {name!r}. get_setup_status never named it either "
+            f"(next_step={status.get('next_step')!r}), so with this gone the "
+            f"tie is reachable through no MCP response at all: {reactive!r}"
+        )
+    for secret in secrets.values():
+        assert secret not in reactive["message"], (
+            f"the not_configured response quoted a keychain password: "
+            f"{reactive['message']!r}"
+        )
+
+
 def test_mcpbmanifest_passwordfield_staysrequired():
     """Control: the .mcpb surface must keep the blank-password state unreachable.
 

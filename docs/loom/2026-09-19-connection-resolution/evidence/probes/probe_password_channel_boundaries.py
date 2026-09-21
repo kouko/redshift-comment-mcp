@@ -160,9 +160,16 @@ def test_messages_everyserverauthoredrefusal_omitsthepasswordflag(tmp_path, monk
     """Acceptance 5, from the attacker's side: every refusal path, not one.
 
     The implementer's pin greps the module source. This one walks the refusal
-    messages the server actually emits — four distinct raise sites — and
+    messages the server actually emits — five distinct raise sites — and
     checks each rendered string, so a message that recommends the flag through
     an f-string built at runtime is caught too.
+
+    The fifth site is W0-08's: the inline branch grew a second, separate
+    ``raise`` for the ambiguous-lender case, with its own text rather than a
+    clause added to the existing one. A new raise site is a new chance to
+    re-suggest the flag, and it is the one site whose text is *about* which
+    stored password to use, so it is added here rather than left to the
+    source grep.
     """
     isolate_store(monkeypatch, tmp_path)
     messages = []
@@ -186,16 +193,87 @@ def test_messages_everyserverauthoredrefusal_omitsthepasswordflag(tmp_path, monk
     # profile mode, fields present but no keychain entry
     config.write_profile("lonely", host="l.example.com", port=5439, user="u", dbname="d")
     _capture(ns(profile="lonely"))
+    # inline, no password, two stored profiles tie on the whole target (W0-08)
+    for tied, tied_secret in (("tie-a", "tied-a-secret"), ("tie-b", "tied-b-secret")):
+        config.write_profile(
+            tied, host="h.example.com", port=5439, user="u", dbname="d",
+        )
+        config.set_password(tied, tied_secret)
+    _capture(ns(host="h.example.com", user="u", dbname="d"))
 
-    assert len(messages) == 4
+    assert len(messages) == 5
     for message in messages:
         assert "--password" not in message, (
             f"a server-authored refusal still recommends the argv flag: {message!r}"
         )
-        assert "not-lendable" not in message, (
-            f"a refusal leaked a stored password: {message!r}"
-        )
+        for leaked in ("not-lendable", "tied-a-secret", "tied-b-secret"):
+            assert leaked not in message, (
+                f"a refusal leaked a stored password: {message!r}"
+            )
+    assert "tie-a" in messages[-1] and "tie-b" in messages[-1], (
+        f"the fifth capture is not the ambiguity refusal, so this probe stopped "
+        f"covering that raise site: {messages[-1]!r}"
+    )
     assert any("REDSHIFT_PASSWORD" in message for message in messages), (
         "the inline refusals must still name the env-var channel that replaced "
         "the flag (W0-03 boundary: env-var guidance survives)"
+    )
+
+
+def test_wiretext_everypublishedsurface_omitsthepasswordflag():
+    """Acceptance 5 on the whole wire, not on the one surface each guard checks.
+
+    W0-08 split the A5 regression guard in two: an AST scan over server.py
+    and redshift_tools.py source that exempts a ``--password`` written inside
+    double backticks unless it sits in an ``@self.mcp.tool`` docstring, and a
+    runtime companion that reads every registered tool's published
+    ``description``. The AST half names its own blind spot (a tool registered
+    through some other decorator shape) and points at the runtime half as
+    the one to trust.
+
+    The runtime half does close that specific hole — a tool registered via an
+    aliased decorator still appears in ``list_tools``, so its description is
+    still read. But it reads descriptions and nothing else, while the source
+    half's exemption is keyed on formatting and applies anywhere outside a
+    tool docstring. Between them sits the surface with the widest reach of
+    all: the FastMCP ``instructions`` handshake, a plain string literal (not
+    a docstring, not a description) that every MCP client receives before it
+    calls anything. A double-backticked ``--password`` recommendation written
+    there is exempted by one guard and unread by the other.
+
+    So this walks what the wire actually carries — the handshake string, and
+    every registered tool's name, description and input schema — and takes no
+    view on how any of it was spelled in the source.
+    """
+    import asyncio
+
+    from _probe_support import server_instructions, tools_for
+
+    surfaces = {"instructions": server_instructions()}
+
+    tools = tools_for(ns())
+    lister = getattr(tools.mcp, "list_tools", None) or tools.mcp._list_tools
+    for tool in asyncio.run(lister()):
+        surfaces[f"{tool.name}.description"] = tool.description or ""
+        schema = getattr(tool, "parameters", None) or getattr(
+            tool, "inputSchema", None
+        )
+        if schema is not None:
+            surfaces[f"{tool.name}.input_schema"] = json.dumps(schema)
+
+    assert "instructions" in surfaces and surfaces["instructions"].strip()
+    assert any(key.endswith(".description") for key in surfaces), (
+        "no tool descriptions were read, so this probe would pass vacuously"
+    )
+
+    offending = {
+        name: text for name, text in surfaces.items() if "--password" in text
+    }
+    assert offending == {}, (
+        f"agent-visible text recommends the argv password flag on "
+        f"{sorted(offending)}. Every string here is published to an MCP "
+        f"client verbatim, and the A5 guards in tests/ read only tool "
+        f"descriptions (runtime half) or exempt a double-backticked "
+        f"reference outside a tool docstring (source half), so neither "
+        f"covers all of it: {offending!r}"
     )
