@@ -75,16 +75,21 @@ class ConnectionDecision:
             ``"inline"`` (no profile is consulted at all in that case).
         ambiguous_profiles: ``None`` in every case except one — the inline
             borrow scan found MORE than one stored profile whose host, port,
-            user AND dbname all match the inline target, each with its own
-            keychain password. A credential rotation leaves exactly this
-            shape (the retired profile kept alongside its replacement, same
-            target, different password); picking one by
-            ``config.list_profiles()``'s sort order would silently prefer
-            whichever name sorts first, possibly the retired secret. Rather
-            than guess, the decision comes back as plain password-less
-            ``"inline"`` and this field names every tied candidate (sorted,
-            never the passwords) so the refusal message built from it can
-            name them all.
+            user AND dbname all match the inline target. A credential
+            rotation leaves exactly this shape (the retired profile kept
+            alongside its replacement, same target), among others; picking
+            one by ``config.list_profiles()``'s sort order would silently
+            prefer whichever name sorts first, possibly a retired secret.
+            Rather than guess, the decision comes back as plain
+            password-less ``"inline"`` and this field names every tied
+            candidate (sorted, never the passwords) so the refusal message
+            built from it can name them all. The scan never reads the tied
+            profiles' passwords to decide this (see W0-09): the refusal
+            fires on the four-field tie alone, and neither this field nor
+            the message built from it says or implies anything about
+            whether those passwords agree or differ — an operator can see
+            the tie by reading ``config.toml`` alone, with no need to open
+            the keychain.
     """
 
     mechanism: str

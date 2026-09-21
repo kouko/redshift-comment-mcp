@@ -3765,6 +3765,53 @@ class TestNoToolDescriptionRecommendsThePasswordFlag:
             f"every MCP client in tools/list."
         )
 
+    def test_no_wire_surface_mentions_password_flag(self):
+        """W0-09 item 3: the description-only check above has its own blind
+        spot. The FastMCP ``instructions`` handshake string is the widest-
+        reach surface of all -- a plain string literal every MCP client
+        receives before it calls anything at all, not a tool description and
+        not a docstring the AST source scan
+        (``test_no_stray_password_flag_recommendation_in_source`` in
+        ``tests/test_server_resolution.py``) would recognise. A
+        double-backtick-quoted ``--password`` written there slipped past
+        both existing guards in a demonstrated attack. Each tool's input
+        schema is cheap to read here too and gets the same treatment, so a
+        parameter description carrying the same text would not slip through
+        either.
+        """
+        import asyncio
+        import json
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def provider():
+            raise ConfigurationError("doesn't matter — no tool call happens here")
+
+        tools = RedshiftTools(provider)
+        surfaces = {"instructions": tools.mcp.instructions or ""}
+
+        lister = getattr(tools.mcp, 'list_tools', None) or tools.mcp._list_tools
+        for t in asyncio.run(lister()):
+            surfaces[f"{t.name}.description"] = t.description or ""
+            schema = getattr(t, "parameters", None) or getattr(t, "inputSchema", None)
+            if schema is not None:
+                surfaces[f"{t.name}.input_schema"] = json.dumps(schema)
+
+        assert surfaces["instructions"].strip(), (
+            "FastMCP server exposes no non-empty `instructions` string; "
+            "this guard cannot pin what it does not receive."
+        )
+
+        offending = {
+            name: text for name, text in surfaces.items() if "--password" in text
+        }
+        assert offending == {}, (
+            f"agent-visible wire text recommends/mentions the --password "
+            f"flag on {sorted(offending)} -- every surface here is "
+            f"published to an MCP client verbatim, and the description-only "
+            f"check above and the AST source scan each cover only part of "
+            f"it."
+        )
+
 
 class TestServerInstructionsEnumerateAllThreeMechanisms:
     """W0-05 defect 4 / Acceptance 3 positive: the FastMCP ``instructions``

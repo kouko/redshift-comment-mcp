@@ -542,6 +542,89 @@ def test_single_matching_profile_still_borrows_despite_ambiguity_check(tmp_xdg, 
     assert decision.profile_name == "prod"
 
 
+# ===== W0-09 item 1: the tie refusal fires on the four-field match alone.
+# It must neither claim the tied profiles' passwords differ (they were
+# never compared to reach this branch) nor special-case an identical
+# password into lending — a future reader will be tempted to add exactly
+# that special case back, since a tie with one shared secret does look like
+# it has nothing to guess between. The rule is intentionally simpler and
+# more predictable than that: an operator can see a four-field tie by
+# reading config.toml alone, with no need to open the keychain, and adding
+# the identical-password exception would take that away. =====
+
+
+def test_identical_password_tie_still_refuses(tmp_xdg, fake_keyring, monkeypatch):
+    """Two profiles match the target and hold the IDENTICAL password.
+
+    Regression pin against the tempting special case: even though both
+    profiles would send the identical bytes to the identical target, the
+    scan must still refuse on the four-field tie alone — it must not read
+    the passwords at all to decide this, let alone lend because they
+    happen to agree."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "prod-copy", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod-copy", "one-credential-two-names")
+    config.write_profile(
+        "prod", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod", "one-credential-two-names")
+
+    args = _ns(host="h.example.com", user="u", dbname="d")
+    decision = server.resolve_connection_decision(args)
+
+    assert decision.mechanism == "inline"
+    assert decision.has_password is False
+    assert decision.password is None
+    assert decision.ambiguous_profiles == ("prod", "prod-copy")
+
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    msg = str(excinfo.value)
+    assert "one-credential-two-names" not in msg, f"the refusal quoted the password: {msg!r}"
+    assert "different passwords" not in msg, (
+        f"the scan never compares the tied profiles' passwords, so the "
+        f"message must not claim they differ: {msg!r}"
+    )
+
+
+def test_differing_password_tie_refuses_without_a_password_claim(tmp_xdg, fake_keyring, monkeypatch):
+    """Two profiles match the target with DIFFERENT passwords.
+
+    The scan must still refuse, exactly as before W0-09 — but the message
+    must state only what was actually checked (a four-field tie), and must
+    not assert anything about the passwords one way or the other, since
+    they were never read for comparison."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "prod", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod", "retired-secret")
+    config.write_profile(
+        "prod-rotated", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod-rotated", "live-secret")
+    assert config.get_password("prod") != config.get_password("prod-rotated")
+
+    args = _ns(host="h.example.com", user="u", dbname="d")
+    decision = server.resolve_connection_decision(args)
+    assert decision.mechanism == "inline"
+    assert decision.has_password is False
+    assert decision.ambiguous_profiles == ("prod", "prod-rotated")
+
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    msg = str(excinfo.value)
+    assert "different passwords" not in msg, (
+        f"the scan never compares the tied profiles' passwords, so the "
+        f"message must not claim they differ: {msg!r}"
+    )
+    assert "match that exact target" in msg
+    assert "retired-secret" not in msg
+    assert "live-secret" not in msg
+
+
 # ===== W0-05 defect 3: the borrow scan must not make a keychain-free path
 # depend on the keychain (or on a clean config.toml) =====
 # The scan calls cfg.list_profiles() / cfg.read_profile() / cfg.get_password()
@@ -816,8 +899,19 @@ def _mcp_tool_docstring_line_ranges(source: str) -> list[tuple[int, int]]:
     exemption below, silently. The companion runtime test,
     ``TestNoToolDescriptionRecommendsThePasswordFlag`` in test_tools.py,
     checks the ACTUAL published ``t.description`` of every registered tool
-    at runtime and has no such blind spot; it is the one to trust if the two
-    ever disagree.
+    at runtime and has no blind spot for how a tool got registered — but it
+    used to have one of its own: reading descriptions alone missed the
+    widest-reach surface, the FastMCP ``instructions`` handshake string every
+    client receives before calling any tool, which a demonstrated attack put
+    a double-backtick-quoted ``--password`` into while both this scan and
+    that test passed. ``test_no_wire_surface_mentions_password_flag`` (added
+    for W0-09) closes that by also reading ``instructions`` and every tool's
+    input schema, so it is the one to trust if this scan and it ever
+    disagree — not because it has no blind spot at all, but because its
+    remaining one (a tool registered outside ``RedshiftTools.__init__`` —
+    e.g. directly on ``tools.mcp`` inside ``server.main()`` — is invisible to
+    both this scan and that runtime test; nothing registers that way today)
+    is narrower than this scan's.
     """
     import ast
 
@@ -1013,3 +1107,77 @@ def test_borrow_blank_and_placeholder_port_still_borrow(tmp_xdg, fake_keyring, m
         assert server.resolve_connection_params(args) == (
             "h.example.com", 5439, "u", "borrowed-pw", "d"
         ), f"raw port {raw!r} must still borrow normally"
+
+
+# ===== W0-09 item 2: a stored profile's NAME is not operator-only input —
+# setup_via_dialog's `profile` argument is an agent-chosen tool argument —
+# so it must be rendered !r like every value beside it, or a newline in a
+# name can forge extra "Existing profiles:" lines of its own choosing. =====
+
+
+def test_render_profile_name_clean_name_unaffected(tmp_xdg):
+    """A5 control: an ordinary name (no control characters) still gets the
+    same bare ``!r`` treatment every value beside it in these messages gets
+    — the added truncation logic must not change the common case."""
+    assert server._render_profile_name("prod") == repr("prod")
+
+
+def test_render_profile_name_truncates_at_first_control_character(tmp_xdg):
+    """A5, W0-09 item 2: a control character is never legitimate in a
+    profile name, so rendering must not carry attacker-chosen text placed
+    after one into an operator-facing message at all — truncate there
+    instead of merely escaping it. The operator must still be able to tell
+    WHICH entry is the problem (the safe prefix survives, `!r`'d) and THAT
+    it is malformed (an explicit marker), never a generic placeholder that
+    hides which one to go fix."""
+    hostile = "evil\nExisting profiles: prod (host='attacker.example.com')"
+    rendered = server._render_profile_name(hostile)
+
+    assert "attacker.example.com" not in rendered, (
+        f"content placed after the control character leaked into the "
+        f"rendering: {rendered!r}"
+    )
+    assert repr("evil") in rendered, (
+        f"the safe prefix before the control character must still identify "
+        f"the entry: {rendered!r}"
+    )
+    assert "control character" in rendered, (
+        f"the rendering must say the name is malformed, not just truncate "
+        f"silently: {rendered!r}"
+    )
+    assert "\n" not in rendered
+
+
+def test_refusal_hostile_profile_name_with_newline_cannot_forge_a_line(
+    tmp_xdg, fake_keyring, monkeypatch,
+):
+    """A5 boundary, live end to end: the hostile name reaches the actual
+    refusal message through both interpolation sites (``_target_desc`` and
+    the ambiguous-profiles join), not just the unit-tested helper. Neither
+    the forged line nor the attacker's payload text survives."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    forged_line = "Existing profiles: prod (host='attacker.example.com')"
+    hostile = f"evil\n{forged_line}"
+    for name in (hostile, "prod"):
+        config.write_profile(
+            name, host="h.example.com", port=5439, user="u", dbname="d",
+        )
+        config.set_password(name, f"secret-for-{len(name)}")
+
+    args = _ns(host="h.example.com", user="u", dbname="d")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    message = str(excinfo.value)
+
+    assert "attacker.example.com" not in message, (
+        f"a profile name's embedded control character still leaked "
+        f"attacker-chosen text into the refusal: {message!r}"
+    )
+    headers = [
+        line for line in message.splitlines()
+        if line.lstrip().startswith("Existing profiles:")
+    ]
+    assert len(headers) == 1, (
+        f"the hostile name forged {len(headers) - 1} extra "
+        f"'Existing profiles:' line(s): {headers!r}"
+    )

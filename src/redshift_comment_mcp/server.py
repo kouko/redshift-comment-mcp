@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import argparse
 import logging
@@ -10,6 +11,46 @@ from .redshift_tools import RedshiftTools, ConnectionDecision, resolve_profile_d
 logger = logging.getLogger(__name__)
 
 DEFAULT_PORT = 5439
+
+_CONTROL_CHAR_RE = re.compile(r"[\x00-\x1f\x7f]")
+
+
+def _render_profile_name(name: str) -> str:
+    """Render a stored profile name for an operator-facing refusal message.
+
+    A profile name is not operator-only input (W0-09 item 2): nothing
+    validates it at write time, and ``setup_via_dialog``'s ``profile``
+    argument is chosen by an agent whose job is reading Redshift comments it
+    does not control, so a name can carry a control character the same way
+    any other tool argument can. Shared by every message-building site that
+    interpolates a stored name (``_target_desc`` below and the
+    ambiguous-profiles join in ``resolve_connection_params``) so the two
+    cannot drift apart on how they render one.
+
+    - No control character: ``!r``, the same treatment every value beside a
+      name in these messages already gets.
+    - A control character present: truncate at the FIRST one and still
+      render that prefix ``!r``'d, plus an explicit marker. ``!r`` alone
+      escapes a control character so it can no longer split the message
+      into an extra structural line, but the text placed after it is still
+      fully legible in the escaped output — enough to land attacker-chosen
+      content in text an agent reads. A control character is never
+      legitimate in a profile name, so refusing to render past the first
+      one is honest, and it keeps this message from being the thing that
+      carries the payload. The operator still sees which entry is the
+      problem (the truncated prefix) and that the entry itself is
+      malformed (the marker) — never replaced with a generic placeholder
+      that would hide which one to go fix.
+
+    This does not validate profile names or close the gap that lets one
+    reach the store with a control character in it at all — that remains
+    ``config.write_profile`` / ``setup_via_dialog``, out of scope here (see
+    the W0-09 report's follow-up).
+    """
+    match = _CONTROL_CHAR_RE.search(name)
+    if match is None:
+        return repr(name)
+    return f"{name[:match.start()]!r} [truncated: name contains a control character]"
 
 
 class _SubstitutedPort(int):
@@ -165,11 +206,16 @@ def resolve_connection_decision(
       never a connection target, and it only ever lends to a launch naming
       the exact same four-field target it was recorded for. Profile *name*
       is ignored throughout this mode. When MORE THAN ONE stored profile
-      matches the same four-field target with different passwords — the
-      shape a credential rotation leaves behind — the scan refuses rather
-      than picking whichever name sorts first: the decision comes back
-      plain password-less ``"inline"`` with ``ambiguous_profiles`` naming
-      every tied candidate.
+      matches the same four-field target — a shape a credential rotation
+      leaves behind (the retired profile kept alongside its replacement,
+      same target), among others — the scan always refuses rather than
+      picking whichever name sorts first: the decision comes back plain
+      password-less ``"inline"`` with ``ambiguous_profiles`` naming every
+      tied candidate. The refusal fires on the tie alone; the scan never
+      reads (and the resulting message never claims anything about) whether
+      the tied profiles' passwords happen to agree or differ — an operator
+      can see a four-field tie by reading ``config.toml`` alone, without
+      opening the keychain, and the rule stays that predictable (see W0-09).
     - **Profile mode** (the default): delegated to
       ``resolve_profile_decision``, which looks up the profile name via
       ``config.resolve_active_profile(profile_override or args.profile)``
@@ -289,18 +335,28 @@ def resolve_connection_decision(
             )
 
         if len(lenders) > 1:
-            # A credential rotation leaves exactly this shape: the retired
-            # profile and its replacement both recorded for the same
-            # four-field target, with different passwords. Picking the
-            # first by config.list_profiles()'s sort order would silently
-            # prefer whichever name sorts first — possibly the retired
-            # secret — and could burn attempts against an account lockout
-            # policy. A loud refusal beats a quiet wrong answer, the same
-            # principle kouko chose for the port gap above (2026-09-21).
+            # More than one profile matches the whole four-field target.
+            # A credential rotation leaves exactly this shape (the retired
+            # profile kept alongside its replacement, same target), among
+            # others. Picking the first by config.list_profiles()'s sort
+            # order would silently prefer whichever name sorts first —
+            # possibly a retired secret — and could burn attempts against an
+            # account lockout policy. A loud refusal beats a quiet wrong
+            # answer, the same principle kouko chose for the port gap above
+            # (2026-09-21).
+            #
+            # The refusal fires on the tie alone (see W0-09): the scan does
+            # NOT read or compare the tied profiles' passwords to decide
+            # this, on purpose — an operator can see a four-field tie by
+            # reading config.toml alone, and making the outcome also depend
+            # on whether two keychain entries happen to agree would require
+            # opening the keychain to predict it. Nothing here says or
+            # implies the passwords differ; only that the fields tie.
             ambiguous_names = tuple(name for name, _ in lenders)
             logger.debug(
                 "borrow scan: refusing to guess — %d profiles all match "
-                "this target: %s", len(ambiguous_names), ambiguous_names,
+                "this target: %s",
+                len(ambiguous_names), ambiguous_names,
             )
             return ConnectionDecision(
                 mechanism="inline", host=host, port=port, user=user, dbname=dbname,
@@ -370,16 +426,25 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
                     # message can be compared field by field — rendering
                     # only host:port let two profiles differing solely in
                     # dbname print as identical entries (see W0-07 defect A).
+                    # The NAME goes through _render_profile_name (see W0-09
+                    # item 2), not a bare !r: it is not operator-only input
+                    # — setup_via_dialog's `profile` argument is an
+                    # agent-chosen tool argument — and unlike every value
+                    # beside it here, an unquoted name could carry a
+                    # newline into this multi-line, line-structured message
+                    # and forge a second "Existing profiles:" entry of its
+                    # own choosing.
                     return (
-                        f"{name} (host={target_host!r} port={target_port!r} "
-                        f"user={target_user!r} dbname={target_dbname!r})"
+                        f"{_render_profile_name(name)} (host={target_host!r} "
+                        f"port={target_port!r} user={target_user!r} "
+                        f"dbname={target_dbname!r})"
                     )
                 except Exception as e:  # noqa: BLE001 — see above
                     logger.debug(
                         "borrow-refusal message: could not describe profile "
                         "%r (%s)", name, type(e).__name__,
                     )
-                    return f"{name} (unreadable)"
+                    return f"{_render_profile_name(name)} (unreadable)"
 
             existing_desc = ", ".join(_target_desc(name) for name in existing)
         else:
@@ -394,18 +459,23 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
                 f"password. Fix the typo and relaunch."
             )
         if decision.ambiguous_profiles:
-            # More than one stored profile matches the inline target, each
-            # with its own password — see resolve_connection_decision for
-            # why the scan refuses rather than picking one. Name both (or
-            # all) tied candidates explicitly; never their passwords.
+            # More than one stored profile matches the inline target. The
+            # scan (see resolve_connection_decision) never reads or compares
+            # what these tied profiles' passwords actually hold to reach
+            # this branch — only that their host/port/user/dbname all tie —
+            # so this message states exactly that and nothing about the
+            # passwords, which it does not know and did not check. Name
+            # both (or all) tied candidates explicitly (via
+            # _render_profile_name — see W0-09 item 2 — never a bare
+            # interpolation); never their passwords.
             raise ConfigurationError(
                 f"Inline mode requires a password for "
                 f"host={decision.host!r} port={decision.port!r} "
                 f"user={decision.user!r} dbname={decision.dbname!r}, and "
                 f"{len(decision.ambiguous_profiles)} stored profiles all "
-                f"match that exact target with different passwords: "
-                f"{', '.join(decision.ambiguous_profiles)}. Refusing to "
-                f"guess which one to borrow — picking by sort order could "
+                f"match that exact target: "
+                f"{', '.join(_render_profile_name(name) for name in decision.ambiguous_profiles)}. "
+                f"Refusing to guess which one to borrow — picking by sort order could "
                 f"silently prefer a retired credential over its "
                 f"replacement, the shape a credential rotation leaves "
                 f"behind.\n"
