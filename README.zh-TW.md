@@ -78,16 +78,24 @@ claude plugin enable redshift-comment-mcp
 ```
 
 當你**啟用** plugin 時，Claude Code 會跳出連線對話框，問你 host /
-port（預設 5439）/ user / dbname / password。連線有兩種方式 —— 擇一
-即可；兩種都把密碼存進 OS keychain，不進對話、也不進 `settings.json`：
+port（預設 5439）/ user / dbname / password。每個欄位都選填，留空哪些
+決定你走哪一條路，總共三種；密碼一律存進 OS keychain，不進對話、也不進
+`settings.json`：
 
-- **只連一個 —— 填對話框。** password 欄位是 `sensitive`，所以進 OS
-  keychain；host / port / user / dbname 存進 `settings.json`。單一
+- **全部填 —— 只連一個，速戰速決。** password 欄位是 `sensitive`，所以
+  進 OS keychain；host / port / user / dbname 存進 `settings.json`。單一
   cluster 這樣就夠了。
-- **要 profile／多 cluster —— 留空對話框、改跑 `/redshift-setup`。**
-  這些欄位是選填，留空時 plugin 會 fallback 到 profile 流程。
-  `/redshift-setup` 是對話式逐步設定，寫出具名 profile（config.toml +
-  active-profile 指標 + keychain），也是要跑多個 cluster 時走的路徑。
+- **填 host / user / dbname，password 留空 —— 借用既有 profile 的
+  密碼。** server 會在 `/redshift-setup` 寫出的 profile 裡找一個
+  host、user、dbname 三者都對得上你填的值的（port 不算在比對條件內），
+  借用它 keychain 裡的密碼，連到你填的那個目標。沒有一個 profile 三者
+  全對得上 —— 連線會直接拒絕，訊息同時列出你填的目標和每個既有
+  profile 的 host，所以你可以用 `/redshift-setup` 補一個對得上的
+  profile，或乾脆自己把 password 欄填上。
+- **四個欄位全部留空 —— 走 profile 路徑。** plugin 完全 fallback 到
+  `/redshift-setup` 的 profile 流程。`/redshift-setup` 是對話式逐步
+  設定，寫出具名 profile（config.toml + active-profile 指標 +
+  keychain），也是要跑多個 cluster 時走的路徑。
 
 ```bash
 # 在 Claude Code 對話中 —— profile 路徑（也是多 cluster 路徑）
@@ -118,7 +126,7 @@ Claude Desktop / 其他 MCP client / 本地開發見下面的**其他安裝路�
 
 | 情境 | 方式 |
 |---|---|
-| Claude Code（推薦） | `claude plugin install redshift-comment-mcp`（如上），接著**啟用**它 —— Claude Code 會跳出連線對話框（host / port / user / dbname / password；密碼 → OS keychain）。只連一個 cluster 就填一填,或留空改跑 `/redshift-setup`。 |
+| Claude Code（推薦） | `claude plugin install redshift-comment-mcp`（如上），接著**啟用**它 —— Claude Code 會跳出連線對話框（host / port / user / dbname / password；密碼 → OS keychain）。只連一個 cluster 就全部填一填，只留 password 空白會借用對得上的 profile 密碼，全部留空就改跑 `/redshift-setup`。 |
 | Claude Desktop（一鍵） | 從專案的 [GitHub Releases](https://github.com/kouko/redshift-comment-mcp/releases) 頁面下載 `.mcpb`，在 Claude Desktop 安裝（**Settings → Extensions**，或把檔案拖放進去）。Claude Desktop 會跳出連線表單 —— 填 host / port / user / dbname / password（密碼存進 OS keychain）。**需要 `uv`**（見下方前置需求）。提供 server + 表單，**不含** skills。 |
 | Claude Desktop / 一般 MCP client（手動） | `pip install redshift-comment-mcp`，client config 指向 `uvx redshift-comment-mcp`（要覆蓋指標檔可加 `--profile <name>`） |
 | 本地開發 | `git clone … && pip install -e ".[dev]"`，跑 `python -m redshift_comment_mcp.server` |

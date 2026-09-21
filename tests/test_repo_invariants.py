@@ -385,3 +385,84 @@ def test_readme_documents_machine_managed_store(readme):
         f"user's config directory as soon as a profile is written or deleted, "
         f"so it has to be findable in the docs."
     )
+
+
+# ===== W0-04: manifest + READMEs must state the ACTUAL blank-password rule =====
+#
+# Acceptance line 6. The bug this pins: plugin.json's password field said a
+# blank password "use[s] a profile password configured via /redshift-setup"
+# while README.md said the opposite fifty lines away — two exclusive paths,
+# and ALL FOUR fields had to be blank for the profile path. The code
+# followed the README: filling host/user/dbname and leaving only the
+# password blank raised (server.py:116-119, pre-W0-01), even when
+# config.toml + keychain already held a profile for exactly that host, user
+# and dbname. That contradiction is what produced the 2026-09-17 bug report.
+#
+# After W0-01, the actual rule is an IDENTITY MATCH, not "any" profile:
+# leaving the password blank while host, user and dbname are filled borrows
+# the keychain password of the one stored profile whose host, user AND
+# dbname all equal what was typed — port is excluded from the match — and
+# the connection still targets the typed values, never the profile's. No
+# match refuses instead of silently substituting a different target.
+# Leaving every field blank remains the separate, unchanged all-profile path.
+#
+# Each anchor below is copied verbatim from this task's own prose in the
+# four files, and picked so it can ONLY be true of the identity-match rule:
+# a docs edit that reverts to the old "two exclusive paths" story still
+# contains words like "profile" and "blank" (a bare keyword check would miss
+# the regression) but drops "host, user and dbname all match" / the port
+# exclusion / the refusal language, so it fails here. Each language is its
+# own idiom, not a literal translation — same convention as
+# MACHINE_MANAGED_ANCHORS above. If the wording changes on purpose, update
+# these anchors to match, and check the other three files still say the same
+# thing; that's what "agree" means here, not identical text.
+#
+# What this WOULD catch: any one of the four docs reverting to (or drifting
+# into) a rule that no longer requires all three fields to match, or that
+# stops excluding port from the match, or that stops describing a refusal
+# on no match.
+# What this would NOT catch: a paraphrase that keeps every one of these
+# facts but uses none of the exact pinned substrings (same limitation as
+# MACHINE_MANAGED_ANCHORS — the fix is to update the anchor, not to accept
+# silent drift); nor would it catch the code itself changing while the docs
+# (and these anchors) stay put, since this test never imports server.py.
+
+BLANK_PASSWORD_RULE_ANCHORS = {
+    ".claude-plugin/plugin.json": [
+        "host, user and dbname all match",
+        "leave every field blank",
+    ],
+    "README.md": [
+        "host, user **and** dbname all match",
+        "Port is not part of the match",
+        "the connection refuses",
+    ],
+    "README.ja.md": [
+        "host・user・dbname がすべて一致",
+        "port は一致条件に含まれません",
+        "接続を拒否し",
+    ],
+    "README.zh-TW.md": [
+        "host、user、dbname 三者都對得上",
+        "port 不算在比對條件內",
+        "連線會直接拒絕",
+    ],
+}
+
+
+@pytest.mark.parametrize("doc", sorted(BLANK_PASSWORD_RULE_ANCHORS))
+def test_blank_password_rule_stated_consistently(doc):
+    """A6 positive: the manifest and all 3 READMEs state the SAME
+    blank-password rule — the identity-match borrow the code actually runs
+    (W0-01), not the old two-exclusive-paths story it never implemented."""
+    path = REPO_ROOT / doc
+    text = path.read_text()
+
+    missing = [a for a in BLANK_PASSWORD_RULE_ANCHORS[doc] if a not in text]
+    assert not missing, (
+        f"{doc} no longer states the identity-match blank-password rule "
+        f"(host+user+dbname must all match; port excluded from the match; "
+        f"no match refuses). Missing: {missing}. If the wording changed on "
+        f"purpose, update BLANK_PASSWORD_RULE_ANCHORS to match — and check "
+        f"the other three docs still describe the same rule."
+    )

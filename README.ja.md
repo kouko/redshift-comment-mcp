@@ -84,15 +84,22 @@ claude plugin enable redshift-comment-mcp
 
 プラグインを**有効化**すると、Claude Code が host / port（デフォルト
 5439）/ user / dbname / password を尋ねる接続ダイアログを出します。
-接続方法は 2 通り — どちらか 1 つを選んでください。いずれもパスワードは
-OS キーチェーンに保存され、チャットや `settings.json` には入りません：
+どのフィールドも任意で、何を空欄にするかで次の 3 通りの経路に分かれます。
+いずれもパスワードは OS キーチェーンに保存され、チャットや
+`settings.json` には入りません：
 
-- **手早くひとつ接続するならダイアログを埋める。** password フィールド
-  は `sensitive` なので OS キーチェーンへ、host / port / user / dbname は
+- **全部埋める —— 手早くひとつ接続。** password フィールドは
+  `sensitive` なので OS キーチェーンへ、host / port / user / dbname は
   `settings.json` に保存されます。1 クラスタならこれで完了。
-- **プロファイル運用／マルチクラスタはダイアログを空欄にして
-  `/redshift-setup` を実行。** フィールドは任意なので、空欄にすると
-  プラグインはプロファイルフローにフォールバックします。
+- **host / user / dbname を埋めて password だけ空欄 —— 既存プロファイル
+  のパスワードを借用。** サーバーは `/redshift-setup` で書かれた
+  プロファイルの中から、host・user・dbname がすべて一致するものを探し
+  ます（port は一致条件に含まれません）。一致するプロファイルがなければ
+  接続を拒否し、入力した接続先と既存プロファイルそれぞれの host を挙げ
+  るので、`/redshift-setup` で一致するプロファイルを作るか、password 欄
+  自体を埋めてください。
+- **全フィールドを空欄 —— プロファイル運用のパス。** プラグインは
+  `/redshift-setup` のプロファイルフローに完全にフォールバックします。
   `/redshift-setup` は名前付きプロファイル（config.toml + active-profile
   ポインタ + キーチェーン）を書き込む対話式ウォークスルーで、複数
   クラスタを動かすときのパスでもあります。
@@ -128,7 +135,7 @@ Claude Desktop / 他の MCP クライアント / ローカル開発について�
 
 | シナリオ | 方法 |
 |---|---|
-| Claude Code（推奨） | `claude plugin install redshift-comment-mcp`（上記）後、**有効化**すると Claude Code が接続ダイアログ（host / port / user / dbname / password；password → OS キーチェーン）を出します。1 つだけ手早く接続するなら埋める、空欄にして `/redshift-setup` を使うのも可。 |
+| Claude Code（推奨） | `claude plugin install redshift-comment-mcp`（上記）後、**有効化**すると Claude Code が接続ダイアログ（host / port / user / dbname / password；password → OS キーチェーン）を出します。手早く接続するなら全部埋める、password だけ空欄なら一致するプロファイルのパスワードを借用、全部空欄なら `/redshift-setup` を使う。 |
 | Claude Desktop（ワンクリック） | プロジェクトの [GitHub Releases](https://github.com/kouko/redshift-comment-mcp/releases) ページから `.mcpb` をダウンロードし、Claude Desktop でインストール（**Settings → Extensions**、またはファイルをドラッグ＆ドロップ）。Claude Desktop が接続フォームを出すので host / port / user / dbname / password を入力（パスワードは OS キーチェーンに保存）。**`uv` が必要**（下の前提条件を参照）。サーバー + フォームを提供し、スキルは **含みません**。 |
 | Claude Desktop / 汎用 MCP クライアント（手動） | `pip install redshift-comment-mcp`、設定ファイルで `uvx redshift-comment-mcp` を指す（ポインタファイルを上書きしたい場合は `--profile <name>` を付与） |
 | ローカル開発 | `git clone … && pip install -e ".[dev]"`、`python -m redshift_comment_mcp.server` |
