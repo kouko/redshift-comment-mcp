@@ -31,12 +31,24 @@ charter: 1.0
 - Test: A6 positive: manifest-and-three-readmes-agree-on-blank-password; negative: version-fields-stay-in-sync. A7 positive: every-new-test-red-against-base; boundary: base-source-collects.
 - Risk: the contradiction between the manifest and the README is what produced the original report; agent-decided — pin the agreement with an invariant test so prose cannot drift apart again.
 
+**W0-05 Close the four defects the adversary found in the resolution code**  after: W0-04  acceptance: 1, 2, 3, 7
+- Files: src/redshift_comment_mcp/server.py, src/redshift_comment_mcp/redshift_tools.py, tests/test_server_resolution.py, tests/test_tools.py
+- Test: A1 positive: four-field-match-borrows; negative: port-mismatch-refuses-and-names-both-ports. A3 positive: instructions-enumerate-borrowed; boundary: store-failure-falls-through-to-inline-refusal.
+- Risk: the borrow scan gave a keychain-free path a keychain dependency, and the new carrier renders its own password; agent-decided — guard the scan into the existing refusal, and mark the field `repr=False` like `RedshiftConnectionConfig`.
+
+**W0-06 Restate the four-field rule in the manifest and the READMEs**  after: W0-05  acceptance: 6
+- Files: .claude-plugin/plugin.json, README.md, README.ja.md, README.zh-TW.md, tests/test_repo_invariants.py
+- Test: A6 positive: all-four-docs-state-the-four-field-rule; negative: no-doc-still-claims-port-is-excluded.
+- Risk: W0-04's anchors pin the now-wrong port exclusion; agent-decided — rewrite the anchors with the rule, since an anchor that outlives the rule it pins is worse than none.
+
 ## Questions asked
 ① — what — 這樣對嗎？
+①-amend — consequence — 「密碼留空去借相符 profile 的密碼」—— 這個「相符」要比對幾個欄位？
 pre-① — what — 10 項要不要切（我自行決定切分，未問使用者）
 
 ## Risks
-1. user-decided 2026-09-17 — a blank password borrows the password of a profile whose host, user and dbname all match; it never borrows a host. Both independent audits proposed this same shape.
+1. user-decided 2026-09-17 — a blank password borrows the password of a profile that matches the launch target; it never borrows a target field. Both independent audits proposed this shape.
+   Amended user-decided 2026-09-21 — the match is the full four-field target, port included. The adversary demonstrated a password provisioned for `host:5439` being sent to `host:9999`; the escalation story it attached to that (a same-user process cannot read the keychain item) was tested and is false on this machine — the project's own interpreter reads it silently — so the reason to close it is the shape of the failure, not privilege. A port mismatch now refuses loudly instead of sending the secret quietly.
 2. Task splitting was agent-decided: PR #42 needed three review rounds for four tasks, so ten accumulated items were cut to the five that share one subject.
 3. The blank-password gate still accepts whitespace-only values, so a borrowed or supplied `" "` is treated as a real password. Out of scope here, already filed.
 4. `setup_via_dialog` writes a profile whose triple matches the inline values by construction, so the borrow path turns that tool into a working recovery for inline mode — previously it wrote a profile the inline branch never read.

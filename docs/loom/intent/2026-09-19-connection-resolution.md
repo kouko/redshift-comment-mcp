@@ -43,12 +43,13 @@ own documentation and its own status tool say it will, and never to a target
 the operator did not name.
 
 ## Acceptance
-1. With host, user and dbname supplied at launch and no password available, the
-   server connects using the stored password of a profile whose host, user and
-   dbname all equal the supplied values, and connects to the supplied host.
-2. With host, user and dbname supplied, no password available, and no profile
-   matching all three, the server refuses to connect and its message names both
-   the supplied target and each existing profile's host.
+1. With connection fields supplied at launch and no password available, the
+   server connects using the stored password of a profile whose host, port,
+   user and dbname all equal the supplied values, and connects to the supplied
+   target.
+2. With connection fields supplied, no password available, and no profile
+   matching all four, the server refuses to connect and its message names both
+   the supplied target and each existing profile's target.
 3. `get_setup_status` reports the same mechanism and the same target the server
    would actually use, including for a profile whose name is not `"default"`.
 4. A launch in which the password arrives as an unsubstituted configuration
@@ -60,9 +61,18 @@ the operator did not name.
 7. Every acceptance line above is covered by a test that fails against the
    pre-change code.
 
+Acceptance 1 and 2 were amended on 2026-09-21, after confirmation and
+before review, from a three-field match (host, user, dbname) to the full
+four-field target. An adversarial probe showed that excluding port let a
+password provisioned for one endpoint be sent to a different listener on
+the same host. kouko chose the four-field match knowing it refuses a
+profile recorded at another port; nobody is worse off than before this
+change, where no borrow happened at all.
+
 ## Constraints
 - The connection target is always a value the operator supplied at launch. A
-  stored profile may contribute a password, never a host, user or dbname.
+  stored profile may contribute a password, never a host, port, user or dbname,
+  and it may only contribute one when it is a profile for that exact target.
 - The password value must not reach argv, logs, stdout, or any MCP response.
 - Inline launch arguments remain a supported public integration path
   (`README.md`); they are not removed or deprecated here.
