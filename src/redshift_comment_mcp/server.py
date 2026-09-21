@@ -451,9 +451,29 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
                     # newline into this multi-line, line-structured message
                     # and forge a second "Existing profiles:" entry of its
                     # own choosing.
+                    #
+                    # `target_port` may be a `_SubstitutedPort`: the borrow
+                    # scan (above) already skips this candidate on exactly
+                    # this condition (see W0-11), but printing `!r` here
+                    # would still show the substituted DEFAULT_PORT as
+                    # though it were this profile's real port — making it
+                    # print identically to a typed target at DEFAULT_PORT
+                    # and hiding the actual reason it did not match: config
+                    # .toml holds a port this server cannot read (a TOML
+                    # float, or a hand-edited non-numeric string). Show the
+                    # raw stored value instead, with a reason, exactly as
+                    # the typed side already does for its own unparseable
+                    # port (`substituted_port_note` below).
+                    if getattr(target_port, "substituted", False):
+                        port_desc = (
+                            f"port={getattr(target_port, 'raw_value', None)!r} "
+                            f"(unreadable — could not be parsed as a number)"
+                        )
+                    else:
+                        port_desc = f"port={target_port!r}"
                     return (
                         f"{_render_profile_name(name)} (host={target_host!r} "
-                        f"port={target_port!r} user={target_user!r} "
+                        f"{port_desc} user={target_user!r} "
                         f"dbname={target_dbname!r})"
                     )
                 except Exception as e:  # noqa: BLE001 — see above

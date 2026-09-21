@@ -1354,3 +1354,72 @@ def test_refusal_hostile_profile_name_with_newline_cannot_forge_a_line(
         f"the hostile name forged {len(headers) - 1} extra "
         f"'Existing profiles:' line(s): {headers!r}"
     )
+
+
+# ===== W0-13: the refusal must show the stored port it could not read =====
+# W0-11 (see test_stored_unparseable_port_refuses_to_borrow above) made the
+# borrow scan skip a candidate whose STORED port `_coerce_port` cannot
+# parse. But `_target_desc`, which renders each existing profile into the
+# refusal message, still ran the stored port through `_coerce_port` and
+# printed the resulting `_SubstitutedPort` (== DEFAULT_PORT) as though it
+# were the profile's real port — so a profile skipped for an unreadable
+# port printed with the SAME port as the typed target, making the two
+# halves of the message look field-for-field identical and hiding the
+# actual reason (an unreadable stored value) entirely.
+
+
+@pytest.mark.parametrize(
+    "port_toml", ["9999.0", '"9999x"'], ids=["toml_float", "unparseable_string"]
+)
+def test_target_desc_shows_unreadable_stored_port_raw_with_reason(
+    tmp_xdg, fake_keyring, monkeypatch, port_toml,
+):
+    """A2 positive: a profile whose stored port `_coerce_port` cannot parse
+    must render in the refusal with its RAW stored value and a reason it
+    could not be read — never the substituted DEFAULT_PORT printed as if it
+    were the profile's real port, which would make this profile's rendered
+    target identical to the typed target it failed to match."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    _write_raw_profile(
+        "prod", host="h.example.com", port_toml=port_toml, user="u", dbname="d",
+    )
+    config.set_password("prod", "provisioned-for-unreadable-port")
+
+    args = _ns(host="h.example.com", user="u", dbname="d", port=5439)
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    message = str(excinfo.value)
+
+    raw_value = port_toml.strip('"')
+    assert raw_value in message, (
+        f"the refusal must show the raw stored port value {raw_value!r} so "
+        f"the operator can see what config.toml actually holds: {message!r}"
+    )
+    assert message.count("port=5439") == 1, (
+        f"the profile's rendered target must not print the substituted "
+        f"port as though it matched the typed target verbatim, making the "
+        f"two halves of the message look identical: {message!r}"
+    )
+
+
+def test_target_desc_readable_port_renders_unchanged(
+    tmp_xdg, fake_keyring, monkeypatch,
+):
+    """A2 negative: a profile with an ordinary readable port — that simply
+    doesn't match the typed target on another field — must keep rendering
+    exactly as it does today. No new noise in the common case."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "other", host="other.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("other", "unused")
+
+    args = _ns(host="h.example.com", user="u", dbname="d", port=5439)
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    message = str(excinfo.value)
+
+    assert (
+        "'other' (host='other.example.com' port=5439 user='u' dbname='d')"
+        in message
+    ), f"an ordinary readable stored port must render unchanged: {message!r}"
