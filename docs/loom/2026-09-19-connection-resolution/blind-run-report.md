@@ -1,6 +1,17 @@
 # 伺服器照它自己說的方式連線 — 我實際試了什麼、結果如何
 
-**結論：七條驗收條件全部通過（PASS）。**
+**結論：八條驗收條件全部通過（PASS）。**（原本七條，2026-09-21 審查期間新增第 8 條。）
+
+> **第四次修訂（版本 `f1e57f1`）：我上一版的第 6 條判定是錯的，這次重做了。**
+> 一位文件審查者指出：我上一版用「那四份文件的差異是空的」當理由沿用第 6 條，
+> 但第 6 條問的是**文件和程式之間的關係**，而程式的「密碼留空」規則正好在那段
+> 範圍內長出了一整條新分支（多組相符就拒絕）。**文件沒動，恰恰是這個關係可能
+> 已經斷掉的信號，不是它還成立的證據。** 這個指正是對的，而且事情就是這樣發生
+> 的——那條新分支當時在所有使用者看得到的地方都沒有記載，而我的第 6 條正是它
+> 通過的那一關。我在那裡對一件自己沒有檢查的事寫了 PASS。
+> **這次第 6 條改成從程式反推**：把解析器實際實作的每一條規則列出來，再逐條去
+> 對四份文件加上 MCP 開場說明字串。結果見第 6 條，包含三條目前仍然沒有記載的
+> 規則。
 
 **這份報告在 2026-09-21 重走過一次，版本從 `8e4d0b7` 換到 `47910d5`。** 第一次
 走完之後我提出的三項觀察被接受並修好（W0-08），第三輪對抗又在那些修正裡找到三個
@@ -26,10 +37,16 @@
 數量**仍然是 0**，多組相符的拒絕訊息**一字未變**（見第 2、5 條）。整套單元測試
 **448 通過、2 跳過**，38 個對抗測試案例**全綠且未被修改**，與上次相同。
 
-試用日期：2026-09-21。用 `git worktree` 從 `47910d5` 開一份**全新、沒有人動過的
-副本**，重新裝一次相依套件再開始。反向驗證（第 7 條）另外從分支起點 `3821be8` 開
-第二份獨立副本。兩份副本**在跑任何數字之前都先印出程式實際載入自哪個路徑**，
-確認彼此沒有污染。第三次修訂的查證另外從 `166bf07` 開了第三份乾淨副本。
+試用日期：2026-09-21。第四次修訂用 `git worktree` 從 `f1e57f1` 開一份**全新、沒有
+人動過的副本**，重新裝一次相依套件；反向驗證（第 7 條）另外從分支起點 `3821be8`
+開第二份獨立副本。兩份副本**在跑任何數字之前都先印出程式實際載入自哪個路徑**，
+確認彼此沒有污染。這次解析到的 **fastmcp 版本是 4.0.5**。
+
+第四次修訂重走了第 1、2、3、5、6 條和新增的第 8 條。**第 4 條沒有重走，理由不是
+「檔案差異是空的」**（那正是上一版犯的錯），而是：第 4 條那條規則完全由三個函式
+決定（判斷一個字串算不算真密碼的那三個），我把這三個函式在 `4d51a9a` 和 `f1e57f1`
+兩版各自解析成語法樹比對，**三個都完全相同**；為求保險我還是把第 4 條的探針重跑
+了一次，結果不變。
 
 全程設定檔位置指向用完即丟的暫存資料夾，鑰匙圈**全程換成只存在記憶體裡的假貨**。
 你電腦上真正的設定檔和系統鑰匙圈從頭到尾沒有被寫入過——驗證前後都比對過，結果
@@ -64,7 +81,10 @@ password。**改之前**，只要你填了前面幾欄、密碼欄留空，伺�
 
 ---
 
-## 你要求的七件事，一條一條試
+## 你要求的八件事，一條一條試
+
+（第 8 條是審查期間新加的，排在第 2 條後面，因為它講的是同一件事的另一半：
+「沒有相符的」和「相符的不只一組」。）
 
 ### 1. 填了連線欄位、沒有密碼 → 借用 host / port / user / dbname 四者全對的設定的密碼，並連到你填的目標
 
@@ -136,9 +156,29 @@ password。**改之前**，只要你填了前面幾欄、密碼欄留空，伺�
   correct password   : True
   ```
 
-- **證據**：上述四段逐字輸出；探針程式 `r1_borrow_and_tie.py`；專案測試
+- **新增：設定檔裡存壞的 port（W0-11，這次第一次被走）。** 以前只有「你打錯的
+  port」會被擋，「設定檔裡存壞的 port」沒有——一組記成 `9999.0` 或 `"9999x"` 的
+  設定會被當成 5439，把密碼借給一個它從來沒被登記過的目標。修好之後我實測四種：
+
+  | 設定檔裡存的 port | 啟動時填 5439 | 結果 | 對不對 |
+  |---|---|---|---|
+  | `9999.0`（TOML 小數） | 5439 | **拒絕** | 對，不該借 |
+  | `"9999x"`（手改壞的字串） | 5439 | **拒絕** | 對，不該借 |
+  | `5439`（正常整數） | 5439 | **照常借用** | 對，沒有誤傷 |
+  | 完全沒有存 port | 5439 | **照常借用** | 對，沒有誤傷 |
+  | `"5439"`（字串但讀得出來） | 5439 | **照常借用** | 對 |
+  | `5439.0`（小數，但數值等於預設埠） | 5439 | **拒絕** | 見下方說明 |
+
+  最後一列值得你知道：一組 port 存成 `5439.0` 的設定，**雖然它指的就是 5439**，
+  仍然會被拒絕。拒絕是安全的方向（寧可不借），而 TOML 小數本來就不是合法的
+  port 寫法。但它會引出一個訊息上的問題，寫在「驗收條件沒點到」第 1 點。
+
+- **證據**：上述五段逐字輸出；探針程式 `r1_borrow_and_tie.py`、`f_branches.py`
+  （分支 B12–B17）；專案測試
   `test_four_field_match_borrows_and_uses_inline_values`、
-  `test_single_matching_profile_still_borrows_despite_ambiguity_check`。
+  `test_single_matching_profile_still_borrows_despite_ambiguity_check`、
+  `test_stored_unparseable_port_refuses_to_borrow`、
+  `test_stored_ordinary_port_shapes_still_borrow`。
 
 - **判定：PASS（通過）。** 三關都成立；**「真的登入進 Redshift」因為叢集連不上而
   無法驗證**，這不是這次改動的問題，但也請你知道它沒被驗證到。
@@ -242,6 +282,47 @@ password。**改之前**，只要你填了前面幾欄、密碼欄留空，伺�
   `test_identical_password_tie_still_refuses`、
   `test_differing_password_tie_refuses_without_a_password_claim`、
   `test_refusal_hostile_profile_name_with_newline_cannot_forge_a_line`。
+
+- **判定：PASS（通過）**
+
+---
+
+### 8. 有超過一組設定四欄全對時 → 拒絕，訊息要列出每一個打平的候選
+
+**這條是 2026-09-21 審查期間新加進驗收條文的**（原本它只是一個沒人明文要求、但
+程式已經做了的行為）。這是第一次有人照驗收條文走它。
+
+- **我怎麼試的**：兩組打平（密碼不同）、兩組打平（密碼完全相同）、三組打平。
+  每種都檢查：有沒有拒絕、有沒有把**每一個**候選點名、有沒有洩漏任何密碼、
+  有沒有宣稱它沒檢查過的事。
+
+- **結果**：三種**全部拒絕**。三組打平時的訊息逐字：
+
+  ```
+  Inline mode requires a password for host='warehouse.example.com' port=5439 user='analyst' dbname='prod', and 3 stored profiles all match that exact target: 'rot-2024', 'rot-2025', 'rot-2026'. Refusing to guess which one to borrow — picking by sort order could silently prefer a retired credential over its replacement, the shape a credential rotation leaves behind.
+  Existing profiles: 'rot-2024' (host='warehouse.example.com' port=5439 user='analyst' dbname='prod'), 'rot-2025' (host='warehouse.example.com' port=5439 user='analyst' dbname='prod'), 'rot-2026' (host='warehouse.example.com' port=5439 user='analyst' dbname='prod').
+  Delete or rename the stale profile so only one matches this target, or provide the REDSHIFT_PASSWORD env var directly.
+  ```
+
+  ```
+  names all three : True
+  leaks any secret: False
+  says how many   : True
+  ```
+
+  **三個候選一個不漏地點名了**，數量也講了，**沒有任何一個密碼外洩**，而且訊息
+  沒有宣稱這些密碼是相同還是不同（程式根本沒比對過）。密碼完全相同的兩組也照樣
+  拒絕——這是刻意的，讓「會不會被拒絕」只取決於 `config.toml` 看得到的四個欄位。
+
+- **順便確認沒有誤傷**：只有一組全對時照常借用；四欄全對但**只有一組真的有鑰匙圈
+  密碼**時，不算打平，照常借那一組（見第 1 條）。
+
+- **證據**：上述逐字訊息；探針程式 `f_branches.py`（分支 B5、B6、B8）；專案測試
+  `test_ambiguous_profiles_refuse_to_borrow`、
+  `test_ambiguous_profiles_error_names_both_candidates`、
+  `test_identical_password_tie_still_refuses`、
+  `test_differing_password_tie_refuses_without_a_password_claim`、
+  `test_single_matching_profile_still_borrows_despite_ambiguity_check`。
 
 - **判定：PASS（通過）**
 
@@ -361,42 +442,73 @@ password。**改之前**，只要你填了前面幾欄、密碼欄留空，伺�
 
 ### 6. 外掛表單說明和三份 README 要講同一條「密碼留空」的規則，而且那條規則就是程式實際遵守的
 
-**這一條自從上次驗證（`8e4d0b7`）後完全沒有被動過，沿用上次的證據，沒有重新推導。**
-我用差異比對確認了這件事：四份文件加上兩個版本號檔案，在 `8e4d0b7..47910d5` 之間的
-差異是**空的**。
+**我上一版這條判錯了，這次整條重做。** 上一版我用「那四份文件沒有變動」當理由
+沿用結論。那是錯的推理：這一條問的是**文件和程式之間的關係對不對**，文件沒動
+只證明了文件沒動。而程式的「密碼留空」規則正好在同一段期間長出了一整條新分支
+（多組相符就拒絕），所以文件沒動反而是這個關係可能已經斷掉的信號。當時那條新
+分支在所有使用者看得到的地方確實都還沒記載，而我卻寫了 PASS。
 
-上次驗證的結論：四份文件**全部一致**，四個欄位名稱都在，都寫了「四者全對」和
-「連到你填的目標」，**沒有任何一份還留著排除 port 的舊講法**。
+- **我這次怎麼試的**：不看任何差異。先把解析器**實際實作的每一條規則跑出來**
+  （見第 1、2、8 條與下方的分支清單），再把每一條拿去對**五個**使用者或代理人
+  真的讀得到的表面：外掛表單（`plugin.json`）、三份 README、以及 MCP 連線時的
+  開場說明字串。（開場說明不在驗收條文列舉的四份裡，但它是代理人讀得到的，
+  所以我一併查。）
 
-- 外掛表單：「Leave blank to borrow the keychain password of a profile … whose
-  **host, port, user and dbname all match** the values above — the connection
-  always goes to what you typed here, never to the profile's」
-- 英文版：「… whose **host, port, user and dbname all match** what you typed
-  here, and the connection always goes to the target you typed …」
-- 日文版：「**host・port・user・dbname がすべて一致**するものを探し、接続先は常に
-  あなたがここで入力した値になります …」
-- 繁中版：「找一個 **host、port、user、dbname 四者都對得上**你填的值的，借用它
-  keychain 裡的密碼，連到你填的那個目標 …」
+- **結果**：
 
-「這條規則就是程式實際遵守的」這半句，由本次重走的第 1 條和第 2 條直接證明。
-版本號兩處仍然同步在 `0.12.0`；`.mcpb` 套件的表單把 password 標成 `required=True`，
-那條路徑走不到「密碼留空」。
+  | 程式實作的規則 | 外掛表單 | 英文 README | 日文 README | 繁中 README | 開場說明 |
+  |---|:---:|:---:|:---:|:---:|:---:|
+  | R1 密碼留空 → 借用 host / port / user / dbname **四者全對**的設定 | ✅ | ✅ | ✅ | ✅ | ✅ |
+  | R2 連線一律連到**你填的目標**，不是設定檔的 | ✅ | ✅ | ✅ | ✅ | ✅ |
+  | R3 **沒有**任何一組全對 → 拒絕，並列出雙方目標 | ✅ | ✅ | ✅ | ✅ | ✅ |
+  | R4 **超過一組**全對 → 拒絕，並列出每一個候選（第 8 條） | ✅ | ✅ | ✅ | ✅ | ✅ |
+  | R5 **你打錯的 port** → 拒絕，絕不借 | ❌ | ❌ | ❌ | ❌ | ❌ |
+  | R6 **設定檔裡存壞的 port** → 那組設定不算相符 | ❌ | ❌ | ❌ | ❌ | ❌ |
+  | R7 host / user / dbname **只留空其中一個** → 你打的字會被整個丟掉 | ✅ | ❌ | ❌ | ❌ | ❌ |
 
-- **判定：PASS（通過，沿用上次證據）**
+  **驗收條文問的那條規則（R1 到 R4）五個表面全數一致，而且就是程式實際遵守的**
+  ——R1 由第 1 條實測、R3 由第 2 條實測、R4 由第 8 條實測、R2 由第 1 條的連線
+  參數擷取實測。R4 是這次 `f1e57f1` 補上的，補得完整。
+
+  逐字引文（R4 的部分，這次新增的）：
+
+  - 外掛表單：「If more than one profile matches all four values, the connection
+    refuses instead of guessing, naming every tied candidate so you can delete
+    or rename the stale one — the shape a password rotation leaves behind」
+  - 英文版：「If more than one matches, the connection refuses the same way,
+    naming every tied candidate — the shape a password rotation leaves behind …」
+  - 繁中版：「如果同時有不只一個 profile 四者都對得上，連線一樣會拒絕，並列出
+    每一個對得上的候選 profile —— 這通常是密碼輪替時新舊兩個 profile 同時留著
+    造成的，把舊的那個刪掉或改名即可。」
+  - 日文版同樣有對應段落。
+
+  版本號兩處仍然同步在 `0.12.0`；`.mcpb` 套件的表單把 password 標成
+  `required=True`，那條路徑走不到「密碼留空」。
+
+- **判定：PASS（通過）。** 驗收條文明文要求的那條規則（密碼留空該怎麼辦）在四份
+  文件加開場說明上完全一致，也確實是程式遵守的那條。
+
+- **但 R5、R6、R7 三條規則目前沒有任何使用者看得到的地方寫。** 它們是不是屬於
+  「密碼留空這條規則」的一部分，可以爭論——R5、R6 是這條規則底下的**子條件**，
+  R7 講的是「host/user/dbname 留空」而不是「密碼留空」。我不把它們算成第 6 條
+  的 FAIL，但**其中 R6 我認為是這次最值得你看的一項**，因為它不只是沒寫，而是
+  出事時的訊息會自相矛盾。三條都寫在後面「驗收條件沒點到」那一節。
 
 ---
 
 ### 7. 上面每一條驗收條件，都要有一個「拿去跑改動前的舊程式會失敗」的測試
 
-測試集這次變大了（新增 12 個測試），所以整條重做。從分支起點 `3821be8` 開第二份
-完全獨立的副本，各自重裝相依套件，把 `47910d5` 的測試檔複製過去跑。
+測試集又變大了，所以整條再做一次。從分支起點 `3821be8` 開第二份完全獨立的副本，
+各自重裝相依套件，把 `f1e57f1` 的測試檔複製過去跑。
 
 **在相信任何數字之前，先讓 pytest 印出它到底載入了哪一份程式**：
 
 ```
 === PROVENANCE OF THE CODE UNDER TEST ===
-package     : .../scratchpad/wt2/base/src/redshift_comment_mcp/__init__.py
-server      : .../scratchpad/wt2/base/src/redshift_comment_mcp/server.py
+package     : .../scratchpad/w4b/src/redshift_comment_mcp/__init__.py
+config      : .../scratchpad/w4b/src/redshift_comment_mcp/config.py
+tools       : .../scratchpad/w4b/src/redshift_comment_mcp/redshift_tools.py
+server      : .../scratchpad/w4b/src/redshift_comment_mcp/server.py
 server has resolve_connection_decision : False
 server has _SubstitutedPort            : False
 tools has ConnectionDecision           : False
@@ -404,42 +516,40 @@ tools has ConnectionDecision           : False
 
 路徑落在「分支起點副本」自己的資料夾，新增的東西**確實都不存在**。
 
-**結果：29 個測試在舊程式上失敗**（上一輪是 21 個）。
+**結果：45 個測試在舊程式上失敗**（第一輪 21 個 → 第二輪 29 個 → 這輪 45 個）。
+新紅的包括第 8 條的打平測試、W0-11 的存壞 port 測試，以及 `f1e57f1` 新增的
+「打平規則有沒有寫進文件」那組不變式測試（四份文件各一個案例，加上開場說明
+一個，再加上「外掛表單不可以再誘導使用者只留空其中一欄」一個）。
 
 | 驗收 | 在舊程式上變紅的測試 | 失敗原因對不對 |
 |---|---|---|
-| 1 | `test_four_field_match_borrows_and_uses_inline_values`、`test_single_matching_profile_still_borrows_despite_ambiguity_check`、`test_borrow_mistyped_port_refuses_to_borrow`、`test_borrow_blank_and_placeholder_port_still_borrow` | 是——舊程式根本不會去借 |
+| 1 | `test_four_field_match_borrows_and_uses_inline_values`、`test_single_matching_profile_still_borrows_despite_ambiguity_check`、`test_borrow_mistyped_port_refuses_to_borrow`、`test_borrow_blank_and_placeholder_port_still_borrow`、**`test_stored_unparseable_port_refuses_to_borrow`（2 個參數版本）**、**`test_stored_ordinary_port_shapes_still_borrow`** | 是——舊程式根本不會去借 |
 | 2 | `test_port_mismatch_refuses_and_names_both_ports`、`test_mismatched_profile_raises_naming_both_hosts`、`test_no_profiles_at_all_raises`、`test_refusal_two_profiles_differing_only_in_dbname_render_distinctly`、`test_borrow_scan_store_failure_...`（3 個參數版本）、**`test_ambiguous_profiles_refuse_to_borrow`**、**`test_ambiguous_profiles_error_names_both_candidates`**、**`test_identical_password_tie_still_refuses`**、**`test_differing_password_tie_refuses_without_a_password_claim`**、**`test_render_profile_name_clean_name_unaffected`**、**`test_render_profile_name_truncates_at_first_control_character`**、**`test_refusal_hostile_profile_name_with_newline_cannot_forge_a_line`** | 是 |
 | 3 | 見下方說明 | 是 |
 | 4 | `test_resolve_inline_params_password_placeholder_is_no_password` 等四項 | 是——舊程式把佔位符當成真密碼 |
 | 5 | `test_missing_password_error_does_not_recommend_password_flag`、`test_get_setup_status_inline_next_step_does_not_recommend_password_flag`、`test_no_stray_password_flag_recommendation_in_source`，另見下方說明 | 是——訊息逐字指出 `server.py:117 recommends the --password flag` |
-| 6 | `test_blank_password_rule_stated_consistently`（四份文件各一） | 是——四份都缺「四者全對」「沒對上就拒絕」 |
+| 6 | `test_blank_password_rule_stated_consistently`（四份文件各一）、**`test_tie_refusal_documented`（四份文件各一）**、**`test_tie_refusal_documented_in_instructions_string`**、**`test_manifest_connection_fields_no_longer_invite_partial_blank`** | 是——四份都缺「四者全對」「沒對上就拒絕」，也都缺打平規則 |
+| 8 | **`test_ambiguous_profiles_refuse_to_borrow`**、**`test_ambiguous_profiles_error_names_both_candidates`**、以及我移植的 **`test_tie_refusal_names_every_candidate`**（見下） | 是——舊程式連「借用」都沒有，更不會有打平 |
 
-**第 3、5 條我一樣多做了一步。** 覆蓋這兩條的六個測試住在 `tests/test_tools.py`，
+**第 3、5、8 條我一樣多做了一步。** 覆蓋這幾條的測試住在 `tests/test_tools.py`，
 這個檔案**在舊程式上連載入都載入不了**，所以反向執行只報「收集錯誤」，而不是
-「斷言抓到了舊行為」。收集錯誤是很弱的證據。所以我把那**六個測試的斷言原封不動
-搬到一個兩邊都跑得起來的新檔案**：
+「斷言抓到了舊行為」。收集錯誤是很弱的證據。所以我把那些**測試的斷言原封不動
+搬到一個兩邊都跑得起來的新檔案**（這次也替第 8 條補了一個）：
 
 ```
-舊程式（3821be8）：6 failed
+舊程式（3821be8）：7 failed
   test_..._profile_mode_named_other_than_default_reports_configured
-    E   assert False is True                       <- configured 是 False
   test_..._borrowed_mode_reports_inline_host_and_borrowed_source
-    E   AssertionError: assert 'inline' == 'borrowed'
   test_get_setup_status_borrowed_mode_profile_field_is_none
-    E   AssertionError: assert 'default' is None
   test_get_setup_status_inline_mode_profile_field_is_none
-    E   AssertionError: assert 'default' is None
   test_no_tool_description_mentions_password_flag
-    E   AssertionError: tool descriptions naming --password: ['get_setup_status']
   test_no_wire_surface_mentions_password_flag
-    E   AssertionError: wire surfaces naming --password: ['get_setup_status.description']
+  test_tie_refusal_names_every_candidate            <- 第 8 條，這次補的
 
-這次的版本（47910d5）：6 passed
+這次的版本（f1e57f1）：7 passed
 ```
 
-同一組斷言，舊的紅、新的綠。最後兩項特別值得一提：它們正是**從我上一輪那個發現
-長出來的測試**，而且它們在舊程式上**確實抓到了那 1 處**。
+同一組斷言，舊的紅、新的綠。
 
 - **判定：PASS（通過）**
 
@@ -451,7 +561,46 @@ tools has ConnectionDecision           : False
 
 ## 驗收條件沒點到、但我注意到的事
 
-> **這一節在第三次修訂時有一項更正、三項結案。**
+### 0. 設定檔裡 port 存壞時，拒絕訊息會印出一組「看起來完全相符」的設定〔重要〕
+
+這是第四次修訂新找到的，我認為是目前最值得你看的一項。
+
+W0-11 讓「設定檔裡存壞的 port」不再借出密碼——這是對的。但**出事時的訊息會自相
+矛盾**。我把設定檔裡的 port 改成 `9999.0`（TOML 小數），啟動時填 5439：
+
+```
+config.toml actually holds : port = 9999.0
+
+Inline mode requires a password for host='warehouse.example.com' port=5439 user='analyst' dbname='prod', and no stored profile's host/port/user/dbname all match it to borrow one from.
+Existing profiles: 'floaty' (host='warehouse.example.com' port=5439 user='analyst' dbname='prod').
+Provide the REDSHIFT_PASSWORD env var, or configure a profile matching this exact host/port/user/dbname via /redshift-comment-mcp:redshift-setup.
+```
+
+**上下兩行的四個欄位一模一樣。** 訊息說「沒有任何一組設定四欄全對」，緊接著印出
+一組看起來**完全相符**的設定。真正的原因（你的設定檔裡那個 port 是壞的）完全沒有
+出現——因為印出來的 `port=5439` 是程式**替換後**的值，不是設定檔裡真正躺著的
+`9999.0`。使用者會對著一個看起來正確的 `config.toml` 束手無策。
+
+**對照組：另外那個 port 守門員就講得很清楚。** 同樣是 port 出問題，但錯在啟動
+參數時：
+
+```
+... The port you typed ('99x9') could not be read as a number, so the server
+substituted the default port 5439 to boot — but a substituted port never borrows
+a stored profile's password. Fix the typo and relaunch.
+```
+
+**兩個守門員不對稱**：你打錯的那個會把原始輸入引出來、把原因講清楚、告訴你怎麼修；
+設定檔存壞的那個什麼都不說，還印出一個誤導性的值。
+
+這其實是 W0-07 修過的那個缺陷（「兩組只差 dbname 的設定印得一模一樣」）換個入口
+又長出來一次——只是這次的兩行是「你填的目標」和「某一組設定」，而不是兩組設定。
+
+我沒有修任何東西，只記錄。
+
+---
+
+> **這一節在第三次修訂時有一項更正、三項結案；第四次修訂新增第 0 項和第 5 項。**
 > 第 1 項我原本評為「重要」，理由是「照著狀態工具給的建議做不會解決問題」。
 > **那句話是錯的，我後來實測推翻了自己第一次的判讀**——照它的建議做**確實會**
 > 解決問題。我已經把嚴重程度降為「小問題」並改寫理由（見下）。這種錯誤的方向
@@ -603,12 +752,54 @@ Existing profiles: '' [truncated: name contains a control character] (host='zz.e
 
 ---
 
+### 5. 「只留空其中一個欄位」的陷阱：新寫的說明是對的，但只寫在外掛表單〔小問題〕
+
+`f1e57f1` 改寫了外掛表單上 host / user / dbname 三欄的說明，因為原本的寫法會誘導
+使用者只留空其中一欄。我先**實測舊陷阱還在不在**（程式行為這次沒有改，只有字改了），
+三種組合全試：
+
+```
+--- host 留空，user 和 dbname 有填
+    CONNECTS TO: profile-host.example.com:5439/profile-db as profile-user
+    你打的字被丟掉: ['typed-user', 'typed-db']
+
+--- user 留空，host 和 dbname 有填
+    CONNECTS TO: profile-host.example.com:5439/profile-db as profile-user
+    你打的字被丟掉: ['typed-host.example.com', 'typed-db']
+
+--- dbname 留空，host 和 user 有填
+    CONNECTS TO: profile-host.example.com:5439/profile-db as profile-user
+    你打的字被丟掉: ['typed-host.example.com', 'typed-user']
+```
+
+**三種都一樣**：只要三欄裡有任何一欄留空，整個就退回走設定檔那條路，**你打進去的
+另外兩個值全部被無聲丟棄**，而且連到的是設定檔自己的主機、帳號和資料庫。
+
+新的說明文字是這樣寫的（三欄各一份，措辭對稱）：
+
+> This field, user and dbname are blank together or not at all: leave all three
+> blank to use a profile configured via /redshift-setup, but leaving only this
+> one blank still falls back to that profile wholesale and ignores whatever you
+> typed into user and dbname.
+
+**我逐字比對過：這段話和我量到的行為完全相符**，沒有誇大也沒有遺漏——「整個退回」
+（falls back wholesale）、「忽略你打進另外兩欄的字」（ignores whatever you typed）
+都是真的。把話講白正是這次的修法，而這句話講白了。
+
+**剩下的小問題**：這段警告**只寫在外掛表單裡**，三份 README 和 MCP 開場說明都沒有。
+外掛表單確實是使用者遇到這個陷阱的地方，所以放在那裡價值最高；但從 README 讀起
+的人（手動安裝、或用其他 MCP 用戶端的人）看不到。驗收條文第 6 條問的是「密碼留空」
+那條規則，這條講的是「host/user/dbname 留空」，嚴格說不在它的字面範圍內，所以我
+沒有因此判 FAIL。
+
+---
+
 ## 其他跑過的測試
 
 | 這一批 | 結果 |
 |---|---|
-| 不需要資料庫的單元測試（乾淨副本、`47910d5`） | **448 通過、2 跳過**（上輪 436／2） |
-| 專案隨附的對抗測試案例（未修改） | **38 個全部通過**（上輪 32 個） |
+| 不需要資料庫的單元測試（乾淨副本、`f1e57f1`） | **459 通過、2 跳過**（436 → 448 → 459） |
+| 專案隨附的對抗測試案例（未修改） | **38 個全部通過** |
 | 需要真實叢集的整合測試 | **無法驗證**（叢集連線逾時，發生在程式邏輯之前） |
 | MCP 協定測試（e2e，6 項） | **4 失敗、2 通過**——既有問題，非這次造成 |
 
@@ -684,8 +875,19 @@ Existing profiles: '' [truncated: name contains a control character] (host='zz.e
   多組相符的拒絕訊息（一字未變）。如果這個依據錯了，問題會出在這裡。
 - **第 5 條這次判 PASS 沒有附帶警告**，因為用同一套量法量出來是 0。上一輪我在這裡
   附了警告，那個警告後來被接受並修掉了。
-- **第 6 條我沒有重新推導，直接沿用上次證據。** 依據是 `8e4d0b7..47910d5` 對那四份
-  文件與兩個版本號檔案的差異是空的。如果這個依據錯了，問題會出在這裡。
+- **第 6 條上一版我判錯了，這次整條重做。** 上一版我用「四份文件的差異是空的」
+  沿用結論——但那只證明文件沒動，而第 6 條問的是**文件和程式的關係**，程式在同一
+  段期間長出了新分支。一位文件審查者指出這點，是對的，而且那條沒被記載的新分支
+  確實從我這關通過了。這次改成**從程式反推**：把解析器實作的每一條規則列出來，
+  逐條去對五個表面。這是我這份報告唯一一處「對沒檢查過的事寫了 PASS」，我把
+  經過留在第 6 條開頭，沒有默默換掉。
+- **第 4 條這次沒有重走，但理由不是檔案差異。** 第 4 條的規則完全由三個函式決定，
+  我把這三個函式在前後兩版各自解析成語法樹比對，三個都相同；為求保險仍然重跑了
+  探針。我特地不用「檔案差異是空的」當理由，因為那正是上一版第 6 條犯的錯。
+- **R5、R6、R7 三條沒被文件記載的規則，我沒有算成第 6 條的 FAIL。** 依據是驗收
+  條文寫的是「關於**密碼留空**的那條規則」，而 R5／R6 是它底下的子條件、R7 講的
+  是另外三個欄位留空。如果你認為第 6 條該涵蓋整條借用規則的全部條件，那 R6 會
+  讓它變成 FAIL——判斷權在你，我把三條都列出來了。
 - **第 3、5 條的反向驗證，我沒有接受「收集錯誤」當證據**，另外寫了一組兩邊都跑得
   起來的移植測試。多花的這一步改變了證據強度，沒有改變結論。
 - **MCP 協定測試的 4 個失敗，我記為「既有問題」而不是這次的失敗。** 依據是分支
@@ -705,9 +907,18 @@ Existing profiles: '' [truncated: name contains a control character] (host='zz.e
    放進回傳。**這是目前唯一還開著的一項，而且只是小問題**——因為完整的拒絕訊息
    本來就會出現在任何資料庫工具的「尚未設定」回應裡，省事的那條路離代理人只有
    一次工具呼叫。
-2. **開場說明在 fastmcp 4 之下是空的，要不要提高優先序？** 這不是這次改壞的，但它
+2. **設定檔裡 port 存壞時，拒絕訊息要不要說出真正的原因？** 現在它印出一組看起來
+   完全相符的設定、卻說「沒有相符的」，而且印的 port 是替換後的值、不是設定檔裡
+   壞掉的那個。旁邊那個「你打錯 port」的守門員已經有現成的寫法可以照抄。
+   **這是我這次認為最值得處理的一項。**
+3. **R5、R6 這兩條規則要不要寫進文件？** R5（你打錯 port 就不借）出事時訊息會
+   自己解釋，所以沒寫問題不大；R6（設定檔存壞 port 就不算相符）出事時什麼都不說，
+   兩者擇一補上——補訊息或補文件都行。
+4. **「只留空其中一欄」那段警告，要不要也寫進三份 README？** 目前只在外掛表單裡。
+   從 README 讀起的人（手動安裝、其他 MCP 用戶端）看不到。
+5. **開場說明在 fastmcp 4 之下是空的，要不要提高優先序？** 這不是這次改壞的，但它
    讓 W0-05／W0-09 在開場說明上做的工完全看不到。
-3. **需要真實叢集的整合測試，要不要等連線恢復之後補跑一次再正式核准？**
+6. **需要真實叢集的整合測試，要不要等連線恢復之後補跑一次再正式核准？**
 
 （上一版列在這裡的第 2、3 項——計畫書 W0-09 的描述、以及「不會讀密碼」那句註解
 ——都已經修好了，分別在 `e03b27e` 和 `166bf07`，不再是待決事項。）
@@ -720,12 +931,12 @@ Existing profiles: '' [truncated: name contains a control character] (host='zz.e
 |---|---|---|---|
 | 需求書（intent） | 全英文 | 符合 | 全文無中日文字 |
 | 規劃書（plan.md） | 全英文 | 符合（三處例外，且該例外正確） | 三處中日文字全部在「問過你的原話」逐字記錄段落，是保留你原本的輸入 |
-| 設計規格 | EARS `REQ-<n>` 條列 | 不適用 | 需求書明寫 `needs-design: no` |
-| 審查意見 | Conventional Comments 標籤 | 不適用 | 這個變更的資料夾裡沒有審查意見文件，也沒有「重要」以上的意見被駁回後轉交給我 |
+| 設計規格 | EARS `REQ-<n>` 條列 | 不適用 | 需求書仍是 `needs-design: no`，所以沒有產出設計規格。**但這一格上一版我引錯了根據**：當時那行的理由寫著「沒有引入任何新的回應欄位」，而那是假的——`get_setup_status` 確實多了 `borrowed_from_profile` 這個欄位、`source` 多了 `borrowed` 這個值、`profile` 現在會回 null。這行已於 `f62a933` 更正，改成承認多了一個選用欄位、但仍不需要設計規格（沒有新工具、沒有新指令參數、沒有新介面）。結論沒變，根據換了 |
+| 審查意見 | Conventional Comments 標籤 | 不適用 | 這個變更的資料夾裡沒有獨立成檔的審查意見文件。**第一輪兩位審查者都判 NEEDS_REVISION**，但沒有「重要」以上的意見被駁回後轉交給我記錄——相反地，它們都被接受並修掉了（`c1a9d86`、`f1e57f1`），其中一條是針對我這份報告第 6 條的，我照辦重做了 |
 | 證據檔（對抗探針程式） | 全英文 | 符合 | 六支探針程式全部 0 處中日文字 |
 | 測試說明文字（docstring） | 全英文 | 符合 | `test_server_resolution.py` 0 處。`test_tools.py` 有 122 處，**全部是改動前就存在的**（分支起點同樣 122 處，本分支新增 0 處）。`test_repo_invariants.py` 新增 6 處，全部是日文版／繁中版 README 的比對字串本身——測試對象就是多語文件，屬於正確的例外 |
 | 測試命名 | `test_<單元>_<狀態>_<預期>` | 部分符合 | 語意上都是三段式（例如 `test_identical_password_tie_still_refuses` = 單元 identical_password_tie／狀態 still／預期 refuses），但沿用專案既有的敘述式風格，沒有嚴格用底線切成剛好三段 |
-| 提交訊息 | 全英文 | 符合 | 分支起點以來 22 筆提交（含本報告前兩版那兩筆），標題與內文皆 0 處中日文字 |
+| 提交訊息 | 全英文 | 符合 | 分支起點以來 26 筆提交（含本報告前三版那三筆），標題與內文皆 0 處中日文字 |
 
 ---
 
@@ -734,6 +945,11 @@ Existing profiles: '' [truncated: name contains a control character] (host='zz.e
 - **「真的登入進 Redshift」沒有驗證到**——叢集連不上（原始 TCP 測試 8 秒逾時）。
   第 1 條的「連線」只能證明到「往正確的位址、帶著正確的密碼開出一條真實連線」。
 - **需要真實叢集的整合測試那一批，完全沒跑。**
-- **第 6 條沒有重新推導**，沿用上次證據，依據是那四份文件的差異為空。
+- **第 6 條我上一版判錯過**——用「文件沒動」當理由沿用，但那條驗收問的是文件和
+  程式的關係。這一版已經改成從程式反推，經過留在第 6 條開頭。
+- **第 4 條這一版沒有重走**，只用語法樹比對確認它的三個實作函式沒變，外加重跑一次
+  探針。
 - **沒有找到獨立成檔的審查意見文件**可供逐條核對 Conventional Comments 標籤規則。
+- **R5、R6、R7 三條規則是否該由第 6 條涵蓋，我做了判斷但沒有把握**——我判不涵蓋，
+  理由寫在「我替你決定的事」裡。如果你認為該涵蓋，第 6 條會變成 FAIL。
 - 上面列出的每一項觀察我都**只記錄、沒有修**。
