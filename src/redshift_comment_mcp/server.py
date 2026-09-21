@@ -120,11 +120,13 @@ def resolve_connection_decision(
     - **Legacy inline**: all of ``args.host`` / ``args.user`` / ``args.dbname``
       are present. Password from ``args.password`` or ``REDSHIFT_PASSWORD``
       env var. If neither supplies one, ``config.toml`` is scanned for a
-      profile whose host/user/dbname all equal the inline values, and that
-      profile's keychain password is borrowed (mechanism ``"borrowed"``) —
-      the connection still targets the inline host/port/user/dbname; a
-      stored profile can supply a password only, never a connection target.
-      Profile *name* is ignored throughout this mode.
+      profile whose host, port, user AND dbname all equal the inline
+      four-field target, and that profile's keychain password is borrowed
+      (mechanism ``"borrowed"``) — the connection still targets the inline
+      host/port/user/dbname; a stored profile can supply a password only,
+      never a connection target, and it only ever lends to a launch naming
+      the exact same four-field target it was recorded for. Profile *name*
+      is ignored throughout this mode.
     - **Profile mode** (the default): delegated to
       ``resolve_profile_decision``, which looks up the profile name via
       ``config.resolve_active_profile(profile_override or args.profile)``
@@ -151,24 +153,60 @@ def resolve_connection_decision(
             )
 
         # No inline password. Before giving up, see if config.toml holds a
-        # profile that IS this exact target — host, user AND dbname all
-        # equal the inline values — and borrow its keychain password. Port
-        # is deliberately excluded from the match and never taken from the
-        # profile: the connection always targets the inline host/port/user/
-        # dbname the operator typed, so a stored profile can only ever
+        # profile that IS this exact target — host, port, user AND dbname
+        # all equal the inline four-field target — and borrow its keychain
+        # password. The connection always targets the inline host/port/
+        # user/dbname the operator typed; a stored profile can only ever
         # contribute a password, never redirect the connection anywhere
-        # else. An unmatched (or password-less) store falls through to the
-        # password-less "inline" decision below rather than guessing.
+        # else, and it only lends to a launch naming the same four-field
+        # target it was recorded for — a profile recorded at a different
+        # port refuses rather than lending a password to a different
+        # listener on the same host. An unmatched (or password-less) store
+        # falls through to the password-less "inline" decision below rather
+        # than guessing.
+        #
+        # The scan below is guarded: list_profiles() / read_profile() /
+        # get_password() can each raise for reasons that have nothing to do
+        # with whether a match exists — no keyring backend on the host
+        # (NoKeyringError), a non-table entry in config.toml (AttributeError
+        # off a non-dict profile), or a malformed config.toml
+        # (TOMLDecodeError, raised by list_profiles() itself before any
+        # profile name is even available). None of those is
+        # ConfigurationError, so @_guarded would not catch them, and
+        # get_setup_status (which shares this exact function as its
+        # status_provider) carries no guard of its own at all — a
+        # keyring-less host would otherwise crash the one tool an agent
+        # uses to ask "what state am I in", in a mode that never touched
+        # the keychain before. Any such failure here must fall through to
+        # the existing password-less inline refusal instead of escaping as
+        # an opaque crash.
         from . import config as cfg
-        for candidate_name in cfg.list_profiles():
-            candidate = cfg.read_profile(candidate_name)
-            if not candidate:
+        try:
+            candidate_names = cfg.list_profiles()
+        except Exception as e:  # noqa: BLE001 — see comment above
+            logger.debug(
+                "borrow scan: could not list profiles (%s); falling through "
+                "to the password-less inline decision", type(e).__name__,
+            )
+            candidate_names = []
+
+        for candidate_name in candidate_names:
+            try:
+                candidate = cfg.read_profile(candidate_name)
+                if not candidate:
+                    continue
+                candidate_port = _coerce_port(candidate.get("port"))
+                if (candidate.get("host"), candidate_port, candidate.get("user"), candidate.get("dbname")) != (
+                    host, port, user, dbname,
+                ):
+                    continue
+                borrowed_password = cfg.get_password(candidate_name)
+            except Exception as e:  # noqa: BLE001 — see comment above
+                logger.debug(
+                    "borrow scan: skipping profile %r after %s",
+                    candidate_name, type(e).__name__,
+                )
                 continue
-            if (candidate.get("host"), candidate.get("user"), candidate.get("dbname")) != (
-                host, user, dbname,
-            ):
-                continue
-            borrowed_password = cfg.get_password(candidate_name)
             if borrowed_password:
                 return ConnectionDecision(
                     mechanism="borrowed", host=host, port=port, user=user, dbname=dbname,
@@ -213,21 +251,43 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
     from . import config as cfg
 
     if decision.mechanism == "inline":
-        existing = cfg.list_profiles()
-        if existing:
-            existing_desc = ", ".join(
-                f"{name} ({(cfg.read_profile(name) or {}).get('host', '?')})"
-                for name in existing
+        # Building this message re-touches the same store the borrow scan
+        # above already guarded against (see resolve_connection_decision) —
+        # a message-building failure must not replace the refusal the user
+        # actually needs to see with an opaque store exception either.
+        try:
+            existing = cfg.list_profiles()
+        except Exception as e:  # noqa: BLE001 — see resolve_connection_decision
+            logger.debug(
+                "borrow-refusal message: could not list profiles (%s)",
+                type(e).__name__,
             )
+            existing = []
+        if existing:
+            def _target_desc(name: str) -> str:
+                try:
+                    fields = cfg.read_profile(name) or {}
+                    target_host = fields.get("host", "?")
+                    target_port = _coerce_port(fields.get("port"))
+                    return f"{name} ({target_host}:{target_port})"
+                except Exception as e:  # noqa: BLE001 — see above
+                    logger.debug(
+                        "borrow-refusal message: could not describe profile "
+                        "%r (%s)", name, type(e).__name__,
+                    )
+                    return f"{name} (unreadable)"
+
+            existing_desc = ", ".join(_target_desc(name) for name in existing)
         else:
             existing_desc = "none configured"
         raise ConfigurationError(
-            f"Inline mode requires a password for host={decision.host!r} "
-            f"user={decision.user!r} dbname={decision.dbname!r}, and no stored profile's "
-            f"host/user/dbname all match it to borrow one from.\n"
+            f"Inline mode requires a password for "
+            f"host={decision.host!r} port={decision.port!r} "
+            f"user={decision.user!r} dbname={decision.dbname!r}, and no stored "
+            f"profile's host/port/user/dbname all match it to borrow one from.\n"
             f"Existing profiles: {existing_desc}.\n"
             f"Provide the REDSHIFT_PASSWORD env var, or configure a profile "
-            f"matching this exact host/user/dbname via "
+            f"matching this exact host/port/user/dbname via "
             f"/redshift-comment-mcp:redshift-setup."
         )
 

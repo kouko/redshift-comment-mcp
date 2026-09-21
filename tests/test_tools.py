@@ -3299,6 +3299,54 @@ class TestSetupViaDialogResponseShapeContract:
         assert result["profile"] == "prod"
 
 
+class TestConnectionDecisionDoesNotDiscloseItsOwnPassword:
+    """W0-05 defect 2: ``ConnectionDecision`` is ``@dataclass(frozen=True)``
+    with a ``password`` field, so the generated ``__repr__`` used to render
+    the secret in clear — a regression against the sibling carrier
+    ``connection.RedshiftConnectionConfig`` (a plain class, discloses
+    nothing) and against the intent's own constraint that the password
+    value must not reach argv, logs, stdout, or any MCP response.
+    ``traceback.TracebackException(..., capture_locals=True)`` is the
+    channel this repo already ships a probe for (see
+    docs/loom/2026-09-17-setup-dialog-write-order/evidence/probes/
+    probe_secret_leakage.py) — a handler with locals rendering turned on
+    would otherwise print this dataclass's repr straight out of the frame."""
+
+    SECRET = "s3cr3t-should-never-appear-in-repr-or-traceback"
+
+    def _make_decision(self) -> ConnectionDecision:
+        return ConnectionDecision(
+            mechanism="inline", host="h.example.com", port=5439,
+            user="u", dbname="d",
+            has_fields=True, has_password=True, password=self.SECRET,
+            profile_name=None,
+        )
+
+    def test_repr_excludes_the_password_value(self):
+        decision = self._make_decision()
+        assert self.SECRET not in repr(decision)
+
+    def test_traceback_capture_locals_excludes_the_password_value(self):
+        import traceback
+
+        def _raise_with_decision_in_scope():
+            decision = self._make_decision()  # noqa: F841 — kept as a local on purpose
+            raise RuntimeError("boom")
+
+        try:
+            _raise_with_decision_in_scope()
+        except RuntimeError:
+            import sys
+            exc_type, exc_value, exc_tb = sys.exc_info()
+            rendered = "".join(
+                traceback.TracebackException(
+                    exc_type, exc_value, exc_tb, capture_locals=True
+                ).format()
+            )
+
+        assert self.SECRET not in rendered
+
+
 class TestGetSetupStatusTool:
     """The read-only setup-status tool. Safe to call at session start;
     returns non-secrets only; agents use it to decide whether to call
@@ -3630,3 +3678,39 @@ class TestGetSetupStatusTool:
 
         import json
         assert "ichef-pw" not in json.dumps(result)
+
+
+class TestServerInstructionsEnumerateAllThreeMechanisms:
+    """W0-05 defect 4 / Acceptance 3 positive: the FastMCP ``instructions``
+    string — the one every MCP client actually receives — still described
+    only the two old modes and attached its only behavioural rule ("do NOT
+    report 'no profile'") to ``"inline"`` alone, so an agent connected in
+    ``"borrowed"`` mode had no rule at all and might wrongly tell the user
+    to run setup on a connection that is already working."""
+
+    def _instructions(self) -> str:
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def provider():
+            raise ConfigurationError("doesn't matter — instructions text is static")
+
+        tools = RedshiftTools(provider)
+        return tools.mcp.instructions
+
+    def test_instructions_enumerate_borrowed(self):
+        instructions = self._instructions()
+        assert '"borrowed"' in instructions
+        assert "borrowed_from_profile" in instructions
+
+    def test_instructions_no_profile_rule_covers_borrowed_not_just_inline(self):
+        import re
+
+        instructions = self._instructions()
+        normalized = re.sub(r"\s+", " ", instructions.lower())
+        idx = normalized.find('do not report "no profile"')
+        assert idx != -1, "instructions dropped the 'do NOT report no profile' rule entirely"
+        # The rule must be stated in the same neighbourhood as both
+        # mechanism names, not attached to "inline" alone.
+        window = normalized[max(0, idx - 500):idx + 200]
+        assert "borrowed" in window
+        assert "inline" in window

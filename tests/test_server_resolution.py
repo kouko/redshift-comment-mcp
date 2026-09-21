@@ -373,29 +373,52 @@ def test_ambiguous_multi_profile_error_lists_profiles_and_suggests_switch(
 
 
 
-# ===== W0-01: borrow a password only from an identity-matched profile =====
-# Inline host/user/dbname supplied, no password anywhere (neither --password
-# nor REDSHIFT_PASSWORD). A stored profile may lend its keychain password,
-# but ONLY when its host+user+dbname triple all equal the inline values —
-# it must never lend a host: an unmatched store can only refuse, never
-# redirect the connection somewhere the operator did not type.
+# ===== W0-01 (amended by W0-05): borrow a password only from a profile
+# matching the FULL four-field target =====
+# Inline host/port/user/dbname supplied, no password anywhere (neither
+# --password nor REDSHIFT_PASSWORD). A stored profile may lend its keychain
+# password, but ONLY when its host+port+user+dbname all equal the inline
+# values — it must never lend a connection-target field: an unmatched store
+# (including one that differs only by port) can only refuse, never redirect
+# the connection somewhere the operator did not type.
 
 
-def test_matching_triple_borrows_and_uses_inline_host(tmp_xdg, fake_keyring, monkeypatch):
-    """A stored profile whose host/user/dbname all equal the inline values
-    lends its keychain password. Connection still targets the INLINE
-    host/port — here the profile's port (5440) differs from the inline
-    port (default 5439) to prove the borrowed profile never supplies
-    connection target fields, only the password."""
+def test_four_field_match_borrows_and_uses_inline_values(tmp_xdg, fake_keyring, monkeypatch):
+    """A stored profile whose host, port, user AND dbname all equal the
+    inline values lends its keychain password. Connection uses the INLINE
+    values (proven by exercising the code path that reads them from the
+    inline variables, not from the matched profile dict — a bug that
+    accidentally returned the profile's own field values would still pass
+    here since match requires the fields to be equal, but would fail
+    test_port_mismatch_refuses_and_names_both_ports below)."""
     monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
     config.write_profile(
-        "default", host="h.example.com", port=5440, user="u", dbname="d",
+        "default", host="h.example.com", port=5439, user="u", dbname="d",
     )
     config.set_password("default", "borrowed-pw")
     args = _ns(host="h.example.com", user="u", dbname="d")
     assert server.resolve_connection_params(args) == (
         "h.example.com", 5439, "u", "borrowed-pw", "d"
     )
+
+
+def test_port_mismatch_refuses_and_names_both_ports(tmp_xdg, fake_keyring, monkeypatch):
+    """A profile whose host/user/dbname all match the inline target but
+    whose PORT differs must NOT lend its password — a password provisioned
+    for host:5439 must never be sent to host:9999. Refuse, and name both
+    ports in the message so the operator can see the only difference at a
+    glance (Acceptance 2: 'each existing profile's target')."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "default", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("default", "borrowed-pw")
+    args = _ns(host="h.example.com", port=9999, user="u", dbname="d")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    msg = str(excinfo.value)
+    assert "9999" in msg
+    assert "5439" in msg
 
 
 def test_password_present_still_wins(tmp_xdg, fake_keyring, monkeypatch):
@@ -414,13 +437,14 @@ def test_password_present_still_wins(tmp_xdg, fake_keyring, monkeypatch):
 
 
 def test_mismatched_profile_raises_naming_both_hosts(tmp_xdg, fake_keyring, monkeypatch):
-    """A profile exists but its host/user/dbname triple does not match the
-    inline values → refuse rather than borrow across a mismatch. The
-    message must name both the inline target's host and the existing
-    profile's host, so the user can see why nothing matched."""
+    """A profile exists but its target does not match the inline values →
+    refuse rather than borrow across a mismatch. The message must name both
+    the inline target's host and each existing profile's target — host AND
+    port (Acceptance 2) — so the user can see why nothing matched, including
+    the case where a port is the only difference."""
     monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
     config.write_profile(
-        "prod", host="prod.example.com", port=5439, user="alice", dbname="warehouse",
+        "prod", host="prod.example.com", port=6543, user="alice", dbname="warehouse",
     )
     config.set_password("prod", "prod-pw")
     args = _ns(host="inline.example.com", user="u", dbname="d")
@@ -429,6 +453,7 @@ def test_mismatched_profile_raises_naming_both_hosts(tmp_xdg, fake_keyring, monk
     msg = str(excinfo.value)
     assert "inline.example.com" in msg
     assert "prod.example.com" in msg
+    assert "6543" in msg
 
 
 def test_no_profiles_at_all_raises(tmp_xdg, fake_keyring, monkeypatch):
@@ -439,6 +464,75 @@ def test_no_profiles_at_all_raises(tmp_xdg, fake_keyring, monkeypatch):
     with pytest.raises(ValueError) as excinfo:
         server.resolve_connection_params(args)
     assert "inline.example.com" in str(excinfo.value)
+
+
+# ===== W0-05 defect 3: the borrow scan must not make a keychain-free path
+# depend on the keychain (or on a clean config.toml) =====
+# The scan calls cfg.list_profiles() / cfg.read_profile() / cfg.get_password()
+# with no exception handling; only ConfigurationError is caught by
+# @_guarded, so anything else (NoKeyringError, AttributeError from a
+# non-table config.toml entry, TOMLDecodeError from a malformed file) used
+# to escape as an opaque crash instead of falling through to the existing
+# password-less inline refusal — in a mode (inline launch, no password) that
+# never touched the keychain before this change existed.
+
+
+def _corrupt_store_no_keyring_backend(monkeypatch):
+    from keyring.errors import NoKeyringError
+    config.write_profile(
+        "default", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+
+    def _raise(profile):
+        raise NoKeyringError("no keyring backend available")
+
+    monkeypatch.setattr(config, "get_password", _raise)
+
+
+def _corrupt_store_non_table_entry(monkeypatch):
+    # A stray non-table value under [profile] (e.g. `profile.bad = "oops"`
+    # instead of `[profile.bad]`) makes read_profile return something that
+    # isn't a dict, so `.get("host")` on it raises AttributeError.
+    monkeypatch.setattr(config, "list_profiles", lambda: ["bad"])
+    monkeypatch.setattr(config, "read_profile", lambda name: "not-a-table")
+
+
+def _corrupt_store_malformed_toml(monkeypatch):
+    path = config.config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("this is not [valid toml")
+
+
+_CORRUPT_STORE_SETUPS = {
+    "no_keyring_backend": (_corrupt_store_no_keyring_backend, "NoKeyringError"),
+    "non_table_entry": (_corrupt_store_non_table_entry, "AttributeError"),
+    "malformed_toml": (_corrupt_store_malformed_toml, "TOMLDecodeError"),
+}
+
+
+@pytest.mark.parametrize(
+    "corrupt_store", list(_CORRUPT_STORE_SETUPS), ids=list(_CORRUPT_STORE_SETUPS)
+)
+def test_borrow_scan_store_failure_falls_through_to_inline_refusal(
+    tmp_xdg, monkeypatch, caplog, corrupt_store
+):
+    """Boundary (Acceptance 3 / defect 3): whatever the borrow scan hits
+    while consulting the store, an inline launch with no password ends up
+    at the same password-less inline refusal it always would have — never
+    an escaped store exception — and the exception type (never any value)
+    is logged at debug level."""
+    import logging as _logging
+
+    caplog.set_level(_logging.DEBUG, logger="redshift_comment_mcp.server")
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    setup_fn, expected_exception_name = _CORRUPT_STORE_SETUPS[corrupt_store]
+    setup_fn(monkeypatch)
+
+    args = _ns(host="h.example.com", user="u", dbname="d")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    assert "h.example.com" in str(excinfo.value)
+    assert expected_exception_name in caplog.text
 
 
 def test_named_profile_typo_error_lists_existing_profiles(
@@ -519,14 +613,19 @@ def test_inline_password_real_value_unaffected_by_normalization(tmp_xdg, fake_ke
 
 
 def test_inline_placeholder_password_falls_through_to_borrow(tmp_xdg, fake_keyring, monkeypatch):
-    """A4 end-to-end with W0-01: an unsubstituted placeholder --password must
-    not block the borrow path — with a profile matching the inline triple,
-    the connection borrows its keychain password exactly as if no --password
-    had been supplied at all, instead of authenticating with the literal
-    placeholder string and failing confusingly."""
+    """A4 end-to-end with W0-01/W0-05: an unsubstituted placeholder
+    --password must not block the borrow path — with a profile matching the
+    full inline four-field target, the connection borrows its keychain
+    password exactly as if no --password had been supplied at all, instead
+    of authenticating with the literal placeholder string and failing
+    confusingly.
+
+    The stored profile's port matches the inline default (5439) — this test
+    is about the placeholder-password normalization, not port matching; see
+    test_port_mismatch_refuses_and_names_both_ports for that."""
     monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
     config.write_profile(
-        "default", host="h.example.com", port=5440, user="u", dbname="d",
+        "default", host="h.example.com", port=5439, user="u", dbname="d",
     )
     config.set_password("default", "borrowed-pw")
     args = _ns(host="h.example.com", user="u", dbname="d", password="${user_config.password}")

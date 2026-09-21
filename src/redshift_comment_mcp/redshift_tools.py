@@ -3,7 +3,7 @@ import logging
 import re
 import shlex
 import stat as _stat
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import awswrangler as wr
 from fastmcp import FastMCP
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -47,10 +47,11 @@ class ConnectionDecision:
         mechanism: ``"inline"`` (launch-arg host/user/dbname, password from
             ``--password``/``REDSHIFT_PASSWORD`` or none at all — the
             profile store was never consulted, or was consulted and had no
-            match/password to lend), ``"borrowed"`` (launch-arg host/user/
-            dbname, no inline password, but a stored profile whose host/
-            user/dbname all match lent its keychain password), or
-            ``"profile"`` (config.toml + keychain, no launch args).
+            match/password to lend), ``"borrowed"`` (launch-arg host/port/
+            user/dbname, no inline password, but a stored profile whose
+            host, port, user AND dbname all match lent its keychain
+            password), or ``"profile"`` (config.toml + keychain, no launch
+            args).
         host / port / user / dbname: the target the connection will actually
             use. For ``"borrowed"`` this is always the INLINE values, never
             the matched profile's — a stored profile may lend a password,
@@ -61,7 +62,13 @@ class ConnectionDecision:
             resolved profile has no config.toml entry.
         has_password: whether a password is available to connect with.
         password: the actual secret, or ``None``. ``get_setup_status`` never
-            reads this field — it reports ``has_password`` only.
+            reads this field — it reports ``has_password`` only. Marked
+            ``field(repr=False)`` so this dataclass's own generated
+            ``__repr__`` — and anything that renders it, including
+            ``traceback.TracebackException(..., capture_locals=True)`` —
+            never discloses the secret, matching the sibling carrier
+            ``connection.RedshiftConnectionConfig`` (a plain class, which
+            discloses nothing).
         profile_name: the profile that contributed the password — the
             matched profile's name for ``"borrowed"``, the resolved active
             profile for ``"profile"`` mode, or ``None`` for plain
@@ -75,7 +82,7 @@ class ConnectionDecision:
     dbname: Optional[str]
     has_fields: bool
     has_password: bool
-    password: Optional[str]
+    password: Optional[str] = field(repr=False)
     profile_name: Optional[str]
 
 
@@ -717,11 +724,17 @@ boot without a configured profile. Two entry points:
   - PROACTIVE: call `get_setup_status` at session start to check whether
     a profile is configured. Safe to call any time, returns
     non-secrets only. If `configured=false`, follow `next_step`. The
-    `source` field says which mechanism is live: `"inline"` means the
-    server runs on launch args + `REDSHIFT_PASSWORD` env (e.g. the Claude
-    Code plugin UI) and the profile/keychain path is bypassed — do NOT
-    report "no profile" in that mode; `"profile"` means config.toml +
-    keychain.
+    `source` field says which mechanism is live: `"inline"` means
+    launch args + `REDSHIFT_PASSWORD` env (e.g. the Claude Code plugin
+    UI), bypassing the profile/keychain path. The `source` field
+    indicates `"borrowed"` when the server ran on launch args and used
+    a keychain password lent by a stored profile whose host, port,
+    user and dbname all match the launch target. The connection still
+    targets the launch values, never the matched profile's, and
+    `borrowed_from_profile` names the lending profile. `"profile"`
+    means config.toml + keychain, with no launch args. Do NOT report
+    "no profile" in `"inline"` OR `"borrowed"` mode — both are already
+    working connections.
   - REACTIVE: any DB tool returns `{"error": "not_configured", ...}` —
     read the `next_step` field and follow it.
 
@@ -1856,11 +1869,12 @@ the only chat-leak-free paths.
               - ``source`` — the mechanism actually in force:
                 ``"inline"`` (launch-arg host/user/dbname, password from
                 ``--password``/``REDSHIFT_PASSWORD`` or none), ``"borrowed"``
-                (launch-arg host/user/dbname, no inline password, but a
-                stored profile whose host/user/dbname all match lent its
-                keychain password — the connection target is still the
-                INLINE values, never the matched profile's — see W0-01), or
-                ``"profile"`` (config.toml + keychain, no launch args)
+                (launch-arg host/port/user/dbname, no inline password, but a
+                stored profile whose host, port, user AND dbname all match
+                lent its keychain password — the connection target is still
+                the INLINE values, never the matched profile's — see
+                W0-01/W0-05), or ``"profile"`` (config.toml + keychain, no
+                launch args)
               - ``configured`` — bool, equivalent to has_fields && has_password
               - ``has_fields`` — whether the connection target (host / port /
                 user / dbname) is known; in inline / borrowed mode, always
