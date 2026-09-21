@@ -5,7 +5,7 @@ import logging
 from typing import Optional
 from .config import ConfigurationError
 from .connection import create_redshift_config
-from .redshift_tools import RedshiftTools
+from .redshift_tools import RedshiftTools, ConnectionDecision, resolve_profile_decision
 
 logger = logging.getLogger(__name__)
 
@@ -67,9 +67,10 @@ def resolve_inline_params(
 
     ``has_password`` reflects presence of ``args.password`` or the
     ``REDSHIFT_PASSWORD`` env var — it NEVER returns the secret itself. This
-    is the seam ``get_setup_status`` uses to report inline mode truthfully:
-    the status tool must know "the server can connect via inline mode" without
-    handling the password value.
+    is the detection ``resolve_connection_decision`` below reuses so the
+    connector and ``get_setup_status`` always agree on whether inline (or
+    borrowed) mode is active, without ``get_setup_status`` ever handling the
+    password value itself.
     """
     host = _normalize_inline(args.host)
     user = _normalize_inline(args.user)
@@ -80,40 +81,36 @@ def resolve_inline_params(
     return host, _coerce_port(args.port), user, has_password, dbname
 
 
-def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, str, str]:
-    """Resolve ``(host, port, user, password, dbname)`` from parsed CLI args.
+def resolve_connection_decision(
+    args: argparse.Namespace,
+    profile_override: Optional[str] = None,
+) -> ConnectionDecision:
+    """Resolve the single connection decision both the connector
+    (``resolve_connection_params`` below) and the status tool
+    (``get_setup_status``, via the ``status_provider`` wired up in ``main()``)
+    report from — replacing the old ``inline_status_provider`` seam that
+    shared only mode detection between them, which is exactly why they could
+    still disagree about everything after the mode (see W0-02).
 
-    Two modes:
+    Three mechanisms, same priority ``resolve_connection_params`` always had:
 
     - **Legacy inline**: all of ``args.host`` / ``args.user`` / ``args.dbname``
       are present. Password from ``args.password`` or ``REDSHIFT_PASSWORD``
       env var. If neither supplies one, ``config.toml`` is scanned for a
       profile whose host/user/dbname all equal the inline values, and that
-      profile's keychain password is borrowed — the connection still targets
-      the inline host/port/user/dbname; a stored profile can supply a
-      password only, never a connection target. Profile *name* is ignored
-      throughout this mode.
-    - **Profile mode** (the default): look up the profile name via
-      ``config.resolve_active_profile(args.profile)`` (priority CLI flag >
-      ``REDSHIFT_COMMENT_PROFILE`` env > active-profile pointer file >
-      ``"default"``). Read host/user/dbname from
+      profile's keychain password is borrowed (mechanism ``"borrowed"``) —
+      the connection still targets the inline host/port/user/dbname; a
+      stored profile can supply a password only, never a connection target.
+      Profile *name* is ignored throughout this mode.
+    - **Profile mode** (the default): delegated to
+      ``resolve_profile_decision``, which looks up the profile name via
+      ``config.resolve_active_profile(profile_override or args.profile)``
+      (priority CLI flag > ``REDSHIFT_COMMENT_PROFILE`` env > active-profile
+      pointer file > ``"default"``) and reads host/user/dbname from
       ``~/.config/redshift-comment-mcp/config.toml``, password from OS
-      keychain.
-
-    Raises ``ConfigurationError`` (subclass of ``ValueError`` for backward-
-    compat) with a dual-path message — pointing at both
-    ``/redshift-comment-mcp:redshift-setup`` (Claude Code skill) and
-    ``redshift-comment-mcp setup`` (CLI, e.g. ``uvx redshift-comment-mcp
-    setup``) — if the profile is missing or has no keychain password.
-    Surfaces a helpful next step regardless of whether the caller has the
-    Claude Code plugin installed. Code paths that should react in-process
-    (e.g. degraded-mode MCP tools returning a structured not_configured
-    error) catch the specific subclass; legacy ``except ValueError`` still
-    works.
+      keychain. ``profile_override`` lets ``get_setup_status`` peek at a
+      named profile without touching the live server's own resolution.
     """
-    # Inline detection (incl. optional-userConfig normalization for ""/${...}
-    # placeholders) lives in resolve_inline_params so get_setup_status can reuse
-    # the exact same mode decision.
     inline = resolve_inline_params(args)
     if inline:
         host, port, user, has_password, dbname = inline
@@ -122,7 +119,11 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
             # deliberately returns only presence (has_password bool), never
             # the secret.
             password = args.password or os.getenv('REDSHIFT_PASSWORD')
-            return host, port, user, password, dbname
+            return ConnectionDecision(
+                mechanism="inline", host=host, port=port, user=user, dbname=dbname,
+                has_fields=True, has_password=True, password=password,
+                profile_name=None,
+            )
 
         # No inline password. Before giving up, see if config.toml holds a
         # profile that IS this exact target — host, user AND dbname all
@@ -132,7 +133,7 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
         # dbname the operator typed, so a stored profile can only ever
         # contribute a password, never redirect the connection anywhere
         # else. An unmatched (or password-less) store falls through to the
-        # raise below rather than guessing.
+        # password-less "inline" decision below rather than guessing.
         from . import config as cfg
         for candidate_name in cfg.list_profiles():
             candidate = cfg.read_profile(candidate_name)
@@ -144,8 +145,47 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
                 continue
             borrowed_password = cfg.get_password(candidate_name)
             if borrowed_password:
-                return host, port, user, borrowed_password, dbname
+                return ConnectionDecision(
+                    mechanism="borrowed", host=host, port=port, user=user, dbname=dbname,
+                    has_fields=True, has_password=True, password=borrowed_password,
+                    profile_name=candidate_name,
+                )
 
+        return ConnectionDecision(
+            mechanism="inline", host=host, port=port, user=user, dbname=dbname,
+            has_fields=True, has_password=False, password=None,
+            profile_name=None,
+        )
+
+    return resolve_profile_decision(
+        profile_override if profile_override is not None else args.profile
+    )
+
+
+def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, str, str]:
+    """Resolve ``(host, port, user, password, dbname)`` from parsed CLI args.
+
+    Thin wrapper over ``resolve_connection_decision``: returns the target +
+    password when one is available, else raises ``ConfigurationError``
+    (subclass of ``ValueError`` for backward-compat) with a message tailored
+    to the mechanism and the specific way it fell short — pointing at both
+    ``/redshift-comment-mcp:redshift-setup`` (Claude Code skill) and
+    ``redshift-comment-mcp setup`` (CLI, e.g. ``uvx redshift-comment-mcp
+    setup``) for profile mode, or at ``--password`` / ``REDSHIFT_PASSWORD``
+    and the existing profiles available to borrow from for inline mode.
+    Surfaces a helpful next step regardless of whether the caller has the
+    Claude Code plugin installed. Code paths that should react in-process
+    (e.g. degraded-mode MCP tools returning a structured not_configured
+    error) catch the specific subclass; legacy ``except ValueError`` still
+    works.
+    """
+    decision = resolve_connection_decision(args)
+    if decision.has_password:
+        return decision.host, decision.port, decision.user, decision.password, decision.dbname
+
+    from . import config as cfg
+
+    if decision.mechanism == "inline":
         existing = cfg.list_profiles()
         if existing:
             existing_desc = ", ".join(
@@ -155,8 +195,8 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
         else:
             existing_desc = "none configured"
         raise ConfigurationError(
-            f"Inline mode requires a password for host={host!r} "
-            f"user={user!r} dbname={dbname!r}, and no stored profile's "
+            f"Inline mode requires a password for host={decision.host!r} "
+            f"user={decision.user!r} dbname={decision.dbname!r}, and no stored profile's "
             f"host/user/dbname all match it to borrow one from.\n"
             f"Existing profiles: {existing_desc}.\n"
             f"Provide --password CLI flag or REDSHIFT_PASSWORD env var, or "
@@ -164,10 +204,9 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
             f"/redshift-comment-mcp:redshift-setup."
         )
 
-    from . import config as cfg
-    profile_name = cfg.resolve_active_profile(args.profile)
-    profile = cfg.read_profile(profile_name)
-    if not profile:
+    # mechanism == "profile"
+    profile_name = decision.profile_name
+    if not decision.has_fields:
         # Two distinct UX cases share this raise site:
         # - No profiles at all → user needs to run /redshift-setup
         # - ≥1 profile, just not the one we resolved → user needs to
@@ -215,22 +254,19 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
             f"them. Never pass the password as a tool argument or shell "
             f"argument."
         )
-    password = cfg.get_password(profile_name)
-    if not password:
-        raise ConfigurationError(
-            f"Password missing from keychain for profile '{profile_name}'. "
-            f"Re-key via one of:\n"
-            f"  - Claude Code: /redshift-comment-mcp:redshift-setup\n"
-            f"  - In-band MCP tool: call `setup_via_dialog(host=..., "
-            f"user=..., dbname=...)` with the existing or new values to "
-            f"overwrite (call `get_setup_status` first if you need the "
-            f"existing field values).\n"
-            f"  - Terminal: `redshift-comment-mcp set-password --profile "
-            f"{profile_name} --dialog` (OS dialog) or `--stdin` (headless "
-            f"pipe). DO NOT use the no-flag interactive `set-password` form "
-            f"from an agent — getpass reads from /dev/tty, not stdin."
-        )
-    return profile["host"], profile["port"], profile["user"], password, profile["dbname"]
+    raise ConfigurationError(
+        f"Password missing from keychain for profile '{profile_name}'. "
+        f"Re-key via one of:\n"
+        f"  - Claude Code: /redshift-comment-mcp:redshift-setup\n"
+        f"  - In-band MCP tool: call `setup_via_dialog(host=..., "
+        f"user=..., dbname=...)` with the existing or new values to "
+        f"overwrite (call `get_setup_status` first if you need the "
+        f"existing field values).\n"
+        f"  - Terminal: `redshift-comment-mcp set-password --profile "
+        f"{profile_name} --dialog` (OS dialog) or `--stdin` (headless "
+        f"pipe). DO NOT use the no-flag interactive `set-password` form "
+        f"from an agent — getpass reads from /dev/tty, not stdin."
+    )
 
 
 def main():
@@ -302,10 +338,14 @@ def main():
 
     logger.info("MCP 伺服器啟動中（degraded-mode 啟動 — profile 在第一次 tool 呼叫時 lazy resolve）")
     # Re-evaluated per get_setup_status call (not cached) so a REDSHIFT_PASSWORD
-    # env change is reflected, mirroring lazy_config_provider's re-resolution.
+    # env change (or a newly written profile) is reflected, mirroring
+    # lazy_config_provider's re-resolution. resolve_connection_decision is the
+    # exact function lazy_config_provider's resolve_connection_params calls
+    # internally — one decision, read by both, never two that could drift
+    # apart (see W0-02).
     redshift_tools = RedshiftTools(
         lazy_config_provider,
-        inline_status_provider=lambda: resolve_inline_params(args),
+        status_provider=lambda profile: resolve_connection_decision(args, profile),
     )
     mcp_server = redshift_tools.get_server()
 

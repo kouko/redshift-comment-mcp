@@ -3,6 +3,7 @@ import logging
 import re
 import shlex
 import stat as _stat
+from dataclasses import dataclass
 import awswrangler as wr
 from fastmcp import FastMCP
 from typing import Any, Callable, Dict, Optional, Tuple
@@ -10,6 +11,108 @@ from .config import ConfigurationError
 from .connection import RedshiftConnectionConfig
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ConnectionDecision:
+    """The one connection decision both the connector and the status tool read.
+
+    Replaces the old ``inline_status_provider`` seam (a bare ``(host, port,
+    user, has_password, dbname)`` tuple) that shared only *mode detection*
+    between ``server.resolve_connection_params`` (the connector) and
+    ``get_setup_status`` (the status tool) — exactly why the two could still
+    disagree about everything else once a mode was picked: after W0-01 taught
+    the connector to borrow a keychain password from an identity-matched
+    profile while still connecting to the inline target, a bare mode flag
+    had no field left to carry "borrowed, and from which profile."
+
+    Two producers:
+
+    - :func:`resolve_profile_decision` below — pure config.toml + keychain
+      resolution, no CLI args needed. Used directly by ``get_setup_status``
+      when the server supplies no richer provider (every test that exercises
+      the tool standalone, and any non-server caller).
+    - ``server.resolve_connection_decision`` — adds inline / borrowed
+      detection, which needs the launched process's CLI args, and defers to
+      :func:`resolve_profile_decision` for its own profile-mode branch
+      rather than re-deriving it.
+
+    ``server.resolve_connection_params`` (the connector) turns a
+    password-bearing decision into a live connection tuple, or raises using
+    the same fields when ``has_password`` is False. ``get_setup_status``
+    turns ANY decision — including a password-less one — into its
+    never-a-secret status report.
+
+    Attributes:
+        mechanism: ``"inline"`` (launch-arg host/user/dbname, password from
+            ``--password``/``REDSHIFT_PASSWORD`` or none at all — the
+            profile store was never consulted, or was consulted and had no
+            match/password to lend), ``"borrowed"`` (launch-arg host/user/
+            dbname, no inline password, but a stored profile whose host/
+            user/dbname all match lent its keychain password), or
+            ``"profile"`` (config.toml + keychain, no launch args).
+        host / port / user / dbname: the target the connection will actually
+            use. For ``"borrowed"`` this is always the INLINE values, never
+            the matched profile's — a stored profile may lend a password,
+            never a connection target.
+        has_fields: whether host/port/user/dbname are known at all. True
+            for ``"inline"``/``"borrowed"`` (launch args supplied all three
+            by construction); for ``"profile"``, False only when the
+            resolved profile has no config.toml entry.
+        has_password: whether a password is available to connect with.
+        password: the actual secret, or ``None``. ``get_setup_status`` never
+            reads this field — it reports ``has_password`` only.
+        profile_name: the profile that contributed the password — the
+            matched profile's name for ``"borrowed"``, the resolved active
+            profile for ``"profile"`` mode, or ``None`` for plain
+            ``"inline"`` (no profile is consulted at all in that case).
+    """
+
+    mechanism: str
+    host: Optional[str]
+    port: Optional[int]
+    user: Optional[str]
+    dbname: Optional[str]
+    has_fields: bool
+    has_password: bool
+    password: Optional[str]
+    profile_name: Optional[str]
+
+
+def resolve_profile_decision(profile_override: Optional[str] = None) -> ConnectionDecision:
+    """Resolve the profile-mode decision — config.toml + keychain only.
+
+    Routes the requested profile name through ``config.resolve_active_profile``
+    (the same CLI ``--profile`` > ``REDSHIFT_COMMENT_PROFILE`` env > active-
+    profile pointer file > implicit-fallback priority the server's own
+    ``--profile`` flag uses) instead of trusting ``profile_override`` verbatim
+    — fixing the pre-existing bug where ``get_setup_status`` read
+    ``cfg.read_profile("default")`` literally and never called
+    ``resolve_active_profile``, so a user whose only profile had another name
+    (the documented upgrade-rescue case) was told ``configured: false`` while
+    the server connected normally.
+
+    Used directly by ``get_setup_status`` when the server supplies no richer
+    ``status_provider``, and by ``server.resolve_connection_decision`` for its
+    own profile-mode branch, so the two never derive this independently.
+    """
+    from . import config as cfg
+    profile_name = cfg.resolve_active_profile(profile_override)
+    profile = cfg.read_profile(profile_name)
+    if not profile:
+        return ConnectionDecision(
+            mechanism="profile", host=None, port=None, user=None, dbname=None,
+            has_fields=False, has_password=False, password=None,
+            profile_name=profile_name,
+        )
+    password = cfg.get_password(profile_name)
+    return ConnectionDecision(
+        mechanism="profile",
+        host=profile["host"], port=profile["port"],
+        user=profile["user"], dbname=profile["dbname"],
+        has_fields=True, has_password=bool(password), password=password,
+        profile_name=profile_name,
+    )
 
 
 def _not_configured_error(exc: ConfigurationError) -> Dict[str, Any]:
@@ -526,8 +629,8 @@ class RedshiftTools:
     def __init__(
         self,
         config_provider: Callable[[], RedshiftConnectionConfig],
-        inline_status_provider: Optional[
-            Callable[[], Optional[tuple]]
+        status_provider: Optional[
+            Callable[[Optional[str]], ConnectionDecision]
         ] = None,
     ):
         """Construct a tool provider with a *lazy* connection-config resolver.
@@ -541,16 +644,25 @@ class RedshiftTools:
         ``{"error": "not_configured", ...}`` response — the server itself
         never crashes for missing-profile.
 
-        ``inline_status_provider`` (optional) lets ``get_setup_status`` report
-        legacy inline mode (server launched with ``--host/--user/--dbname`` +
-        ``REDSHIFT_PASSWORD`` env, e.g. the Claude Code plugin UI) truthfully.
-        It returns ``(host, port, user, has_password, dbname)`` when inline
-        mode is active, else ``None``. When ``None`` (the default — used by
-        every test and any non-server caller), ``get_setup_status`` falls back
-        to its profile/keychain inspection unchanged.
+        ``status_provider`` (optional) is the single decision
+        ``get_setup_status`` reports from. Given the tool call's ``profile``
+        argument (``None`` when omitted), it returns a :class:`ConnectionDecision`
+        — the connection target, mechanism (``"inline"`` / ``"borrowed"`` /
+        ``"profile"``), and password availability the server actually acts
+        on. The live server supplies ``server.resolve_connection_decision``
+        here, which is the exact function ``resolve_connection_params`` (the
+        connector) itself calls — so the two can no longer derive a
+        different answer for the same launch state. When ``None`` (the
+        default — used by every test that doesn't care about inline/borrowed
+        mode, and any non-server caller), ``get_setup_status`` falls back to
+        :func:`resolve_profile_decision` (config.toml + keychain only).
+
+        Replaces the old ``inline_status_provider`` seam, which returned a
+        bare ``(host, port, user, has_password, dbname)`` tuple and shared
+        only mode detection — not the full decision — with the connector.
         """
         self._config_provider = config_provider
-        self._inline_status_provider = inline_status_provider
+        self._status_provider = status_provider
         self.mcp = FastMCP(
             name="Redshift Comment MCP",
             instructions="""
@@ -1715,7 +1827,7 @@ the only chat-leak-free paths.
             }
 
         @self.mcp.tool
-        def get_setup_status(profile: str = "default") -> Dict[str, Any]:
+        def get_setup_status(profile: Optional[str] = None) -> Dict[str, Any]:
             """Read-only check of whether a profile is configured. Safe to
             call at any time including the very start of a session — does
             not touch Redshift, does not return any secrets.
@@ -1725,51 +1837,105 @@ the only chat-leak-free paths.
             not_configured error path), or to verify a setup_via_dialog
             call succeeded from a fresh angle.
 
+            ``profile`` overrides which profile to check in profile mode,
+            exactly like the CLI ``--profile`` flag — both go through
+            ``config.resolve_active_profile`` with the same priority. Omit
+            it (the default) to see the profile the server would actually
+            resolve to right now: ``REDSHIFT_COMMENT_PROFILE`` env var, then
+            the active-profile pointer file, then the upgrade-rescue
+            lone-profile fallback, before the literal ``"default"``. It has
+            no effect in inline / borrowed mode, where connection resolution
+            never consults a profile name at all.
+
             Returns:
-              - ``profile`` — the queried profile name
-              - ``source`` — ``"inline"`` when the server was launched in
-                legacy inline mode (``--host/--user/--dbname`` + ``REDSHIFT_
-                PASSWORD`` env, e.g. the Claude Code plugin UI), else
-                ``"profile"``. In inline mode the profile/keychain path is
-                bypassed entirely, so don't go hunting for an active profile.
+              - ``profile`` — in profile mode, the profile actually resolved
+                (which may differ from what you passed, or from the literal
+                "default", per the resolution above); in inline / borrowed
+                mode, the raw argument echoed back (irrelevant to resolution
+                there)
+              - ``source`` — the mechanism actually in force:
+                ``"inline"`` (launch-arg host/user/dbname, password from
+                ``--password``/``REDSHIFT_PASSWORD`` or none), ``"borrowed"``
+                (launch-arg host/user/dbname, no inline password, but a
+                stored profile whose host/user/dbname all match lent its
+                keychain password — the connection target is still the
+                INLINE values, never the matched profile's — see W0-01), or
+                ``"profile"`` (config.toml + keychain, no launch args)
               - ``configured`` — bool, equivalent to has_fields && has_password
-              - ``has_fields`` — whether config.toml has this profile's
-                non-secret fields (host / port / user / dbname); in inline mode,
-                True (the fields came from launch args)
-              - ``has_password`` — whether a password is available (OS keychain
-                in profile mode; ``REDSHIFT_PASSWORD`` / ``--password`` in inline
-                mode). NEVER returns the password itself
-              - ``host`` / ``port`` / ``user`` / ``dbname`` — present only
-                when has_fields=True (these are non-secret)
+              - ``has_fields`` — whether the connection target (host / port /
+                user / dbname) is known; in inline / borrowed mode, always
+                True (the fields came from launch args); in profile mode,
+                False only when the resolved profile has no config.toml entry
+              - ``has_password`` — whether a password is available (OS
+                keychain in profile / borrowed mode; ``REDSHIFT_PASSWORD`` /
+                ``--password`` in plain inline mode). NEVER returns the
+                password itself
+              - ``host`` / ``port`` / ``user`` / ``dbname`` — the target the
+                connection will actually use, present only when
+                has_fields=True (these are non-secret)
+              - ``borrowed_from_profile`` — present only when
+                source="borrowed": the name of the profile whose keychain
+                password was borrowed
               - ``next_step`` — present only when configured=False;
                 actionable hint pointing at the right mechanism for the mode
             """
-            from . import config as cfg
-
-            # Inline mode short-circuit: when the server was launched with
-            # complete inline connection args, the profile/keychain path is
-            # bypassed by resolve_connection_params (it ignores the profile
-            # name entirely). Reporting profile/keychain state here would be a
-            # false "not configured" — the very bug this branch fixes.
-            inline = (
-                self._inline_status_provider()
-                if self._inline_status_provider is not None
-                else None
+            # Single decision, read — never re-derived. The live server hands
+            # in server.resolve_connection_decision, the exact function
+            # resolve_connection_params (the connector) itself calls, so this
+            # tool cannot report a different mechanism/target than the one
+            # the server actually connects with. Standalone / test callers
+            # with no richer provider fall back to profile-mode-only
+            # resolution (see resolve_profile_decision's own docstring for
+            # why that alone still fixes the "always literal 'default'" bug).
+            decision = (
+                self._status_provider(profile)
+                if self._status_provider is not None
+                else resolve_profile_decision(profile)
             )
-            if inline is not None:
-                host, port, user, has_password, dbname = inline
-                result: Dict[str, Any] = {
-                    "profile": profile,
-                    "source": "inline",
-                    "configured": has_password,
-                    "has_fields": True,
-                    "has_password": has_password,
-                    "host": host,
-                    "port": port,
-                    "user": user,
-                    "dbname": dbname,
-                }
-                if not has_password:
+
+            result: Dict[str, Any] = {
+                "profile": (
+                    decision.profile_name if decision.mechanism == "profile"
+                    else (profile if profile is not None else "default")
+                ),
+                "source": decision.mechanism,
+                "configured": decision.has_password,
+                "has_fields": decision.has_fields,
+                "has_password": decision.has_password,
+            }
+
+            if decision.has_fields:
+                # Non-secret — safe to expose. Lets the agent show the user
+                # what's currently set up vs. what they're about to overwrite.
+                result["host"] = decision.host
+                result["port"] = decision.port
+                result["user"] = decision.user
+                result["dbname"] = decision.dbname
+
+            if decision.mechanism == "borrowed":
+                result["borrowed_from_profile"] = decision.profile_name
+
+            if not decision.has_password:
+                if decision.mechanism == "profile":
+                    if not decision.has_fields:
+                        result["next_step"] = (
+                            f"Profile '{decision.profile_name}' has no config.toml entry. "
+                            f"Call setup_via_dialog(host=..., user=..., "
+                            f"dbname=...) to provision it. Ask the user for "
+                            f"host/user/dbname conversationally — these are "
+                            f"not secrets."
+                        )
+                    else:
+                        result["next_step"] = (
+                            f"Profile '{decision.profile_name}' has fields but no password "
+                            f"in keychain. Call setup_via_dialog with the "
+                            f"existing values (or different ones to overwrite) "
+                            f"— the dialog will collect a password and store it."
+                        )
+                else:
+                    # mechanism == "inline" (a "borrowed" decision always
+                    # carries a password by construction — see
+                    # server.resolve_connection_decision).
                     result["next_step"] = (
                         "Inline mode: the server was launched with "
                         "host/user/dbname but no password. Set the "
@@ -1777,44 +1943,6 @@ the only chat-leak-free paths.
                         "the MCP server is launched — e.g. the plugin's "
                         "Password field in the Claude Code install UI — then "
                         "restart the MCP client."
-                    )
-                return result
-
-            profile_data = cfg.read_profile(profile)
-            has_fields = profile_data is not None
-            has_password = cfg.get_password(profile) is not None
-
-            result: Dict[str, Any] = {
-                "profile": profile,
-                "source": "profile",
-                "configured": has_fields and has_password,
-                "has_fields": has_fields,
-                "has_password": has_password,
-            }
-
-            if has_fields:
-                # Non-secret — safe to expose. Lets the agent show the user
-                # what's currently set up vs. what they're about to overwrite.
-                result["host"] = profile_data["host"]
-                result["port"] = profile_data["port"]
-                result["user"] = profile_data["user"]
-                result["dbname"] = profile_data["dbname"]
-
-            if not result["configured"]:
-                if not has_fields:
-                    result["next_step"] = (
-                        f"Profile '{profile}' has no config.toml entry. "
-                        f"Call setup_via_dialog(host=..., user=..., "
-                        f"dbname=...) to provision it. Ask the user for "
-                        f"host/user/dbname conversationally — these are "
-                        f"not secrets."
-                    )
-                else:
-                    result["next_step"] = (
-                        f"Profile '{profile}' has fields but no password "
-                        f"in keychain. Call setup_via_dialog with the "
-                        f"existing values (or different ones to overwrite) "
-                        f"— the dialog will collect a password and store it."
                     )
 
             return result

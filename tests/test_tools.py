@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch, Mock
 from contextlib import contextmanager
 from redshift_comment_mcp.redshift_tools import (
     RedshiftTools,
+    ConnectionDecision,
     paginate_results,
     apply_comment_cap,
     build_scale_hint,
@@ -3315,6 +3316,12 @@ class TestGetSetupStatusTool:
                             lambda name: None)
         monkeypatch.setattr('redshift_comment_mcp.config.get_password',
                             lambda name: None)
+        # No explicit profile arg is passed below, so get_setup_status now
+        # resolves through resolve_active_profile (fixing the pre-existing
+        # "always literal 'default'" bug) rather than reading the real
+        # on-disk config.toml directly — pin what it resolves to.
+        monkeypatch.setattr('redshift_comment_mcp.config.resolve_active_profile',
+                            lambda cli_profile=None: cli_profile or "default")
 
         tools = self._make_tools()
         get_setup_status = _get_tool_fn(tools, 'get_setup_status')
@@ -3341,6 +3348,8 @@ class TestGetSetupStatusTool:
         )
         monkeypatch.setattr('redshift_comment_mcp.config.get_password',
                             lambda name: None)
+        monkeypatch.setattr('redshift_comment_mcp.config.resolve_active_profile',
+                            lambda cli_profile=None: cli_profile or "default")
 
         tools = self._make_tools()
         get_setup_status = _get_tool_fn(tools, 'get_setup_status')
@@ -3390,6 +3399,8 @@ class TestGetSetupStatusTool:
         )
         monkeypatch.setattr('redshift_comment_mcp.config.get_password',
                             lambda name: secret)
+        monkeypatch.setattr('redshift_comment_mcp.config.resolve_active_profile',
+                            lambda cli_profile=None: cli_profile or "default")
 
         tools = self._make_tools()
         get_setup_status = _get_tool_fn(tools, 'get_setup_status')
@@ -3418,6 +3429,8 @@ class TestGetSetupStatusTool:
                             lambda name: None)
         monkeypatch.setattr('redshift_comment_mcp.config.get_password',
                             lambda name: None)
+        monkeypatch.setattr('redshift_comment_mcp.config.resolve_active_profile',
+                            lambda cli_profile=None: cli_profile or "default")
 
         tools = RedshiftTools(failing_provider)
         get_setup_status = _get_tool_fn(tools, 'get_setup_status')
@@ -3439,6 +3452,8 @@ class TestGetSetupStatusTool:
         )
         monkeypatch.setattr('redshift_comment_mcp.config.get_password',
                             lambda name: 'pw')
+        monkeypatch.setattr('redshift_comment_mcp.config.resolve_active_profile',
+                            lambda cli_profile=None: cli_profile or "default")
 
         tools = self._make_tools()
         get_setup_status = _get_tool_fn(tools, 'get_setup_status')
@@ -3451,7 +3466,14 @@ class TestGetSetupStatusTool:
         dbname + REDSHIFT_PASSWORD env). get_setup_status must report
         configured=True with source='inline' — NOT a false 'not configured'
         derived from the unused profile/keychain path. It must NOT depend on
-        the keychain at all in this mode."""
+        the keychain at all in this mode.
+
+        Uses ``status_provider`` — the single decision seam that replaced
+        the old inline-only ``inline_status_provider`` (which shared only
+        mode detection, not the full decision) — supplying a
+        ``ConnectionDecision`` the way ``server.resolve_connection_decision``
+        does in production.
+        """
         # Profile/keychain are EMPTY — proves inline path is independent of them.
         monkeypatch.setattr('redshift_comment_mcp.config.read_profile',
                             lambda name: None)
@@ -3463,8 +3485,12 @@ class TestGetSetupStatusTool:
             raise ConfigurationError("doesn't matter")
         tools = RedshiftTools(
             provider,
-            inline_status_provider=lambda: (
-                "h.example.com", 5439, "yihan.chang", True, "dbt_pipeline"
+            status_provider=lambda profile: ConnectionDecision(
+                mechanism="inline",
+                host="h.example.com", port=5439, user="yihan.chang",
+                dbname="dbt_pipeline",
+                has_fields=True, has_password=True, password="env-password",
+                profile_name=None,
             ),
         )
         get_setup_status = _get_tool_fn(tools, 'get_setup_status')
@@ -3480,6 +3506,10 @@ class TestGetSetupStatusTool:
         assert result["dbname"] == "dbt_pipeline"
         assert "next_step" not in result
 
+        # Hard security invariant, same as test_get_setup_status_never_returns_password_value.
+        import json
+        assert "env-password" not in json.dumps(result)
+
     def test_get_setup_status_inline_mode_missing_password(self, monkeypatch):
         """Inline host/user/dbname present but no password (REDSHIFT_PASSWORD
         unset / blank) → configured=False, source='inline', and next_step
@@ -3494,8 +3524,11 @@ class TestGetSetupStatusTool:
             raise ConfigurationError("doesn't matter")
         tools = RedshiftTools(
             provider,
-            inline_status_provider=lambda: (
-                "h.example.com", 5439, "alice", False, "analytics"
+            status_provider=lambda profile: ConnectionDecision(
+                mechanism="inline",
+                host="h.example.com", port=5439, user="alice", dbname="analytics",
+                has_fields=True, has_password=False, password=None,
+                profile_name=None,
             ),
         )
         get_setup_status = _get_tool_fn(tools, 'get_setup_status')
@@ -3507,3 +3540,93 @@ class TestGetSetupStatusTool:
         assert result["has_fields"] is True
         assert result["has_password"] is False
         assert "REDSHIFT_PASSWORD" in result["next_step"]
+
+    def test_get_setup_status_borrowed_mode_reports_inline_host_and_borrowed_source(
+        self, monkeypatch,
+    ):
+        """W0-02 A3 positive. W0-01 lets the server borrow a keychain
+        password from a profile whose host/user/dbname all match the inline
+        launch values, and connect to the INLINE target. get_setup_status
+        must report that exact mechanism (neither plain 'inline' nor plain
+        'profile') and the inline target — not the matched profile's — plus
+        which profile the password came from, so an agent reading this tool
+        can tell what actually happened."""
+        secret = "borrowed-pw-should-never-leak"
+        from redshift_comment_mcp.config import ConfigurationError
+        def provider():
+            raise ConfigurationError("doesn't matter — get_setup_status doesn't touch the provider")
+        tools = RedshiftTools(
+            provider,
+            status_provider=lambda profile: ConnectionDecision(
+                mechanism="borrowed",
+                host="h.example.com", port=5439, user="yihan.chang",
+                dbname="dbt_pipeline",
+                has_fields=True, has_password=True, password=secret,
+                profile_name="default",
+            ),
+        )
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+
+        assert result["configured"] is True
+        assert result["source"] == "borrowed"
+        assert result["has_fields"] is True
+        assert result["has_password"] is True
+        assert result["host"] == "h.example.com"
+        assert result["user"] == "yihan.chang"
+        assert result["dbname"] == "dbt_pipeline"
+        assert result["borrowed_from_profile"] == "default"
+        assert "next_step" not in result
+
+        import json
+        assert secret not in json.dumps(result), (
+            "get_setup_status leaked the borrowed password value in the "
+            "response — this is a security regression"
+        )
+
+    def test_get_setup_status_profile_mode_named_other_than_default_reports_configured(
+        self, tmp_path, monkeypatch,
+    ):
+        """W0-02 A3 negative. Pre-existing bug: get_setup_status read
+        cfg.read_profile(profile) using the literal default "default" and
+        never called resolve_active_profile — so a user whose only profile
+        has another name (the documented upgrade-rescue case in config.py's
+        resolve_active_profile) was told configured=False while the server
+        connects normally. Exercises the REAL config store + the real
+        resolve_active_profile (not a stub) so the upgrade-rescue fallback
+        itself is under test, mirroring
+        test_server_resolution.test_profile_mode_single_non_default_profile_auto_resolves.
+        """
+        monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+        storage: dict = {}
+        import keyring as _kr
+        monkeypatch.setattr(
+            _kr, "set_password",
+            lambda service, user, password: storage.__setitem__((service, user), password),
+        )
+        monkeypatch.setattr(_kr, "get_password", lambda service, user: storage.get((service, user)))
+
+        from redshift_comment_mcp import config as cfg
+        cfg.write_profile(
+            "ichef-prod",
+            host="ichef-prod.example.com", port=5439, user="alice", dbname="warehouse",
+        )
+        cfg.set_password("ichef-prod", "ichef-pw")
+
+        tools = self._make_tools()
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()  # no profile arg — must not assume "default"
+
+        assert result["configured"] is True
+        assert result["source"] == "profile"
+        assert result["profile"] == "ichef-prod"
+        assert result["has_fields"] is True
+        assert result["has_password"] is True
+        assert result["host"] == "ichef-prod.example.com"
+        assert result["user"] == "alice"
+        assert result["dbname"] == "warehouse"
+
+        import json
+        assert "ichef-pw" not in json.dumps(result)
