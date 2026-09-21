@@ -55,6 +55,27 @@ SETUP_SUBCOMMANDS = {
 }
 
 
+def _resolve_inline_password(args: argparse.Namespace) -> Optional[str]:
+    """Return the inline password value, or ``None`` if absent/placeholder.
+
+    Runs ``args.password`` and the ``REDSHIFT_PASSWORD`` env var through the
+    exact same ``_normalize_inline`` every other inline field (host / user /
+    dbname) already gets. Without this, an unsubstituted ``${user_config...}``
+    placeholder literal — or a host that substitutes env the way it
+    substitutes argv — would be a truthy string: ``has_password`` would
+    report ``True`` and the server would authenticate with the literal
+    placeholder text instead of treating it as no password at all.
+
+    A single function so ``resolve_inline_params`` (presence only) and
+    ``resolve_connection_decision`` (the actual value) can never derive a
+    different answer from each other, the same reason ``ConnectionDecision``
+    replaced the old bare-tuple seam.
+    """
+    return _normalize_inline(getattr(args, "password", None)) or _normalize_inline(
+        os.getenv("REDSHIFT_PASSWORD")
+    )
+
+
 def resolve_inline_params(
     args: argparse.Namespace,
 ) -> Optional[tuple[str, int, str, bool, str]]:
@@ -66,18 +87,20 @@ def resolve_inline_params(
     applies), else ``None``.
 
     ``has_password`` reflects presence of ``args.password`` or the
-    ``REDSHIFT_PASSWORD`` env var — it NEVER returns the secret itself. This
-    is the detection ``resolve_connection_decision`` below reuses so the
-    connector and ``get_setup_status`` always agree on whether inline (or
-    borrowed) mode is active, without ``get_setup_status`` ever handling the
-    password value itself.
+    ``REDSHIFT_PASSWORD`` env var, both normalized by
+    ``_resolve_inline_password`` so an unsubstituted placeholder or blank
+    value is "unset" rather than a truthy secret — it NEVER returns the
+    secret itself. This is the detection ``resolve_connection_decision``
+    below reuses so the connector and ``get_setup_status`` always agree on
+    whether inline (or borrowed) mode is active, without ``get_setup_status``
+    ever handling the password value itself.
     """
     host = _normalize_inline(args.host)
     user = _normalize_inline(args.user)
     dbname = _normalize_inline(args.dbname)
     if not (host and user and dbname):
         return None
-    has_password = bool(getattr(args, "password", None) or os.getenv("REDSHIFT_PASSWORD"))
+    has_password = bool(_resolve_inline_password(args))
     return host, _coerce_port(args.port), user, has_password, dbname
 
 
@@ -117,8 +140,10 @@ def resolve_connection_decision(
         if has_password:
             # Re-derive the password value here: resolve_inline_params
             # deliberately returns only presence (has_password bool), never
-            # the secret.
-            password = args.password or os.getenv('REDSHIFT_PASSWORD')
+            # the secret. Reuses _resolve_inline_password so this can never
+            # disagree with the presence check above about what counts as a
+            # real password (see W0-03).
+            password = _resolve_inline_password(args)
             return ConnectionDecision(
                 mechanism="inline", host=host, port=port, user=user, dbname=dbname,
                 has_fields=True, has_password=True, password=password,
@@ -171,8 +196,10 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
     to the mechanism and the specific way it fell short — pointing at both
     ``/redshift-comment-mcp:redshift-setup`` (Claude Code skill) and
     ``redshift-comment-mcp setup`` (CLI, e.g. ``uvx redshift-comment-mcp
-    setup``) for profile mode, or at ``--password`` / ``REDSHIFT_PASSWORD``
-    and the existing profiles available to borrow from for inline mode.
+    setup``) for profile mode, or at the ``REDSHIFT_PASSWORD`` env var and
+    the existing profiles available to borrow from for inline mode (never
+    at ``--password`` — see W0-03: no server-authored message recommends
+    that flag, though it remains a supported inline-launch argument).
     Surfaces a helpful next step regardless of whether the caller has the
     Claude Code plugin installed. Code paths that should react in-process
     (e.g. degraded-mode MCP tools returning a structured not_configured
@@ -199,8 +226,8 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
             f"user={decision.user!r} dbname={decision.dbname!r}, and no stored profile's "
             f"host/user/dbname all match it to borrow one from.\n"
             f"Existing profiles: {existing_desc}.\n"
-            f"Provide --password CLI flag or REDSHIFT_PASSWORD env var, or "
-            f"configure a profile matching this exact host/user/dbname via "
+            f"Provide the REDSHIFT_PASSWORD env var, or configure a profile "
+            f"matching this exact host/user/dbname via "
             f"/redshift-comment-mcp:redshift-setup."
         )
 

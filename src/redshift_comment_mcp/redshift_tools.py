@@ -1939,10 +1939,11 @@ the only chat-leak-free paths.
                     result["next_step"] = (
                         "Inline mode: the server was launched with "
                         "host/user/dbname but no password. Set the "
-                        "REDSHIFT_PASSWORD env var (or pass --password) where "
-                        "the MCP server is launched — e.g. the plugin's "
-                        "Password field in the Claude Code install UI — then "
-                        "restart the MCP client."
+                        "REDSHIFT_PASSWORD env var where the MCP server is "
+                        "launched — e.g. the plugin's Password field in the "
+                        "Claude Code install UI — then restart the MCP "
+                        "client. Never pass the password as a tool argument "
+                        "or shell argument."
                     )
 
             return result

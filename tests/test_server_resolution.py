@@ -462,3 +462,207 @@ def test_named_profile_typo_error_lists_existing_profiles(
     assert "wrong-name" in msg
     # Existing profile must be named so the user can correct the typo.
     assert "prod-warehouse" in msg
+
+
+# ===== W0-03 / A4: the password channel gets the same normalization every
+# other inline field gets =====
+# `_normalize_inline` already maps "" and an unsubstituted `${user_config...}`
+# literal to "unset" for host/user/dbname. The password value skipped that
+# normalization entirely (both `args.password` and `REDSHIFT_PASSWORD`), so
+# a host that ever substitutes env the way it substitutes argv would hand a
+# truthy placeholder string to `has_password` and to the actual connection
+# attempt. The password must go through the exact same normalization.
+
+
+def test_resolve_inline_params_password_placeholder_is_no_password(tmp_xdg, monkeypatch):
+    """A4 positive: an unsubstituted userConfig placeholder in --password is
+    'unset', not a real password — has_password must be False."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="h", user="u", dbname="d", password="${user_config.password}")
+    assert server.resolve_inline_params(args) == ("h", 5439, "u", False, "d")
+
+
+def test_resolve_inline_params_password_env_placeholder_is_no_password(tmp_xdg, monkeypatch):
+    """A4 positive, env-var channel: the same unsubstituted-placeholder
+    literal arriving via REDSHIFT_PASSWORD (not just --password) must also
+    be treated as no password."""
+    monkeypatch.setenv("REDSHIFT_PASSWORD", "${user_config.password}")
+    args = _ns(host="h", user="u", dbname="d")
+    assert server.resolve_inline_params(args) == ("h", 5439, "u", False, "d")
+
+
+def test_resolve_inline_params_blank_password_is_no_password(tmp_xdg, monkeypatch):
+    """A4 positive, blank string (the other half of `_normalize_inline`'s
+    contract): an empty --password must be no password, not a truthy ''."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="h", user="u", dbname="d", password="")
+    assert server.resolve_inline_params(args) == ("h", 5439, "u", False, "d")
+
+
+def test_resolve_inline_params_real_password_unaffected(tmp_xdg, monkeypatch):
+    """A4 negative: a genuine password value must pass through the new
+    normalization completely unchanged — has_password True, and (checked
+    below via resolve_connection_params) the exact string is used to
+    connect, not a mangled or re-derived one."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="h", user="u", dbname="d", password="realsecret")
+    assert server.resolve_inline_params(args) == ("h", 5439, "u", True, "d")
+
+
+def test_inline_password_real_value_unaffected_by_normalization(tmp_xdg, fake_keyring, monkeypatch):
+    """A4 negative, end-to-end: resolve_connection_params must still return
+    the real password verbatim once it goes through the shared normalization
+    helper — the fix must not alter or truncate an actual secret."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="h", user="u", dbname="d", password="realsecret")
+    assert server.resolve_connection_params(args) == ("h", 5439, "u", "realsecret", "d")
+
+
+def test_inline_placeholder_password_falls_through_to_borrow(tmp_xdg, fake_keyring, monkeypatch):
+    """A4 end-to-end with W0-01: an unsubstituted placeholder --password must
+    not block the borrow path — with a profile matching the inline triple,
+    the connection borrows its keychain password exactly as if no --password
+    had been supplied at all, instead of authenticating with the literal
+    placeholder string and failing confusingly."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "default", host="h.example.com", port=5440, user="u", dbname="d",
+    )
+    config.set_password("default", "borrowed-pw")
+    args = _ns(host="h.example.com", user="u", dbname="d", password="${user_config.password}")
+    assert server.resolve_connection_params(args) == (
+        "h.example.com", 5439, "u", "borrowed-pw", "d"
+    )
+
+
+def test_inline_placeholder_password_with_no_matching_profile_raises(tmp_xdg, fake_keyring, monkeypatch):
+    """A4 boundary: a placeholder password with nothing to borrow from must
+    raise the same as a genuinely absent password, not authenticate with the
+    placeholder literal."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="inline.example.com", user="u", dbname="d", password="${user_config.password}")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    assert "inline.example.com" in str(excinfo.value)
+
+
+# ===== W0-03 / A5: no message recommends passing the password as argv =====
+# `--password` stays a supported flag (README documents inline launch args
+# as a public integration path for other MCP clients) — only messages that
+# *recommend* it as a way to supply a password are in scope. A prohibition
+# ("Never pass the password as a tool argument or shell argument") and the
+# argparse --help text for the flag's own existence are not recommendations
+# and must survive untouched.
+
+
+def test_missing_password_error_does_not_recommend_password_flag(tmp_xdg, fake_keyring, monkeypatch):
+    """A5 positive: the inline missing-password error must no longer tell
+    the reader to pass --password — the one path that puts the secret into
+    argv, shell history and (for an agent) the session transcript."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="h", user="u", dbname="d")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    assert "--password" not in str(excinfo.value)
+
+
+def test_missing_password_error_still_mentions_env_var(tmp_xdg, fake_keyring, monkeypatch):
+    """A5 boundary: the safe channel's guidance must survive — removing the
+    --password recommendation must not also remove the REDSHIFT_PASSWORD
+    env var guidance."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="h", user="u", dbname="d")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    assert "REDSHIFT_PASSWORD" in str(excinfo.value)
+
+
+def _get_tool_fn(tools, name):
+    """Pull a registered tool's callable, surviving FastMCP API churn.
+
+    Duplicated from tests/test_tools.py rather than imported, to keep this
+    file's only cross-module dependency the one declared at the top
+    (``redshift_comment_mcp.server`` / ``config``) — see that file's own
+    copy for the FastMCP 2.x/3.x compatibility note this exists for.
+    """
+    import asyncio
+    lister = getattr(tools.mcp, 'list_tools', None) or tools.mcp._list_tools
+    for t in asyncio.run(lister()):
+        if t.name == name:
+            return t.fn
+    raise KeyError(f"tool {name!r} not registered")
+
+
+def test_get_setup_status_inline_next_step_does_not_recommend_password_flag():
+    """A5 positive, the second site the intent doc flags: get_setup_status's
+    next_step for inline-mode-missing-password must not recommend
+    --password either. This reader is an agent with shell access — the one
+    most likely to act on the recommendation literally."""
+    from redshift_comment_mcp.redshift_tools import RedshiftTools, ConnectionDecision
+    from redshift_comment_mcp.config import ConfigurationError
+
+    def provider():
+        raise ConfigurationError("doesn't matter — get_setup_status doesn't touch the provider")
+
+    tools = RedshiftTools(
+        provider,
+        status_provider=lambda profile: ConnectionDecision(
+            mechanism="inline",
+            host="h.example.com", port=5439, user="alice", dbname="analytics",
+            has_fields=True, has_password=False, password=None,
+            profile_name=None,
+        ),
+    )
+    get_setup_status = _get_tool_fn(tools, "get_setup_status")
+
+    result = get_setup_status()
+    assert "--password" not in result["next_step"]
+    assert "REDSHIFT_PASSWORD" in result["next_step"]
+
+
+def test_no_stray_password_flag_recommendation_in_source():
+    """A5 regression guard: scan server.py's and redshift_tools.py's own
+    source text for the literal substring '--password' and confirm every
+    remaining occurrence is one of the two allowed shapes:
+
+      1. the argparse flag's own declaration (`"--password",` inside
+         `add_argument(...)`) — documents the flag, doesn't tell anyone to
+         use it;
+      2. an RST-style code reference inside a docstring, always spelled
+         `` ``--password`` `` (double-backtick-quoted) — internal
+         architecture documentation of what the (still-supported) inline
+         mechanism can consume, not an instruction to the reader.
+
+    Every other occurrence is imperative guidance text (e.g. "Provide
+    --password ..." / "... or pass --password ..."), which is exactly what
+    this task removes. Grepping the message strings rather than asserting
+    on today's two known call sites makes this durable: a future edit that
+    reintroduces the recommendation anywhere in either module — not just at
+    the two sites this task touched — fails this test.
+
+    A literal prohibition such as "Never pass the password as a tool
+    argument or shell argument" or "DO NOT pass the password as a tool
+    argument" never contains the substring '--password' at all (it says
+    "tool argument" / "shell argument", not the flag spelling), so it can
+    never collide with either allowed shape above and needs no special
+    casing here.
+    """
+    import re
+    from redshift_comment_mcp import server as server_module
+    from redshift_comment_mcp import redshift_tools as redshift_tools_module
+
+    argparse_decl_re = re.compile(r'^\s*"--password",\s*$')
+    docstring_ref_re = re.compile(r'``[^`]*--password[^`]*``')
+
+    for module in (server_module, redshift_tools_module):
+        with open(module.__file__, encoding="utf-8") as f:
+            lines = f.readlines()
+        for lineno, line in enumerate(lines, start=1):
+            if "--password" not in line:
+                continue
+            allowed = bool(argparse_decl_re.match(line)) or bool(docstring_ref_re.search(line))
+            assert allowed, (
+                f"{module.__file__}:{lineno} recommends the --password flag "
+                f"as a way to supply a password — remove the recommendation, "
+                f"keeping any REDSHIFT_PASSWORD env var guidance:\n{line!r}"
+            )
