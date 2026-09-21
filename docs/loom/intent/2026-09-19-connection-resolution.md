@@ -1,7 +1,7 @@
 # The server must connect the way it says it will
 originator: kouko
 kind: engineering
-needs-design: no — no new CLI argument, MCP tool signature or response field is introduced; the plugin manifest's fields and the profile schema are unchanged. Existing message text and one status field's value change, and `docs/loom/**` and `README*.md` are not declared interface surfaces.
+needs-design: no — corrected 2026-09-21: the original wording claimed no response field was introduced, which is false. `get_setup_status` gained an optional non-secret `borrowed_from_profile` field and its `source` gained a third value, `borrowed`; `profile` now returns null for inline and borrowed modes. Still no spec: no new tool, no new CLI argument, no new surface — one optional field on an existing tool, whose meaning the tool's own published description carries. The profile schema is unchanged, and `docs/loom/**` and `README*.md` are not declared interface surfaces.
 evidence: [docs/loom/audits/2026-09-17-credential-audit.md, docs/loom/2026-09-18-config-store-integrity/attestation.json]
 status: confirmed 2026-09-21
 publication: automatic — authorized 2026-09-21 by kouko
@@ -50,6 +50,9 @@ the operator did not name.
 2. With connection fields supplied, no password available, and no profile
    matching all four, the server refuses to connect and its message names both
    the supplied target and each existing profile's target.
+8. With connection fields supplied, no password available, and more than one
+   profile matching all four, the server refuses to connect and its message
+   names every tied candidate.
 3. `get_setup_status` reports the same mechanism and the same target the server
    would actually use, including for a profile whose name is not `"default"`.
 4. A launch in which the password arrives as an unsubstituted configuration
@@ -60,6 +63,14 @@ the operator did not name.
    about leaving the password blank, and that rule is the one the code follows.
 7. Every acceptance line above is covered by a test that fails against the
    pre-change code.
+
+Acceptance 8 was added on 2026-09-21, during review. The tie it names was
+an agent decision taken while closing an adversary finding: two profiles
+recorded for the same target with different passwords are the state a
+credential rotation leaves, and picking by sort order could silently prefer
+the retired secret. Refusing is checkable from config.toml alone, so no
+secret is compared. It is written here because it is a behaviour a launch
+sees, and the maintainer accepts on a report that must describe it.
 
 Acceptance 1 and 2 were amended on 2026-09-21, after confirmation and
 before review, from a three-field match (host, user, dbname) to the full
