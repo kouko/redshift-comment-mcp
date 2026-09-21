@@ -2,7 +2,16 @@
 
 **結論：八條驗收條件全部通過（PASS）。**（原本七條，2026-09-21 審查期間新增第 8 條。）
 
-**這份報告描述的版本是 `c442b79`。**
+**這份報告描述的版本是 `83116be`。**
+
+> **第六次修訂（版本 `83116be`）：我上一版提的兩個小問題都修好了，這一版把它們
+> 結案，並且回答一個自動化檢查測不到的問題。**
+> `83116be` 改動很小：一條錯誤訊息、外掛表單三欄的說明、五個新測試。我只重新
+> 量了它動得到的兩條——第 2 條（拒絕訊息的文字）和第 6 條（外掛表單和程式是否
+> 相符），其餘沿用，理由寫在下面，不是引用檔案差異。
+> 另外我照要求做了一件自動化檢查做不到的事：**把外掛表單那四欄的說明，當成
+> 第一次安裝的人那樣一欄一欄分開讀**，判斷單獨看任何一欄會不會被誤導。
+> 結論是「大致準確，但有兩處單獨讀會踩到」，寫在第 6 條末尾。
 
 > **第五次修訂（版本 `c442b79`）：我上一版標成「最值得你看」的那個缺陷，
 > 在我寫完之後兩個提交就已經修好了，我卻沒有說。**
@@ -75,8 +84,25 @@
   外加 `plugin.json` 也被改過。這四項我都重新跑了。
 
 結果：**第 5 條仍然是 0**，**第 6 條的表格一格未變**，第 2、8 條的訊息重新取樣
-後結論不變。單元測試 **462 通過、2 跳過**，38 個對抗測試案例全綠且未被修改。
-這次解析到的 **fastmcp 版本是 4.0.5**。第 7 條的反向驗證也重跑（見該條）。
+後結論不變。第 7 條的反向驗證也重跑（見該條）。
+
+**第六次修訂（`83116be`）我重驗了哪些、為什麼不是全部。** 這次的改動我自己清點
+過範圍：**一條錯誤訊息字串、外掛表單三欄的說明、五個新測試**，程式的其他部分
+語法樹完全相同（`redshift_tools.py` 一字未動，`server.py` 只有那一條字串）。
+所以我重新量的是它動得到的兩條：
+
+- **第 2 條**（以及同源的第 8 條）——拒絕訊息的文字改了，所以訊息證據重新取樣。
+- **第 6 條**——外掛表單三欄的說明改了，所以整張「程式規則 vs 五個表面」的表格
+  重新跑，再加上一輪**人工逐欄閱讀**（見第 6 條末尾）。
+
+其餘各條**沿用**，理由不是「差異很小」，而是：第 1、3、4 條由連線決策邏輯決定，
+而這次沒有任何一行決策邏輯改變（語法樹比對確認）；第 5 條問的是「送上線的表面
+有沒有提到 `--password`」，這次改到的兩處文字我都查過，沒有引入這個字串；
+第 7 條的測試集變大了，所以還是重跑了反向驗證。
+
+單元測試 **467 通過、2 跳過**，38 個對抗測試案例**全綠，而且我確認過檔案未被
+修改**（在乾淨副本裡查過版本控制狀態，探針目錄沒有任何改動）。這次解析到的
+**fastmcp 版本是 4.0.5**。
 
 全程設定檔位置指向用完即丟的暫存資料夾，鑰匙圈**全程換成只存在記憶體裡的假貨**。
 你電腦上真正的設定檔和系統鑰匙圈從頭到尾沒有被寫入過——驗證前後都比對過，結果
@@ -244,7 +270,7 @@ password。**改之前**，只要你填了前面幾欄、密碼欄留空，伺�
   ```
   Inline mode requires a password for host='warehouse.example.com' port=5439 user='analyst' dbname='prod', and 2 stored profiles all match that exact target: 'rotated-new', 'rotated-old'. Refusing to guess which one to borrow — picking by sort order could silently prefer a retired credential over its replacement, the shape a credential rotation leaves behind.
   Existing profiles: 'rotated-new' (host='warehouse.example.com' port=5439 user='analyst' dbname='prod'), 'rotated-old' (host='warehouse.example.com' port=5439 user='analyst' dbname='prod').
-  Delete or rename the stale profile so only one matches this target, or provide the REDSHIFT_PASSWORD env var directly.
+  Delete the stale profile with `redshift-comment-mcp delete-profile --profile <name>` so only one matches this target, or provide the REDSHIFT_PASSWORD env var directly.
   ```
 
   我逐項檢查了這則訊息**有沒有亂講話**：
@@ -331,7 +357,7 @@ password。**改之前**，只要你填了前面幾欄、密碼欄留空，伺�
   ```
   Inline mode requires a password for host='warehouse.example.com' port=5439 user='analyst' dbname='prod', and 3 stored profiles all match that exact target: 'rot-2024', 'rot-2025', 'rot-2026'. Refusing to guess which one to borrow — picking by sort order could silently prefer a retired credential over its replacement, the shape a credential rotation leaves behind.
   Existing profiles: 'rot-2024' (host='warehouse.example.com' port=5439 user='analyst' dbname='prod'), 'rot-2025' (host='warehouse.example.com' port=5439 user='analyst' dbname='prod'), 'rot-2026' (host='warehouse.example.com' port=5439 user='analyst' dbname='prod').
-  Delete or rename the stale profile so only one matches this target, or provide the REDSHIFT_PASSWORD env var directly.
+  Delete the stale profile with `redshift-comment-mcp delete-profile --profile <name>` so only one matches this target, or provide the REDSHIFT_PASSWORD env var directly.
   ```
 
   ```
@@ -524,24 +550,72 @@ password。**改之前**，只要你填了前面幾欄、密碼欄留空，伺�
 - **但 R5、R6、R7 三條規則目前沒有任何使用者看得到的地方寫。** 它們是不是屬於
   「密碼留空這條規則」的一部分，可以爭論——R5、R6 是這條規則底下的**子條件**，
   R7 講的是「host/user/dbname 留空」而不是「密碼留空」。我不把它們算成第 6 條
-  的 FAIL，但**其中 R6 我認為是這次最值得你看的一項**，因為它不只是沒寫，而是
-  出事時的訊息會自相矛盾。三條都寫在後面「驗收條件沒點到」那一節。
+  的 FAIL。R5、R6 現在**出事時訊息都會自己解釋**（R6 是 `aea929b` 補的），
+  所以實際影響不大；三條都寫在後面「驗收條件沒點到」那一節。
+
+#### 逐欄閱讀：把安裝對話框當成第一次安裝的人那樣，一欄一欄分開看
+
+自動化檢查只能確認「某句話有沒有出現在某份文件裡」，沒辦法判斷「單獨讀這一欄
+會不會被誤導」。`83116be` 把 host / user / dbname 三欄的說明改長了，每一欄現在
+同時扛兩條規則（三欄要一起留空、以及密碼是例外），所以我照要求把四欄**分開**
+讀了一遍——**假裝我看不到其他三欄**，因為安裝對話框就是這樣一欄一欄呈現的。
+
+**結論：三欄的敘述都準確，我沒有找到會導致錯誤操作的說法；但有兩處單獨讀會踩到。**
+
+先講準確的部分。以 host 欄為例，它現在說的四件事我逐一實測，全部為真：
+
+| 這一欄說的話 | 我實測的結果 |
+|---|---|
+| host / user / dbname 要嘛一起填、要嘛一起留空 | 是（三者少一個就整個退回設定檔） |
+| 三個一起留空 → 走 `/redshift-setup` 的設定檔路徑 | 是 |
+| 只留空這一個 → 整個退回設定檔，連你打進 user、dbname **和密碼**的字都被忽略 | 是 |
+| 四個欄位全部留空（含密碼）→ 純設定檔路徑 | 是 |
+| **密碼可以單獨留空，另外三欄照填** | 是，這就是借用路徑 |
+
+最後一列是 `83116be` 補上的，也正是我上一版指出的矛盾（見「沒點到的事」第 7 項）
+——現在三欄都明講了這個例外，不再和 password 欄自己的說明打架。
+
+**單獨讀會踩到的第一處：把三欄留空、卻在密碼欄打了字，密碼會被無聲丟掉，而這
+三欄的說明沒有講。** 這三欄告訴你「只留空其中一個會忽略你打的密碼」，也告訴你
+「四個全留空是純設定檔路徑」，但**沒有涵蓋「三個留空、密碼有填」這個組合**。
+我實測：
+
+```
+--- host+user+dbname blank, password FILLED
+    mechanism        : 'profile'
+    connects to      : profile-host.example.com:5439/profile-db as profile-user
+    password used    : the stored/profile one     <- 你打的那個被丟掉了
+```
+
+「我想用設定檔裡的伺服器，但這次想自己給密碼」是很自然的想法，而這樣做密碼會
+**靜悄悄地**被忽略，沒有任何提示。這不是新缺陷（行為一直如此），但既然這三欄
+現在花了很大篇幅談哪些欄位可以留空，漏掉這個組合就比較可惜。
+
+**單獨讀會踩到的第二處：password 欄仍然說你可以「rename the stale one」，但這個
+工具沒有改名功能。** 拒絕訊息本身已經在 `83116be` 改掉了（見「沒點到的事」第 6
+項），但 password 欄的說明還留著。它沒有指名任何指令，所以不會把人導向一個錯誤
+的指令；但一個對著對話框讀這一欄的人，會以為「改名」是兩個可選做法之一，然後
+去找一個不存在的功能。我知道這是審查時**刻意**留下的（理由是沒有暗示任何機制），
+所以只記錄我逐欄閱讀時的實際觀感，不主張它是錯的。
+
+**其餘：** port 欄只有一句「Cluster port. Defaults to 5439.」，單獨讀沒有問題；
+password 欄關於借用、四欄全對、打平拒絕的敘述，我逐句對過實測結果，全部為真。
 
 ---
 
 ### 7. 上面每一條驗收條件，都要有一個「拿去跑改動前的舊程式會失敗」的測試
 
 測試集又變大了，所以整條再做一次。從分支起點 `3821be8` 開第二份完全獨立的副本，
-各自重裝相依套件，把 `c442b79` 的測試檔複製過去跑。
+各自重裝相依套件，把 `83116be` 的測試檔複製過去跑。
 
 **在相信任何數字之前，先讓 pytest 印出它到底載入了哪一份程式**：
 
 ```
 === PROVENANCE OF THE CODE UNDER TEST ===
-package     : .../scratchpad/w5b/src/redshift_comment_mcp/__init__.py
-config      : .../scratchpad/w5b/src/redshift_comment_mcp/config.py
-tools       : .../scratchpad/w5b/src/redshift_comment_mcp/redshift_tools.py
-server      : .../scratchpad/w5b/src/redshift_comment_mcp/server.py
+package     : .../scratchpad/w6b/src/redshift_comment_mcp/__init__.py
+config      : .../scratchpad/w6b/src/redshift_comment_mcp/config.py
+tools       : .../scratchpad/w6b/src/redshift_comment_mcp/redshift_tools.py
+server      : .../scratchpad/w6b/src/redshift_comment_mcp/server.py
 server has resolve_connection_decision : False
 server has _SubstitutedPort            : False
 tools has ConnectionDecision           : False
@@ -549,11 +623,19 @@ tools has ConnectionDecision           : False
 
 路徑落在「分支起點副本」自己的資料夾，新增的東西**確實都不存在**。
 
-**結果：48 個測試在舊程式上失敗**（21 → 29 → 45 → 48）。
+**結果：52 個測試在舊程式上失敗**（21 → 29 → 45 → 48 → 52）。
 新紅的包括第 8 條的打平測試、W0-11 的存壞 port 測試、`f1e57f1` 新增的「打平規則
 有沒有寫進文件」那組不變式測試（四份文件各一個案例，加上開場說明一個，再加上
-「外掛表單不可以再誘導使用者只留空其中一欄」一個），以及 `aea929b` 為「存壞的
-port 要原樣印出來」新增的那組。
+「外掛表單不可以再誘導使用者只留空其中一欄」一個）、`aea929b` 為「存壞的 port
+要原樣印出來」新增的那組，以及 `83116be` 為我上一版那兩個小問題新增的五個。
+
+**那五個裡有四個在舊程式上是紅的、一個是綠的**，我把它講清楚：
+`test_ambiguous_profiles_error_names_real_deletion_mechanism` 和
+`test_manifest_blank_together_set_excludes_password`（三欄各一個案例）四個都紅。
+但 `test_server_source_never_recommends_a_rename_subcommand` 在舊程式上**是綠的**
+——因為分支起點根本沒有「借用」也沒有打平拒絕，那句叫人改名的話當時還不存在，
+所以它在那裡當然不會紅。它守的是未來的回退，不是過去的錯誤，和
+`test_blank_password_rule_no_longer_excludes_port` 同一類。
 
 | 驗收 | 在舊程式上變紅的測試 | 失敗原因對不對 |
 |---|---|---|
@@ -580,7 +662,7 @@ port 要原樣印出來」新增的那組。
   test_no_wire_surface_mentions_password_flag
   test_tie_refusal_names_every_candidate            <- 第 8 條，這次補的
 
-這次的版本（c442b79）：7 passed
+這次的版本（83116be）：7 passed
 ```
 
 同一組斷言，舊的紅、新的綠。
@@ -689,7 +771,7 @@ step 2 — same tie, with REDSHIFT_PASSWORD set:
 
 ```
 ... 2 stored profiles all match that exact target: 'tie-a', 'tie-b'. Refusing to guess ...
-Delete or rename the stale profile so only one matches this target, or provide the REDSHIFT_PASSWORD env var directly.
+Delete the stale profile with `redshift-comment-mcp delete-profile --profile <name>` so only one matches this target, or provide the REDSHIFT_PASSWORD env var directly.
 ```
 
 但**同一個時刻**去問 `get_setup_status`——那是代理人唯一能問「我現在是什麼狀態」
@@ -849,38 +931,34 @@ Existing profiles: '' [truncated: name contains a control character] (host='zz.e
 
 ---
 
-### 6. 拒絕訊息仍然叫你「刪掉或**改名**」——但這個工具沒有改名這個功能〔小問題〕
+### 6. 拒絕訊息仍然叫你「刪掉或**改名**」——但這個工具沒有改名這個功能〔已修好〕
 
-`c442b79`（W0-14）修掉了一個真實的問題：MCP 開場說明本來叫代理人「用
-`/redshift-setup` 刪掉或改名那組舊設定」，但 `/redshift-setup` 是**寫入**設定的，
-代理人照做可能會替同一個目標**再建第三組**，把打平弄得更嚴重。現在它改成明確
-指名 `delete-profile` 這個子指令，並講明**沒有改名功能**。我實測確認：
-
-```
-names delete-profile      : True
-still says 'delete or rename ... via /redshift-setup' : False
-says there is no rename   : True
-```
-
-**但使用者真正會看到的那則拒絕訊息沒有跟著改**，它的最後一行仍然是：
+**已於 `83116be` 修好。** 我當時發現：`c442b79`（W0-14）把 MCP 開場說明修好了
+（改成指名 `delete-profile`、講明沒有改名功能），但**使用者真正讀到的那則拒絕
+訊息沒有跟著改**，最後一行還是「Delete or rename the stale profile」，而這個
+工具根本沒有改名功能。現在那一行是：
 
 ```
-Delete or rename the stale profile so only one matches this target, or provide the REDSHIFT_PASSWORD env var directly.
+Delete the stale profile with `redshift-comment-mcp delete-profile --profile <name>` so only one matches this target, or provide the REDSHIFT_PASSWORD env var directly.
 ```
 
-我查過這個工具的全部子指令，只有 setup / set-password / test-connection /
-list-profiles / delete-profile / set-fields，**沒有任何改名的機制**（程式裡其他
-提到 rename 的地方都是檔案系統層面的原子改名，跟設定無關）。所以這則訊息叫人去
-做一件做不到的事——和 W0-14 剛修掉的是同一個毛病，只是修在開場說明那一半，
-使用者讀的那一半沒修到。這則訊息也會原樣出現在每個資料庫工具的「尚未設定」
-回應裡，所以代理人一樣看得到。
+真正做得到的指令被指名了，「改名」拿掉了。我另外把整個程式再搜一次 `rename`，
+剩下的全部是檔案系統層面的原子改名（跟設定無關），**唯一提到「改名」的地方是
+開場說明裡那句「沒有改名這個子指令」**——也就是說，伺服器自己寫出來的文字裡，
+不再有任何一處叫人去改名。
 
-影響不大（使用者自己刪掉舊的那組就解決了），但既然 W0-14 的主旨就是「別叫人用
-不存在的機制」，這裡值得順手一起改。
+**一個仍然存在、但我判斷可以接受的殘留**：外掛表單的 password 欄位說明和三份
+README 仍然寫著「delete or rename the stale one」。它們**沒有指名任何機制**，
+所以不會像原本那樣把人導向一個特定卻錯誤的指令。我把單獨閱讀外掛表單時的觀感
+寫在第 6 條末尾的逐欄閱讀裡。
 
-### 7. 外掛表單把 password 也算進「要嘛全填、要嘛全空」，但密碼單獨留空正是本次的主打功能〔小問題〕
+### 7. 外掛表單把 password 也算進「要嘛全填、要嘛全空」，但密碼單獨留空正是本次的主打功能〔已修好〕
 
-`c442b79` 把 `plugin.json` 裡 host / user / dbname 三欄的說明改成把 password
+**已於 `83116be` 修好。** 三欄的說明現在把「要嘛全填、要嘛全空」限縮回
+host / user / dbname 三欄，保留「只留空其中一欄，連你打的密碼都會被丟掉」這個
+後果，並且**明講密碼可以單獨留空**。以下是我原本的觀察內容，留作紀錄。
+
+`c442b79` 當時把 `plugin.json` 裡 host / user / dbname 三欄的說明改成把 password
 也列進那組欄位：
 
 > This field, user, dbname **and password** are blank together or not at all:
@@ -902,8 +980,8 @@ list-profiles / delete-profile / set-fields，**沒有任何改名的機制**（
 
 它不但被支援，而且就是這整個變更的目的。同一份 `plugin.json` 裡 password 欄位
 自己的說明也寫著「Leave blank to borrow the keychain password of a profile …」
-——兩段話互相矛盾。把 password 從「要嘛全填要嘛全空」那句拿掉、只保留「只留空
-其中一個欄位會整個退回」的警告，就能兩者兼顧。
+——兩段話互相矛盾。**這個形狀正是當初引發整件事的那份 bug 回報**：同一份外掛
+表單裡兩個欄位講相反的規則。`83116be` 採取的正是我建議的那個做法。
 
 ---
 
@@ -911,7 +989,7 @@ list-profiles / delete-profile / set-fields，**沒有任何改名的機制**（
 
 | 這一批 | 結果 |
 |---|---|
-| 不需要資料庫的單元測試（乾淨副本、`c442b79`） | **462 通過、2 跳過**（436 → 448 → 459 → 462） |
+| 不需要資料庫的單元測試（乾淨副本、`83116be`） | **467 通過、2 跳過**（436 → 448 → 459 → 462 → 467） |
 | 專案隨附的對抗測試案例（未修改） | **38 個全部通過** |
 | 需要真實叢集的整合測試 | **無法驗證**（叢集連線逾時，發生在程式邏輯之前） |
 | MCP 協定測試（e2e，6 項） | **4 失敗、2 通過**——既有問題，非這次造成 |
@@ -973,6 +1051,16 @@ list-profiles / delete-profile / set-fields，**沒有任何改名的機制**（
 
 ## 我替你決定的事
 
+- **第六次修訂我只重量了兩條，範圍是我自己清點的。** `83116be` 動到的是一條錯誤
+  訊息字串、外掛表單三欄的說明、五個新測試；我比對過語法樹，確認**沒有任何一行
+  連線決策邏輯改變**。所以我重量第 2 條（訊息文字）和第 6 條（外掛表單與程式的
+  一致性），其餘沿用。沿用的理由是「那幾條依賴的東西這次沒動，而且我查過那兩處
+  改到的文字沒有引入 `--password`」，不是「差異很小」。
+- **逐欄閱讀的結論是我的判斷，不是量出來的數字。** 「單獨讀某一欄會不會誤導」
+  沒有自動化檢查能回答，所以第 6 條末尾那一段是我一欄一欄讀完之後的主觀判斷：
+  三欄的敘述**都準確**，但有兩處單獨讀會踩到（密碼被無聲丟掉的那個組合沒寫；
+  password 欄仍寫著可以改名）。如果你讀起來不覺得那兩處是問題，那是判斷差異，
+  不是事實差異——底下的實測結果都列出來了。
 - **第五次修訂我沒有重走全部八條，重走的範圍是我自己比對出來的、不是別人給的。**
   交辦說法是「`aea929b` 只動一個小函式、`c442b79` 只動文字」。我用語法樹比對
   自己查了一次，發現**和那個說法有出入**：`c442b79` 改的兩處雖然都是字串，
@@ -1024,17 +1112,17 @@ list-profiles / delete-profile / set-fields，**沒有任何改名的機制**（
 ## 我不確定你要不要
 
 1. **「多組相符被拒絕」時，要不要讓 `get_setup_status` 也講出這件事？** 它現在給的
-   建議（設環境變數）**實測有效**，只是比較費事；比較省事的那條（刪掉或改名其中
-   一組）它沒有主動說。答案已經在程式內部的 `ambiguous_profiles` 欄位裡，只是沒有
-   放進回傳。**這是目前唯一還開著的一項，而且只是小問題**——因為完整的拒絕訊息
-   本來就會出現在任何資料庫工具的「尚未設定」回應裡，省事的那條路離代理人只有
-   一次工具呼叫。
-2. **拒絕訊息最後一行仍然叫人「刪掉或改名」，但這個工具沒有改名功能。**
-   `c442b79` 已經把開場說明那一半修好了（改成指名 `delete-profile`、並講明沒有
-   改名），使用者讀的那一半還沒。要不要順手一起改？（見「沒點到的事」第 6 項。）
-3. **外掛表單把 password 也算進「要嘛全填、要嘛全空」，但密碼單獨留空正是這次的
-   主打路徑**，和同一份檔案裡 password 欄位自己的說明互相矛盾。要不要把 password
-   從那句拿掉、只保留「只留空其中一欄會整個退回」的警告？（見第 7 項。）
+   建議（設環境變數）**實測有效**，只是比較費事；比較省事的那條（刪掉其中一組）
+   它沒有主動說。答案已經在程式內部的 `ambiguous_profiles` 欄位裡，只是沒有放進
+   回傳。只是小問題——完整的拒絕訊息本來就會出現在任何資料庫工具的「尚未設定」
+   回應裡，省事的那條路離代理人只有一次工具呼叫。
+2. **把 host / user / dbname 三欄留空、卻在密碼欄打了字，密碼會被無聲丟掉，
+   而對話框沒有講。** 這是我這次逐欄閱讀時發現的（見第 6 條末尾）。行為一直如此、
+   不是新缺陷，但那三欄現在花了不少篇幅談「哪些欄位可以留空」，漏掉這個組合比較
+   可惜。**這是這次唯一一項新的、還開著的觀察。**
+3. **外掛表單的 password 欄和三份 README 仍然寫著可以「rename the stale one」，
+   但這個工具沒有改名功能。** 我知道這是審查時刻意留下的（因為沒有指名任何機制），
+   只是逐欄閱讀時仍然會讀成「有兩個選項」。要不要順手改成「刪掉，或重新建立一個」？
 4. **R5、R6 這兩條規則要不要寫進文件？** 兩者現在**出事時訊息都會自己解釋**
    （R6 是 `aea929b` 補的），所以沒寫進文件的實際影響不大。列在這裡只是讓你知道
    它們目前只靠錯誤訊息傳達，文件上沒有。
@@ -1042,12 +1130,13 @@ list-profiles / delete-profile / set-fields，**沒有任何改名的機制**（
    從 README 讀起的人（手動安裝、其他 MCP 用戶端）看不到。
 6. **開場說明在 fastmcp 4 之下是空的，要不要提高優先序？** 這不是這次改壞的，但它
    讓 W0-05／W0-09／W0-14 在開場說明上做的工，在 fastmcp 4 環境下完全看不到——
-   包括 `c442b79` 剛剛才修好的那句「用 `delete-profile`、沒有改名」。
+   包括「用 `delete-profile`、沒有改名」那一句。
 7. **需要真實叢集的整合測試，要不要等連線恢復之後補跑一次再正式核准？**
 
 （先前列在這裡、現在都已經修好、不再是待決事項的有：計畫書 W0-09 的描述
-（`e03b27e`）、「不會讀密碼」那句註解（`166bf07`）、以及「設定檔存壞 port 時
-拒絕訊息看起來自相矛盾」（`f20cb4d`／`aea929b`）——最後這一項我上一版還把它
+（`e03b27e`）、「不會讀密碼」那句註解（`166bf07`）、「拒絕訊息叫人改名」與
+「外掛表單把密碼算進要嘛全填要嘛全空」（兩者都在 `83116be`）、以及「設定檔存壞
+port 時拒絕訊息看起來自相矛盾」（`f20cb4d`／`aea929b`）——最後這一項我上一版還把它
 列為「最值得處理」，更正見報告開頭。）
 
 ---
@@ -1063,7 +1152,7 @@ list-profiles / delete-profile / set-fields，**沒有任何改名的機制**（
 | 證據檔（對抗探針程式） | 全英文 | 符合 | 六支探針程式全部 0 處中日文字 |
 | 測試說明文字（docstring） | 全英文 | 符合 | `test_server_resolution.py` 0 處。`test_tools.py` 有 122 處，**全部是改動前就存在的**（分支起點同樣 122 處，本分支新增 0 處）。`test_repo_invariants.py` 新增 6 處，全部是日文版／繁中版 README 的比對字串本身——測試對象就是多語文件，屬於正確的例外 |
 | 測試命名 | `test_<單元>_<狀態>_<預期>` | 部分符合 | 語意上都是三段式（例如 `test_identical_password_tie_still_refuses` = 單元 identical_password_tie／狀態 still／預期 refuses），但沿用專案既有的敘述式風格，沒有嚴格用底線切成剛好三段 |
-| 提交訊息 | 全英文 | 符合 | 分支起點以來 31 筆提交（含本報告前四版那四筆），標題與內文皆 0 處中日文字 |
+| 提交訊息 | 全英文 | 符合（一處例外，且該例外正確） | 分支起點以來 33 筆提交（含本報告前五版那五筆）。唯一一個中日文字是 `f1e57f1` 訊息裡的 `的`——那筆提交做的就是「修掉繁中版 README 裡一個多餘的 `的`」，訊息在引用它修掉的那個字，不是敘述文字夾雜中文 |
 
 ---
 
@@ -1075,7 +1164,10 @@ list-profiles / delete-profile / set-fields，**沒有任何改名的機制**（
 - **第 6 條我上一版判錯過**——用「文件沒動」當理由沿用，但那條驗收問的是文件和
   程式的關係。這一版已經改成從程式反推，經過留在第 6 條開頭。
 - **第 4 條這一版沒有重走**，只用語法樹比對確認它的三個實作函式在 `4d51a9a`、
-  `f1e57f1`、`c442b79` 三版之間完全沒變；探針是在 `47910d5` 跑的，之後沒有再跑。
+  `f1e57f1`、`c442b79`、`83116be` 四版之間完全沒變；探針是在 `47910d5` 跑的，
+  之後沒有再跑。
+- **第 1、3、5 條這一版也沒有重走**，理由是 `83116be` 沒有改動它們依賴的東西
+  （決策邏輯未變、改到的兩處文字不含 `--password`）。第 2、6 條有重量。
 - **我上一版把一個已經修好的缺陷寫成「最值得處理的一項」，而且沒有註明版本。**
   那一項（設定檔存壞 port 時拒絕訊息看起來自相矛盾）在我寫完後兩個提交就修好了。
   這種錯誤會害你在該放行的時候多花成本——更正見報告開頭，該項已改標〔已修好〕。
