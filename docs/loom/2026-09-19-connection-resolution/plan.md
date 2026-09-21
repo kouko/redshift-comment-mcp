@@ -1,0 +1,42 @@
+# The server must connect the way it says it will — plan
+intent: 2026-09-19-connection-resolution@4c5c3b7
+charter: 1.0
+
+## Current State Evidence
+- Forward: `server.py:112-123` takes the inline branch on host+user+dbname alone and returns before `config` is imported at :125.
+- Reverse: none. No path consults a profile once inline is chosen; the only escape is blanking all three launch fields.
+- Error: `server.py:116-119` raises for a missing inline password and names `--password` first, contradicting `:172-174`.
+- Data: `redshift_tools.py` `get_setup_status` reads `cfg.read_profile(profile)` for the literal default; `resolve_active_profile` appears nowhere in that file.
+- Boundary: `tests/test_server_resolution.py` has 24 tests over both branches; none supplies inline fields with a matching profile present.
+
+## Task DAG
+
+**W0-01 Borrow a password only from an identity-matched profile**  after: -  acceptance: 1, 2
+- Files: src/redshift_comment_mcp/server.py, tests/test_server_resolution.py
+- Test: A1 positive: matching-triple-borrows-and-uses-inline-host; negative: password-present-still-wins. A2 positive: mismatched-profile-raises-naming-both-hosts; boundary: no-profiles-at-all-raises.
+- Risk: a stored profile must never supply a host; agent-decided — match on the whole `(host, user, dbname)` triple and connect to the inline values, so an unmatched store can only refuse, never redirect.
+
+**W0-02 Make the status tool report the mechanism and target actually used**  after: W0-01  acceptance: 3
+- Files: src/redshift_comment_mcp/redshift_tools.py, src/redshift_comment_mcp/server.py, tests/test_tools.py
+- Test: A3 positive: borrowed-mode-reports-inline-host-and-borrowed-source; negative: profile-mode-named-other-than-default-reports-configured.
+- Risk: v0.10.0 fixed this tool lying in the other direction; agent-decided — resolve once and let both the connector and the status tool read that single decision rather than recomputing.
+
+**W0-03 Harden the password channel and stop recommending argv**  after: W0-01  acceptance: 4, 5
+- Files: src/redshift_comment_mcp/server.py, src/redshift_comment_mcp/redshift_tools.py, tests/test_server_resolution.py
+- Test: A4 positive: unsubstituted-placeholder-is-no-password; negative: real-password-unaffected. A5 positive: no-message-names-the-password-flag; boundary: env-var-guidance-survives.
+- Risk: dropping `--password` from guidance leaves the flag itself in place; agent-decided — guidance only, since removing the flag would break a documented integration path.
+
+**W0-04 Make the manifest and the READMEs state the rule the code follows**  after: W0-03  acceptance: 6, 7
+- Files: .claude-plugin/plugin.json, README.md, README.ja.md, README.zh-TW.md, pyproject.toml, tests/test_repo_invariants.py
+- Test: A6 positive: manifest-and-three-readmes-agree-on-blank-password; negative: version-fields-stay-in-sync. A7 positive: every-new-test-red-against-base; boundary: base-source-collects.
+- Risk: the contradiction between the manifest and the README is what produced the original report; agent-decided — pin the agreement with an invariant test so prose cannot drift apart again.
+
+## Questions asked
+① — what — 這樣對嗎？
+pre-① — what — 10 項要不要切（我自行決定切分，未問使用者）
+
+## Risks
+1. user-decided 2026-09-17 — a blank password borrows the password of a profile whose host, user and dbname all match; it never borrows a host. Both independent audits proposed this same shape.
+2. Task splitting was agent-decided: PR #42 needed three review rounds for four tasks, so ten accumulated items were cut to the five that share one subject.
+3. The blank-password gate still accepts whitespace-only values, so a borrowed or supplied `" "` is treated as a real password. Out of scope here, already filed.
+4. `setup_via_dialog` writes a profile whose triple matches the inline values by construction, so the borrow path turns that tool into a working recovery for inline mode — previously it wrote a profile the inline branch never read.
