@@ -12,22 +12,60 @@ logger = logging.getLogger(__name__)
 DEFAULT_PORT = 5439
 
 
+class _SubstitutedPort(int):
+    """A port value ``_coerce_port`` could not parse from what was typed.
+
+    Behaves as a plain ``int`` equal to ``DEFAULT_PORT`` everywhere
+    ``args.port`` / ``decision.port`` is read — the server still boots on a
+    typo, exactly as ``_coerce_port`` always has. ``raw_value`` carries the
+    original string and the ``substituted`` flag lets
+    ``resolve_connection_decision`` refuse to borrow a stored profile's
+    keychain password on a port the operator did not actually name, and lets
+    ``resolve_connection_params`` quote the mistyped value in its refusal
+    (see W0-07).
+
+    Only a genuine typo is wrapped here. A blank field and an unsubstituted
+    ``${user_config.port}`` placeholder — the two optional-userConfig
+    artefacts ``_coerce_port`` exists to tolerate — are deliberately NOT
+    wrapped: an operator who left the field blank has effectively chosen
+    ``DEFAULT_PORT``, so those two stay a plain ``int`` and keep borrowing
+    normally, the same as a profile recorded without an explicit port.
+    """
+
+    substituted = True
+
+    def __new__(cls, raw_value):
+        obj = super().__new__(cls, DEFAULT_PORT)
+        obj.raw_value = raw_value
+        return obj
+
+
 def _coerce_port(raw) -> int:
     """argparse ``type=`` for ``--port`` that tolerates optional-userConfig debris.
 
     A Claude Code plugin ``userConfig`` is optional: a blank port field arrives
     as ``""`` and an unset field may arrive as the unsubstituted literal
     ``${user_config.port}``. Plain ``type=int`` would make argparse abort with
-    ``invalid int value`` and the server would never boot. Map any
-    empty / non-numeric value to ``DEFAULT_PORT`` instead of raising; pass real
-    integer strings (and already-int values) through unchanged.
+    ``invalid int value`` and the server would never boot. Map either of
+    those two specific artefacts to a plain ``DEFAULT_PORT`` instead of
+    raising; pass real integer strings (and already-int values) through
+    unchanged.
+
+    Anything else that fails to parse (a typo such as ``"9999x"``) is
+    neither artefact — the operator typed a value and got it wrong — so it
+    is wrapped in ``_SubstitutedPort`` instead of a plain int: the server
+    still boots with ``DEFAULT_PORT``, but the substitution is recorded so
+    it does not silently match a stored profile's borrow scan (see W0-07).
     """
     if isinstance(raw, int):
         return raw
-    try:
-        return int(str(raw).strip())
-    except (TypeError, ValueError):
+    stripped = "" if raw is None else str(raw).strip()
+    if not stripped or (stripped.startswith("${user_config") and stripped.endswith("}")):
         return DEFAULT_PORT
+    try:
+        return int(stripped)
+    except ValueError:
+        return _SubstitutedPort(raw)
 
 
 def _normalize_inline(value):
@@ -165,6 +203,28 @@ def resolve_connection_decision(
         # falls through to the password-less "inline" decision below rather
         # than guessing.
         #
+        if getattr(port, "substituted", False):
+            # `port` is a `_SubstitutedPort`: _coerce_port could not parse it
+            # from what the operator actually typed (a typo, not the blank
+            # or ${user_config.port} placeholder artefacts it exists to
+            # tolerate). Letting it participate in the scan below would
+            # silently match — and lend a keychain password to — whatever
+            # profile happens to be recorded at DEFAULT_PORT, the same
+            # silent-substitution shape the four-field match was widened to
+            # close for an explicitly mistyped port, re-entering through the
+            # parser. Skip the scan; resolve_connection_params quotes the
+            # raw typed value in the resulting refusal.
+            logger.debug(
+                "borrow scan: port %r could not be parsed from typed value "
+                "%r; refusing to borrow on a substituted port",
+                int(port), getattr(port, "raw_value", None),
+            )
+            return ConnectionDecision(
+                mechanism="inline", host=host, port=port, user=user, dbname=dbname,
+                has_fields=True, has_password=False, password=None,
+                profile_name=None,
+            )
+
         # The scan below is guarded: list_profiles() / read_profile() /
         # get_password() can each raise for reasons that have nothing to do
         # with whether a match exists — no keyring backend on the host
@@ -269,7 +329,17 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
                     fields = cfg.read_profile(name) or {}
                     target_host = fields.get("host", "?")
                     target_port = _coerce_port(fields.get("port"))
-                    return f"{name} ({target_host}:{target_port})"
+                    target_user = fields.get("user", "?")
+                    target_dbname = fields.get("dbname", "?")
+                    # Same register as the typed half below (host=/port=/
+                    # user=/dbname=, each !r) so the two halves of the
+                    # message can be compared field by field — rendering
+                    # only host:port let two profiles differing solely in
+                    # dbname print as identical entries (see W0-07 defect A).
+                    return (
+                        f"{name} (host={target_host!r} port={target_port!r} "
+                        f"user={target_user!r} dbname={target_dbname!r})"
+                    )
                 except Exception as e:  # noqa: BLE001 — see above
                     logger.debug(
                         "borrow-refusal message: could not describe profile "
@@ -280,11 +350,21 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
             existing_desc = ", ".join(_target_desc(name) for name in existing)
         else:
             existing_desc = "none configured"
+        substituted_port_note = ""
+        if getattr(decision.port, "substituted", False):
+            substituted_port_note = (
+                f" The port you typed ({getattr(decision.port, 'raw_value', decision.port)!r}) "
+                f"could not be read as a number, so the server substituted "
+                f"the default port {int(decision.port)} to boot — but a "
+                f"substituted port never borrows a stored profile's "
+                f"password. Fix the typo and relaunch."
+            )
         raise ConfigurationError(
             f"Inline mode requires a password for "
             f"host={decision.host!r} port={decision.port!r} "
             f"user={decision.user!r} dbname={decision.dbname!r}, and no stored "
-            f"profile's host/port/user/dbname all match it to borrow one from.\n"
+            f"profile's host/port/user/dbname all match it to borrow one "
+            f"from.{substituted_port_note}\n"
             f"Existing profiles: {existing_desc}.\n"
             f"Provide the REDSHIFT_PASSWORD env var, or configure a profile "
             f"matching this exact host/port/user/dbname via "

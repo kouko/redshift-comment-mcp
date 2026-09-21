@@ -765,3 +765,97 @@ def test_no_stray_password_flag_recommendation_in_source():
                 f"as a way to supply a password — remove the recommendation, "
                 f"keeping any REDSHIFT_PASSWORD env var guidance:\n{line!r}"
             )
+
+
+# ===== W0-07 defect A: the refusal must name each existing profile's WHOLE
+# target, not just host:port =====
+# Two profiles on the same host/port/user but different dbname must render
+# as two distinguishable entries, or the operator cannot tell which one to
+# point /redshift-setup at.
+
+
+def test_refusal_two_profiles_differing_only_in_dbname_render_distinctly(
+    tmp_xdg, fake_keyring, monkeypatch
+):
+    """A2 boundary: rendering only host:port collapses two profiles that
+    share a host/port/user but differ in dbname into two identical-looking
+    entries. The refusal must name user and dbname too, so the field that
+    actually made each profile miss the inline target is visible."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    for name, dbname in (("prod", "warehouse"), ("prod_analytics", "analytics")):
+        config.write_profile(
+            name, host="redshift.internal", port=5439, user="alice", dbname=dbname,
+        )
+        config.set_password(name, f"{name}-secret")
+
+    args = _ns(host="redshift.internal", port=5439, user="alice", dbname="reporting")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    msg = str(excinfo.value)
+    assert "warehouse" in msg, f"prod's dbname is missing from the refusal: {msg!r}"
+    assert "analytics" in msg, f"prod_analytics's dbname is missing from the refusal: {msg!r}"
+
+
+# ===== W0-07 defect B: a mistyped port must not silently borrow =====
+# `_coerce_port` tolerates two specific optional-userConfig artefacts (blank,
+# unsubstituted placeholder) by collapsing them to DEFAULT_PORT so the server
+# still boots. A genuine typo is neither artefact and must not collapse into
+# a value that then matches — and borrows from — a stored profile the
+# operator never named.
+
+
+def test_borrow_mistyped_port_refuses_to_borrow(tmp_xdg, fake_keyring, monkeypatch):
+    """A1 negative: a port argparse could not parse from what the operator
+    actually typed (a typo, e.g. "9999x") must not borrow a stored
+    profile's keychain password just because it collapsed to the same
+    default port that profile happens to be recorded at. The refusal must
+    also quote the raw typed value so the operator can see the typo."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "prod", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod", "provisioned-for-5439")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=server._coerce_port, default=server.DEFAULT_PORT)
+    port = parser.parse_args(["--port", "9999x"]).port
+    assert port == 5439  # still boots — the typo collapses to the default
+
+    args = _ns(host="h.example.com", user="u", dbname="d", port=port)
+    decision = server.resolve_connection_decision(args)
+    assert decision.password != "provisioned-for-5439", (
+        f"a keychain password provisioned for h.example.com:5439 was lent to "
+        f"a launch whose port the server could not parse (mechanism="
+        f"{decision.mechanism!r}, borrowed_from={decision.profile_name!r})"
+    )
+    assert decision.mechanism == "inline"
+
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    assert "9999x" in str(excinfo.value), (
+        "the refusal must quote the raw typed port value so the operator "
+        f"can see the typo: {excinfo.value!r}"
+    )
+
+
+def test_borrow_blank_and_placeholder_port_still_borrow(tmp_xdg, fake_keyring, monkeypatch):
+    """A1 boundary: blank and unsubstituted-`${user_config.port}` are the
+    two artefacts `_coerce_port` exists to tolerate, not typos. They must
+    keep collapsing to the documented default port and still borrow
+    normally — exactly like a profile recorded without an explicit port —
+    or an ordinary optional-userConfig launch would start refusing."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "default", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("default", "borrowed-pw")
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=server._coerce_port, default=server.DEFAULT_PORT)
+
+    for raw in ("", "${user_config.port}"):
+        port = parser.parse_args(["--port", raw]).port
+        args = _ns(host="h.example.com", user="u", dbname="d", port=port)
+        assert server.resolve_connection_params(args) == (
+            "h.example.com", 5439, "u", "borrowed-pw", "d"
+        ), f"raw port {raw!r} must still borrow normally"
