@@ -372,6 +372,75 @@ def test_ambiguous_multi_profile_error_lists_profiles_and_suggests_switch(
     assert "/redshift-comment-mcp:redshift-switch-profile" in msg
 
 
+
+# ===== W0-01: borrow a password only from an identity-matched profile =====
+# Inline host/user/dbname supplied, no password anywhere (neither --password
+# nor REDSHIFT_PASSWORD). A stored profile may lend its keychain password,
+# but ONLY when its host+user+dbname triple all equal the inline values —
+# it must never lend a host: an unmatched store can only refuse, never
+# redirect the connection somewhere the operator did not type.
+
+
+def test_matching_triple_borrows_and_uses_inline_host(tmp_xdg, fake_keyring, monkeypatch):
+    """A stored profile whose host/user/dbname all equal the inline values
+    lends its keychain password. Connection still targets the INLINE
+    host/port — here the profile's port (5440) differs from the inline
+    port (default 5439) to prove the borrowed profile never supplies
+    connection target fields, only the password."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "default", host="h.example.com", port=5440, user="u", dbname="d",
+    )
+    config.set_password("default", "borrowed-pw")
+    args = _ns(host="h.example.com", user="u", dbname="d")
+    assert server.resolve_connection_params(args) == (
+        "h.example.com", 5439, "u", "borrowed-pw", "d"
+    )
+
+
+def test_password_present_still_wins(tmp_xdg, fake_keyring, monkeypatch):
+    """An inline password that IS supplied is used as-is; the profile store
+    is never consulted, even when a matching profile with a different
+    password exists."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "default", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("default", "profile-pw")
+    args = _ns(host="h.example.com", user="u", dbname="d", password="inline-pw")
+    assert server.resolve_connection_params(args) == (
+        "h.example.com", 5439, "u", "inline-pw", "d"
+    )
+
+
+def test_mismatched_profile_raises_naming_both_hosts(tmp_xdg, fake_keyring, monkeypatch):
+    """A profile exists but its host/user/dbname triple does not match the
+    inline values → refuse rather than borrow across a mismatch. The
+    message must name both the inline target's host and the existing
+    profile's host, so the user can see why nothing matched."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "prod", host="prod.example.com", port=5439, user="alice", dbname="warehouse",
+    )
+    config.set_password("prod", "prod-pw")
+    args = _ns(host="inline.example.com", user="u", dbname="d")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    msg = str(excinfo.value)
+    assert "inline.example.com" in msg
+    assert "prod.example.com" in msg
+
+
+def test_no_profiles_at_all_raises(tmp_xdg, fake_keyring, monkeypatch):
+    """Boundary: no stored profiles exist at all, so there is nothing to
+    borrow from → refuse. The message must still name the inline target."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    args = _ns(host="inline.example.com", user="u", dbname="d")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    assert "inline.example.com" in str(excinfo.value)
+
+
 def test_named_profile_typo_error_lists_existing_profiles(
     tmp_xdg, fake_keyring, monkeypatch
 ):

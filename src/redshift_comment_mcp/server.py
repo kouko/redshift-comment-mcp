@@ -86,8 +86,13 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
     Two modes:
 
     - **Legacy inline**: all of ``args.host`` / ``args.user`` / ``args.dbname``
-      are present. Password from ``args.password`` or
-      ``REDSHIFT_PASSWORD`` env var. Profile name is ignored.
+      are present. Password from ``args.password`` or ``REDSHIFT_PASSWORD``
+      env var. If neither supplies one, ``config.toml`` is scanned for a
+      profile whose host/user/dbname all equal the inline values, and that
+      profile's keychain password is borrowed — the connection still targets
+      the inline host/port/user/dbname; a stored profile can supply a
+      password only, never a connection target. Profile *name* is ignored
+      throughout this mode.
     - **Profile mode** (the default): look up the profile name via
       ``config.resolve_active_profile(args.profile)`` (priority CLI flag >
       ``REDSHIFT_COMMENT_PROFILE`` env > active-profile pointer file >
@@ -112,15 +117,52 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
     inline = resolve_inline_params(args)
     if inline:
         host, port, user, has_password, dbname = inline
-        if not has_password:
-            raise ConfigurationError(
-                "Inline mode requires a password — provide --password CLI "
-                "flag or REDSHIFT_PASSWORD env var."
+        if has_password:
+            # Re-derive the password value here: resolve_inline_params
+            # deliberately returns only presence (has_password bool), never
+            # the secret.
+            password = args.password or os.getenv('REDSHIFT_PASSWORD')
+            return host, port, user, password, dbname
+
+        # No inline password. Before giving up, see if config.toml holds a
+        # profile that IS this exact target — host, user AND dbname all
+        # equal the inline values — and borrow its keychain password. Port
+        # is deliberately excluded from the match and never taken from the
+        # profile: the connection always targets the inline host/port/user/
+        # dbname the operator typed, so a stored profile can only ever
+        # contribute a password, never redirect the connection anywhere
+        # else. An unmatched (or password-less) store falls through to the
+        # raise below rather than guessing.
+        from . import config as cfg
+        for candidate_name in cfg.list_profiles():
+            candidate = cfg.read_profile(candidate_name)
+            if not candidate:
+                continue
+            if (candidate.get("host"), candidate.get("user"), candidate.get("dbname")) != (
+                host, user, dbname,
+            ):
+                continue
+            borrowed_password = cfg.get_password(candidate_name)
+            if borrowed_password:
+                return host, port, user, borrowed_password, dbname
+
+        existing = cfg.list_profiles()
+        if existing:
+            existing_desc = ", ".join(
+                f"{name} ({(cfg.read_profile(name) or {}).get('host', '?')})"
+                for name in existing
             )
-        # Re-derive the password value here: resolve_inline_params deliberately
-        # returns only presence (has_password bool), never the secret.
-        password = args.password or os.getenv('REDSHIFT_PASSWORD')
-        return host, port, user, password, dbname
+        else:
+            existing_desc = "none configured"
+        raise ConfigurationError(
+            f"Inline mode requires a password for host={host!r} "
+            f"user={user!r} dbname={dbname!r}, and no stored profile's "
+            f"host/user/dbname all match it to borrow one from.\n"
+            f"Existing profiles: {existing_desc}.\n"
+            f"Provide --password CLI flag or REDSHIFT_PASSWORD env var, or "
+            f"configure a profile matching this exact host/user/dbname via "
+            f"/redshift-comment-mcp:redshift-setup."
+        )
 
     from . import config as cfg
     profile_name = cfg.resolve_active_profile(args.profile)
