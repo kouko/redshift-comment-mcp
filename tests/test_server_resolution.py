@@ -1423,3 +1423,60 @@ def test_target_desc_readable_port_renders_unchanged(
         "'other' (host='other.example.com' port=5439 user='u' dbname='d')"
         in message
     ), f"an ordinary readable stored port must render unchanged: {message!r}"
+
+
+# ===== W0-15 defect 1: the tie refusal must not recommend a rename
+# subcommand that does not exist anywhere in this package. W0-14 fixed the
+# FastMCP `instructions` string (redshift_tools.py) to point at the real
+# `delete-profile` subcommand instead; the tie refusal built in
+# `resolve_connection_params` (server.py) was out of that task's scope and
+# still said "Delete or rename the stale profile" — advice that could send
+# an agent to `/redshift-setup`, which WRITES a profile, possibly creating
+# a third one for the same target instead of resolving the tie. =====
+
+
+def test_ambiguous_profiles_error_names_real_deletion_mechanism(
+    tmp_xdg, fake_keyring, monkeypatch,
+):
+    """The tie refusal must recommend the real `delete-profile` subcommand
+    and must never suggest a `rename` mechanism, which does not exist."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "prod", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod", "retired-secret")
+    config.write_profile(
+        "prod-rotated", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod-rotated", "live-secret")
+
+    args = _ns(host="h.example.com", user="u", dbname="d")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    msg = str(excinfo.value)
+
+    assert "rename" not in msg.lower(), (
+        f"tie refusal recommends a 'rename' mechanism that does not exist "
+        f"in this package: {msg!r}"
+    )
+    assert "delete-profile" in msg, (
+        f"tie refusal must name the real `delete-profile` subcommand: {msg!r}"
+    )
+
+
+def test_server_source_never_recommends_a_rename_subcommand():
+    """Regression pin: server.py's own source text must never contain the
+    word 'rename'. This package has no rename subcommand — deleting the
+    stale profile with `delete-profile` and creating its replacement via
+    `/redshift-setup` is the only real path — so any server-authored
+    message using this word is advice for a mechanism that does not exist.
+    A behavioural test can only exercise the one raise site it knows to
+    call; this scan is what catches a second one appearing later."""
+    import inspect
+
+    source = inspect.getsource(server)
+    assert "rename" not in source.lower(), (
+        "server.py contains the word 'rename' somewhere in its source — "
+        "this package has no rename subcommand, so no server-authored "
+        "message may recommend one."
+    )

@@ -514,7 +514,8 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
                 f"replacement, the shape a credential rotation leaves "
                 f"behind.\n"
                 f"Existing profiles: {existing_desc}.\n"
-                f"Delete or rename the stale profile so only one matches "
+                f"Delete the stale profile with `redshift-comment-mcp "
+                f"delete-profile --profile <name>` so only one matches "
                 f"this target, or provide the REDSHIFT_PASSWORD env var "
                 f"directly."
             )

@@ -689,3 +689,91 @@ def test_manifest_connection_fields_no_longer_invite_partial_blank():
         f"whatever was typed into the other two. Rewrite to state that the "
         f"three fields are blank together or not at all."
     )
+
+
+# ===== W0-15 defect 2: the fix above must not itself contradict the
+# password field's own description in the same file. =====
+#
+# The task that produced test_manifest_connection_fields_no_longer_invite_
+# partial_blank above rewrote host/user/dbname's descriptions to say "This
+# field, user, dbname AND PASSWORD are blank together or not at all" —
+# widening the three-field blank-together set to four. But the password
+# field's own description says a blank password alone borrows a matching
+# profile's stored password (the headline feature of this whole change),
+# which is only possible if password can be blank while host/user/dbname
+# are NOT. Two fields of the same manifest then stated opposite rules —
+# precisely the contradiction this change exists to close, reintroduced by
+# its own docs fix.
+#
+# This test isolates the field-list ENUMERATION that immediately precedes
+# the phrase "are blank together or not at all" — e.g. "This field, user
+# and dbname " — and asserts it does not name `password`. It deliberately
+# does NOT forbid `password` from appearing anywhere later in the same
+# description: the consequence clause ("...falls back to that profile
+# wholesale and ignores whatever you typed into ... password") is correct
+# and required (defect 2's own fix bullets), and a whole-sentence check
+# would false-positive on it since the enumeration and the consequence
+# clause share one run-on sentence separated only by a colon, not a
+# period. Isolating on the nearest preceding sentence boundary (". ", or
+# start of string) keeps the check narrow to the actual claim being made:
+# which fields form the "blank together" SET, not which fields a partial
+# blank discards.
+#
+# It does not touch the password description (correct, and out of scope),
+# and it does not re-check the partial-blank warning itself (the test
+# above already pins that).
+#
+# What this WOULD catch: `password` reappearing in the field-list
+# enumeration for any of the three fields, in this or a differently-worded
+# future edit that still uses the phrase "are blank together or not at
+# all". What this can still miss: a rewrite that drops that exact phrase
+# while still, in different words, claiming password belongs to the same
+# all-or-nothing set (e.g. "leave host, user, dbname and password blank as
+# one group") — the isolation is keyed on the exact phrase, so a
+# paraphrase that avoids it slips through, the same class of gap
+# MACHINE_MANAGED_ANCHORS and BLANK_PASSWORD_RULE_ANCHORS above already
+# accept. It also would not catch the reverse contradiction (the password
+# description itself claiming it cannot be blank alone) since that
+# description is deliberately not scanned here.
+
+BLANK_TOGETHER_PHRASE = "are blank together or not at all"
+
+
+def _enumeration_before_blank_together(desc: str) -> str:
+    """Return the field-list clause immediately preceding
+    ``BLANK_TOGETHER_PHRASE``, from the nearest preceding sentence
+    boundary (". ") or the start of the description — never crossing into
+    an earlier sentence (e.g. a host description's own "e.g. ..." example
+    clause)."""
+    idx = desc.find(BLANK_TOGETHER_PHRASE)
+    assert idx != -1, f"{BLANK_TOGETHER_PHRASE!r} not found in {desc!r}"
+    prefix = desc[:idx]
+    boundary = prefix.rfind(". ")
+    start = boundary + 2 if boundary != -1 else 0
+    return prefix[start:]
+
+
+@pytest.mark.parametrize("field", PARTIAL_BLANK_INVITATION_FIELDS)
+def test_manifest_blank_together_set_excludes_password(field):
+    """host/user/dbname's 'are blank together or not at all' claim must
+    enumerate only the OTHER TWO of host/user/dbname — never password,
+    which the password field's own description says CAN be left blank on
+    its own (the borrow path, the headline feature of this whole change).
+    Naming password in this set contradicts that description in the same
+    file."""
+    plugin = json.loads(PLUGIN_JSON.read_text())
+    desc = plugin["userConfig"][field]["description"]
+
+    assert BLANK_TOGETHER_PHRASE in desc, (
+        f"{field}: description no longer states the 'blank together or "
+        f"not at all' rule at all — expected it to name the other two of "
+        f"host/user/dbname as the set that must be blank together."
+    )
+    enumeration = _enumeration_before_blank_together(desc)
+    assert "password" not in enumeration.lower(), (
+        f"{field}: the field-list enumeration right before 'are blank "
+        f"together or not at all' still names `password`: {enumeration!r}. "
+        f"host, user and dbname are that set; password can be left blank "
+        f"on its own, so including it here contradicts the password "
+        f"field's own description."
+    )
