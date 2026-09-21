@@ -41,6 +41,11 @@ charter: 1.0
 - Test: A6 positive: all-four-docs-state-the-four-field-rule; negative: no-doc-still-claims-port-is-excluded.
 - Risk: W0-04's anchors pin the now-wrong port exclusion; agent-decided — rewrite the anchors with the rule, since an anchor that outlives the rule it pins is worse than none.
 
+**W0-07 Close the two ways the refusal and the parser still fail quietly**  after: W0-06  acceptance: 1, 2
+- Files: src/redshift_comment_mcp/server.py, tests/test_server_resolution.py
+- Test: A2 positive: refusal-names-each-profile-whole-target; boundary: two-profiles-differing-only-in-dbname-render-distinctly. A1 negative: mistyped-port-refuses-to-borrow; positive: blank-and-placeholder-port-still-borrow.
+- Risk: `_coerce_port` is an argparse `type=`, so raising aborts the boot it exists to protect; agent-decided — keep booting on a typo but mark the port substituted and refuse to borrow on it.
+
 ## Questions asked
 ① — what — 這樣對嗎？
 ①-amend — consequence — 「密碼留空去借相符 profile 的密碼」—— 這個「相符」要比對幾個欄位？
