@@ -51,6 +51,11 @@ charter: 1.0
 - Test: A5 positive: no-wire-published-text-names-the-password-flag; boundary: internal-only-comments-still-allowed. A3 positive: borrowed-mode-reports-no-phantom-profile; negative: profile-mode-still-reports-its-name.
 - Risk: the guard test exempts docstrings as internal, but FastMCP publishes this one verbatim; agent-decided — narrow the exemption to text that cannot reach a client, and refuse an ambiguous lender rather than picking by sort order.
 
+**W0-09 Finish W0-08: a truthful tie, an unforgeable name, a guard that covers the wire**  after: W0-08  acceptance: 3, 5
+- Files: src/redshift_comment_mcp/server.py, tests/test_server_resolution.py, tests/test_tools.py
+- Test: A3 positive: identical-password-tie-lends; negative: differing-password-tie-refuses-truthfully. A5 positive: guard-covers-the-instructions-string; boundary: newline-in-profile-name-cannot-forge-a-line.
+- Risk: all three are defects in W0-08's own new surface, not new scope; agent-decided — compare the collected secrets rather than dropping the claim, since a tie with one secret has nothing to guess between.
+
 ## Questions asked
 ① — what — 這樣對嗎？
 ①-amend — consequence — 「密碼留空去借相符 profile 的密碼」—— 這個「相符」要比對幾個欄位？
@@ -61,4 +66,5 @@ pre-① — what — 10 項要不要切（我自行決定切分，未問使用�
    Amended user-decided 2026-09-21 — the match is the full four-field target, port included. The adversary demonstrated a password provisioned for `host:5439` being sent to `host:9999`; the escalation story it attached to that (a same-user process cannot read the keychain item) was tested and is false on this machine — the project's own interpreter reads it silently — so the reason to close it is the shape of the failure, not privilege. A port mismatch now refuses loudly instead of sending the secret quietly.
 2. Task splitting was agent-decided: PR #42 needed three review rounds for four tasks, so ten accumulated items were cut to the five that share one subject.
 3. The blank-password gate still accepts whitespace-only values, so a borrowed or supplied `" "` is treated as a real password. Out of scope here, already filed.
+3b. Correction recorded 2026-09-21 — the intent's Out of scope excludes the unquoted `{profile_name}` interpolation on the stated ground that "the source is operator input, so the injection path does not reach it". That ground is false: `setup_via_dialog`'s `profile` argument is chosen by an agent, and that agent's job is reading Redshift comments it does not control. W0-09 closes the refusal-message instance because this change authored that text; the command-string instances stay out of scope but their recorded justification does not hold and must not be reused.
 4. `setup_via_dialog` writes a profile whose triple matches the inline values by construction, so the borrow path turns that tool into a working recovery for inline mode — previously it wrote a profile the inline branch never read.
