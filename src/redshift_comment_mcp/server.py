@@ -222,13 +222,9 @@ def resolve_connection_decision(
       same target), among others — the scan always refuses rather than
       picking whichever name sorts first: the decision comes back plain
       password-less ``"inline"`` with ``ambiguous_profiles`` naming every
-      tied candidate. The refusal fires on the tie alone; the scan does
-      read one password per matching candidate (that read is what makes it
-      count as a lender at all), but never *compares* them to decide this,
-      and the resulting message never claims anything about whether the
-      tied profiles' passwords happen to agree or differ — an operator can
-      see a four-field tie by reading ``config.toml`` alone, without
-      opening the keychain, and the rule stays that predictable (see W0-09).
+      tied candidate. The refusal fires on the tie alone — see
+      ``ConnectionDecision.ambiguous_profiles`` for why the scan reads but
+      never compares the tied candidates' passwords to reach it (see W0-09).
     - **Profile mode** (the default): delegated to
       ``resolve_profile_decision``, which looks up the profile name via
       ``config.resolve_active_profile(profile_override or args.profile)``
@@ -325,6 +321,17 @@ def resolve_connection_decision(
                 if not candidate:
                     continue
                 candidate_port = _coerce_port(candidate.get("port"))
+                if getattr(candidate_port, "substituted", False):
+                    # Mirrors the launch-side guard above: config.toml held a
+                    # stored port `_coerce_port` could not parse (a TOML
+                    # float such as `9999.0`, or a hand-edited non-numeric
+                    # string) — not the blank/placeholder shapes that
+                    # legitimately collapse to DEFAULT_PORT. Matching it
+                    # against a launch at DEFAULT_PORT would lend this
+                    # profile's password to a target it was never recorded
+                    # for. A profile whose stored port is unreadable is not
+                    # a profile for this target.
+                    continue
                 if (candidate.get("host"), candidate_port, candidate.get("user"), candidate.get("dbname")) != (
                     host, port, user, dbname,
                 ):
@@ -358,15 +365,10 @@ def resolve_connection_decision(
             # answer, the same principle kouko chose for the port gap above
             # (2026-09-21).
             #
-            # The refusal fires on the tie alone (see W0-09): the scan does
-            # read each matching candidate's password above (that read is
-            # what makes it a lender), but it never COMPARES the tied
-            # profiles' passwords to decide this, on purpose — an operator
-            # can see a four-field tie by reading config.toml alone, and
-            # making the outcome also depend on whether two keychain
-            # entries happen to agree would require opening the keychain to
-            # predict it. Nothing here says or implies the passwords
-            # differ; only that the fields tie.
+            # The refusal fires on the tie alone — see
+            # ConnectionDecision.ambiguous_profiles for why the scan reads
+            # but never compares the tied candidates' passwords to reach it
+            # (see W0-09).
             ambiguous_names = tuple(name for name, _ in lenders)
             logger.debug(
                 "borrow scan: refusing to guess — %d profiles all match "
@@ -474,17 +476,12 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
                 f"password. Fix the typo and relaunch."
             )
         if decision.ambiguous_profiles:
-            # More than one stored profile matches the inline target. The
-            # scan (see resolve_connection_decision) does read each tied
-            # candidate's password to identify it as a lender, but never
-            # COMPARES what these tied profiles' passwords actually hold to
-            # reach this branch — only that their host/port/user/dbname all
-            # tie — so this message states exactly that and nothing about
-            # whether the passwords agree or differ, which it never
-            # checked. Name
-            # both (or all) tied candidates explicitly (via
-            # _render_profile_name — see W0-09 item 2 — never a bare
-            # interpolation); never their passwords.
+            # More than one stored profile matches the inline target — see
+            # ConnectionDecision.ambiguous_profiles for why the scan reads
+            # but never compares the tied candidates' passwords to reach
+            # this branch (see W0-09). Name both (or all) tied candidates
+            # explicitly (via _render_profile_name — see W0-09 item 2 —
+            # never a bare interpolation); never their passwords.
             raise ConfigurationError(
                 f"Inline mode requires a password for "
                 f"host={decision.host!r} port={decision.port!r} "

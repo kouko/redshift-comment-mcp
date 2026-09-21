@@ -32,6 +32,55 @@ def _get_tool_fn(tools, name):
     raise KeyError(f"tool {name!r} not registered")
 
 
+def _collect_tool_wire_surfaces(tool_objs) -> tuple[dict, int]:
+    """Collect each tool-like object's ``description`` and input-schema text,
+    and report how many schema surfaces were actually found.
+
+    A tool object needs only ``.name``, ``.description``, and a
+    ``.parameters`` or ``.inputSchema`` attribute -- real FastMCP ``Tool``
+    objects or a fake stand-in both work. The caller compares the returned
+    count against ``len(tool_objs)``: ``test_no_wire_surface_mentions_password_flag``
+    used to collect a schema surface only ``if schema is not None``, so a
+    future FastMCP renaming BOTH ``parameters`` and ``inputSchema`` (or a
+    tool exposing neither) would silently make this half check zero -- or
+    too few -- surfaces and still exit green, the exact silent-degrade shape
+    the ``instructions`` half already guards against with its own explicit
+    non-empty assert.
+    """
+    import json
+
+    surfaces: dict[str, str] = {}
+    schema_count = 0
+    for t in tool_objs:
+        surfaces[f"{t.name}.description"] = t.description or ""
+        schema = getattr(t, "parameters", None) or getattr(t, "inputSchema", None)
+        if schema is not None:
+            surfaces[f"{t.name}.input_schema"] = json.dumps(schema)
+            schema_count += 1
+    return surfaces, schema_count
+
+
+def test_collect_tool_wire_surfaces_schema_count_drops_if_fields_renamed():
+    """Nit 3 regression: pin that ``_collect_tool_wire_surfaces`` reports HOW
+    MANY schema surfaces it actually found, so
+    ``test_no_wire_surface_mentions_password_flag``'s count check catches a
+    future FastMCP that renames both ``parameters`` and ``inputSchema``
+    instead of silently checking zero surfaces and staying green."""
+    from types import SimpleNamespace
+
+    tool_objs = [
+        SimpleNamespace(name="a", description="d1", parameters={"x": 1}),
+        SimpleNamespace(name="b", description="d2", renamed_schema_field={"y": 2}),
+    ]
+    surfaces, schema_count = _collect_tool_wire_surfaces(tool_objs)
+    assert schema_count == 1, (
+        "one of the two fake tools has neither `parameters` nor "
+        "`inputSchema` -- the count must reflect that, not silently pass"
+    )
+    assert surfaces["a.input_schema"] == '{"x": 1}'
+    assert "b.input_schema" not in surfaces
+
+
 @pytest.fixture
 def mock_config():
     """建立模擬的連線配置"""
@@ -3777,10 +3826,12 @@ class TestNoToolDescriptionRecommendsThePasswordFlag:
         both existing guards in a demonstrated attack. Each tool's input
         schema is cheap to read here too and gets the same treatment, so a
         parameter description carrying the same text would not slip through
-        either.
+        either -- and, per the nit fixed here, the schema half's own
+        surface count is asserted against the tool count, so a future
+        FastMCP renaming both ``parameters`` and ``inputSchema`` fails
+        loudly instead of silently checking zero surfaces.
         """
         import asyncio
-        import json
         from redshift_comment_mcp.config import ConfigurationError
 
         def provider():
@@ -3790,15 +3841,23 @@ class TestNoToolDescriptionRecommendsThePasswordFlag:
         surfaces = {"instructions": tools.mcp.instructions or ""}
 
         lister = getattr(tools.mcp, 'list_tools', None) or tools.mcp._list_tools
-        for t in asyncio.run(lister()):
-            surfaces[f"{t.name}.description"] = t.description or ""
-            schema = getattr(t, "parameters", None) or getattr(t, "inputSchema", None)
-            if schema is not None:
-                surfaces[f"{t.name}.input_schema"] = json.dumps(schema)
+        registered = asyncio.run(lister())
+        tool_surfaces, schema_count = _collect_tool_wire_surfaces(registered)
+        surfaces.update(tool_surfaces)
 
         assert surfaces["instructions"].strip(), (
             "FastMCP server exposes no non-empty `instructions` string; "
             "this guard cannot pin what it does not receive."
+        )
+
+        assert schema_count == len(registered), (
+            f"collected {schema_count} input-schema surfaces for "
+            f"{len(registered)} registered tools -- FastMCP's Tool object "
+            f"likely renamed both `parameters` and `inputSchema` (or a tool "
+            f"is registered with neither), so this guard's schema half "
+            f"would otherwise silently check too few surfaces instead of "
+            f"failing loudly, the same blind spot the `instructions` "
+            f"non-empty assert above already guards against."
         )
 
         offending = {

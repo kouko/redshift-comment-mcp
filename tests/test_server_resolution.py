@@ -942,20 +942,100 @@ def _mcp_tool_docstring_line_ranges(source: str) -> list[tuple[int, int]]:
     return ranges
 
 
-def test_no_stray_password_flag_recommendation_in_source():
-    """A5 regression guard: scan server.py's and redshift_tools.py's own
-    source text for the literal substring '--password' and confirm every
-    remaining occurrence is one that genuinely cannot reach an MCP client:
+def _all_docstring_line_ranges(source: str) -> list[tuple[int, int]]:
+    """Line ranges (1-indexed, inclusive) of EVERY docstring in ``source`` —
+    module, class, and function/async-function — regardless of whether the
+    function is registered as an MCP tool.
 
-      1. the argparse flag's own declaration (`"--password",` inside
-         `add_argument(...)`) — CLI-only, never published over MCP; or
-      2. an RST-style code reference inside a docstring, spelled
-         `` ``--password`` `` (double-backtick-quoted) — BUT only when that
-         docstring belongs to a function that is NOT registered as an MCP
-         tool (see `_mcp_tool_docstring_line_ranges`). A dataclass docstring,
-         a plain internal function's docstring, or a module docstring never
-         reaches a client; a `@self.mcp.tool`-decorated function's docstring
-         always does, regardless of backtick formatting.
+    ``test_no_stray_password_flag_recommendation_in_source``'s exemption 2
+    (an RST-style code reference spelled `` ``--password`` ``) is meant to
+    cover only text that IS a docstring: the docstring's own prose is
+    describing the flag for a reader of the source, not recommending it.
+    Gating that exemption on a bare per-line regex match instead — the
+    shape this replaces — exempts ANY line containing the backticked
+    substring, docstring or not: an f-string assembled at runtime, or an
+    ordinary ``#`` comment, neither of which is a docstring at all. This
+    mirrors ``_mcp_tool_docstring_line_ranges`` above but drops its
+    MCP-tool-only filter, since exemption 2 is not limited to tool
+    docstrings the way the wire-published check is.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    ranges: list[tuple[int, int]] = []
+    nodes: list = [tree] + [
+        node for node in ast.walk(tree)
+        if isinstance(node, (ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
+    ]
+    for node in nodes:
+        body = getattr(node, "body", None)
+        if (
+            body
+            and isinstance(body[0], ast.Expr)
+            and isinstance(body[0].value, ast.Constant)
+            and isinstance(body[0].value.value, str)
+        ):
+            doc_node = body[0]
+            ranges.append((doc_node.lineno, doc_node.end_lineno))
+    return ranges
+
+
+def test_all_docstring_line_ranges_excludes_non_docstring_backtick_lines():
+    """A5 nit 1 regression: the exemption for an RST-style
+    `` ``--password`` `` code reference must apply only inside an actual
+    docstring — module, class, or function — never to a line that merely
+    CONTAINS that substring, such as an f-string built at runtime or an
+    ordinary comment. ``_all_docstring_line_ranges`` is what
+    ``test_no_stray_password_flag_recommendation_in_source`` gates
+    exemption 2 on below; pin its boundary directly against a synthetic
+    source snippet rather than relying on today's source ever happening to
+    contain a violating line."""
+    source = (
+        '"""Module docstring mentioning ``--password`` here."""\n'
+        "\n"
+        "def f():\n"
+        '    """Function docstring also mentions ``--password``."""\n'
+        "    # a comment that mentions ``--password`` is NOT a docstring\n"
+        '    msg = f"see ``--password`` for details"\n'
+        "    return msg\n"
+    )
+    ranges = _all_docstring_line_ranges(source)
+
+    def _in_range(lineno: int) -> bool:
+        return any(start <= lineno <= end for start, end in ranges)
+
+    assert _in_range(1), "the module docstring's own line must be covered"
+    assert _in_range(4), "the function docstring's own line must be covered"
+    assert not _in_range(5), "an ordinary comment is not a docstring"
+    assert not _in_range(6), "an f-string built at runtime is not a docstring"
+
+
+def test_no_stray_password_flag_recommendation_in_source():
+    """A5 regression guard: scan server.py's, redshift_tools.py's, and
+    setup_cli.py's own source text for the literal substring '--password'
+    (Acceptance 5: "No message emitted by the server or its CLI") and
+    confirm every remaining occurrence is one that genuinely cannot reach
+    an MCP client:
+
+      1. a bare `"--password",` argument-list entry — either the argparse
+         flag's own declaration (`add_argument("--password", ...)`, CLI-only
+         and never published over MCP) or setup_cli.py's zenity subprocess
+         invocation (`["zenity", "--password", ...]`, zenity's own
+         password-entry-mode argument, not a flag this project's CLI
+         recommends). Both share the identical bare-string-literal shape,
+         so one pattern covers both;
+      2. an RST-style code reference that IS actually inside a docstring —
+         module, class, or function — spelled `` ``--password`` ``
+         (double-backtick-quoted), BUT only when that docstring belongs to
+         a function that is NOT registered as an MCP tool (see
+         `_mcp_tool_docstring_line_ranges`). A dataclass docstring, a plain
+         internal function's docstring, or a module docstring never reaches
+         a client; a `@self.mcp.tool`-decorated function's docstring
+         always does, regardless of backtick formatting. The "inside a
+         docstring at all" half is checked via `_all_docstring_line_ranges`
+         — a per-line regex match alone would exempt any line containing
+         the backticked substring, docstring or not (an f-string, an
+         ordinary comment, a `ConfigurationError` message).
 
     The previous version of this test exempted shape 2 everywhere, on the
     premise that a docstring reference is "internal architecture
@@ -970,8 +1050,8 @@ def test_no_stray_password_flag_recommendation_in_source():
     --password ..." / "... or pass --password ..."), which is exactly what
     this task removes. Grepping the message strings rather than asserting
     on today's known call sites makes this durable: a future edit that
-    reintroduces the recommendation anywhere in either module fails this
-    test.
+    reintroduces the recommendation anywhere in any of the three modules
+    fails this test.
 
     A literal prohibition such as "Never pass the password as a tool
     argument or shell argument" or "DO NOT pass the password as a tool
@@ -983,18 +1063,27 @@ def test_no_stray_password_flag_recommendation_in_source():
     import re
     from redshift_comment_mcp import server as server_module
     from redshift_comment_mcp import redshift_tools as redshift_tools_module
+    from redshift_comment_mcp import setup_cli as setup_cli_module
 
-    argparse_decl_re = re.compile(r'^\s*"--password",\s*$')
+    # Matches BOTH argparse's `add_argument("--password", ...)` declaration
+    # and setup_cli.py's `["zenity", "--password", ...]` subprocess argv
+    # entry — identical bare-string-literal shape, neither one a
+    # recommendation to the operator or an MCP-visible surface.
+    bare_flag_arg_re = re.compile(r'^\s*"--password",\s*$')
     docstring_ref_re = re.compile(r'``[^`]*--password[^`]*``')
 
-    for module in (server_module, redshift_tools_module):
+    for module in (server_module, redshift_tools_module, setup_cli_module):
         with open(module.__file__, encoding="utf-8") as f:
             source = f.read()
         lines = source.splitlines(keepends=True)
         tool_doc_ranges = _mcp_tool_docstring_line_ranges(source)
+        all_doc_ranges = _all_docstring_line_ranges(source)
 
         def _in_wire_published_docstring(lineno: int) -> bool:
             return any(start <= lineno <= end for start, end in tool_doc_ranges)
+
+        def _in_any_docstring(lineno: int) -> bool:
+            return any(start <= lineno <= end for start, end in all_doc_ranges)
 
         for lineno, line in enumerate(lines, start=1):
             if "--password" not in line:
@@ -1007,7 +1096,10 @@ def test_no_stray_password_flag_recommendation_in_source():
                 f"remove it, keeping any REDSHIFT_PASSWORD guidance:\n"
                 f"{line!r}"
             )
-            allowed = bool(argparse_decl_re.match(line)) or bool(docstring_ref_re.search(line))
+            allowed = (
+                bool(bare_flag_arg_re.match(line))
+                or (bool(docstring_ref_re.search(line)) and _in_any_docstring(lineno))
+            )
             assert allowed, (
                 f"{module.__file__}:{lineno} recommends the --password flag "
                 f"as a way to supply a password — remove the recommendation, "
@@ -1107,6 +1199,87 @@ def test_borrow_blank_and_placeholder_port_still_borrow(tmp_xdg, fake_keyring, m
         assert server.resolve_connection_params(args) == (
             "h.example.com", 5439, "u", "borrowed-pw", "d"
         ), f"raw port {raw!r} must still borrow normally"
+
+
+# ===== W0-11 fatal: the port guard must apply to the STORED side too =====
+# `_coerce_port`'s typo guard (`_SubstitutedPort`) above only ever protected
+# the LAUNCH port. The candidate loop in `resolve_connection_decision`
+# reuses the same `_coerce_port` on each candidate's STORED port with no
+# such guard: an unparseable stored value (config.toml holding a TOML float
+# like `9999.0` — legal TOML, but `_coerce_port` cannot `int()` a decimal
+# string — or a hand-edited `"9999x"`) silently collapsed to DEFAULT_PORT
+# and matched a launch at 5439, lending that profile's keychain password to
+# a listener it was never recorded for.
+
+
+def _write_raw_profile(name, *, host, port_toml, user, dbname):
+    """Write config.toml by hand with a literal TOML ``port`` value that
+    ``write_profile`` (typed ``port: int``) cannot produce — a bare TOML
+    float (``9999.0``) or a quoted string (``"9999x"``). ``port_toml=None``
+    omits the ``port`` key entirely (the "no port recorded" shape)."""
+    path = config.config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    port_line = "" if port_toml is None else f"port = {port_toml}\n"
+    path.write_text(
+        f'[profile.{name}]\n'
+        f'host = "{host}"\n'
+        f'{port_line}'
+        f'user = "{user}"\n'
+        f'dbname = "{dbname}"\n'
+    )
+
+
+@pytest.mark.parametrize(
+    "port_toml", ["9999.0", '"9999x"'], ids=["toml_float", "unparseable_string"]
+)
+def test_stored_unparseable_port_refuses_to_borrow(
+    tmp_xdg, fake_keyring, monkeypatch, port_toml,
+):
+    """A stored profile whose port `_coerce_port` cannot parse (a TOML
+    float, or a non-numeric string a hand-edit or a corrupted write could
+    produce) must not silently collapse to DEFAULT_PORT and match a launch
+    at that port — mirroring the guard already in place for the LAUNCH side
+    (test_borrow_mistyped_port_refuses_to_borrow above)."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    _write_raw_profile(
+        "prod", host="h.example.com", port_toml=port_toml, user="u", dbname="d",
+    )
+    config.set_password("prod", "provisioned-for-unreadable-port")
+
+    args = _ns(host="h.example.com", user="u", dbname="d", port=5439)
+    decision = server.resolve_connection_decision(args)
+    assert decision.mechanism == "inline", (
+        f"a profile with an unparseable stored port ({port_toml}) must not "
+        f"be treated as a match (mechanism={decision.mechanism!r})"
+    )
+    assert decision.password is None, (
+        f"a keychain password provisioned for a profile with an unparseable "
+        f"stored port ({port_toml}) was lent to a launch at 5439"
+    )
+
+
+def test_stored_ordinary_port_shapes_still_borrow(tmp_xdg, fake_keyring, monkeypatch):
+    """Boundary: the fix above must not break the common case — a stored
+    port that IS a real int, or absent entirely, still matches and lends
+    its password."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    _write_raw_profile(
+        "real-int", host="h.example.com", port_toml="5439", user="u", dbname="d",
+    )
+    config.set_password("real-int", "borrowed-pw")
+    args = _ns(host="h.example.com", user="u", dbname="d", port=5439)
+    assert server.resolve_connection_params(args) == (
+        "h.example.com", 5439, "u", "borrowed-pw", "d"
+    )
+
+    config.delete_profile("real-int")
+    _write_raw_profile(
+        "no-port", host="h.example.com", port_toml=None, user="u", dbname="d",
+    )
+    config.set_password("no-port", "borrowed-pw-2")
+    assert server.resolve_connection_params(args) == (
+        "h.example.com", 5439, "u", "borrowed-pw-2", "d"
+    )
 
 
 # ===== W0-09 item 2: a stored profile's NAME is not operator-only input —
