@@ -466,6 +466,82 @@ def test_no_profiles_at_all_raises(tmp_xdg, fake_keyring, monkeypatch):
     assert "inline.example.com" in str(excinfo.value)
 
 
+# ===== W0-08 item 3: an ambiguous lender must refuse, not pick by sort
+# order =====
+# A credential rotation leaves exactly two profiles recorded for the same
+# four-field target with different passwords (the retired one and its
+# replacement). probe_borrow_scope.py::test_borrow_ambiguousprofiles_reportslender
+# pinned the pre-existing behaviour — the scan takes whichever name
+# config.list_profiles() (sorted) yields first — as merely survivable. kouko
+# closed it on 2026-09-21: a loud refusal beats a quiet wrong answer, the
+# same principle chosen for the port gap above.
+
+
+def test_ambiguous_profiles_refuse_to_borrow(tmp_xdg, fake_keyring, monkeypatch):
+    """Two stored profiles match the inline four-field target with
+    different passwords. Neither may be picked silently — the decision
+    must come back password-less rather than "borrowed" from whichever
+    name happens to sort first."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "prod", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod", "retired-secret")
+    config.write_profile(
+        "prod-rotated", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod-rotated", "live-secret")
+
+    args = _ns(host="h.example.com", user="u", dbname="d")
+    decision = server.resolve_connection_decision(args)
+
+    assert decision.mechanism == "inline"
+    assert decision.has_password is False
+    assert decision.password is None
+
+
+def test_ambiguous_profiles_error_names_both_candidates(tmp_xdg, fake_keyring, monkeypatch):
+    """The refusal message must name both tied profiles (Acceptance 2's
+    'each existing profile's target'), and must never leak either
+    password."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "prod", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod", "retired-secret")
+    config.write_profile(
+        "prod-rotated", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod-rotated", "live-secret")
+
+    args = _ns(host="h.example.com", user="u", dbname="d")
+    with pytest.raises(ValueError) as excinfo:
+        server.resolve_connection_params(args)
+    msg = str(excinfo.value)
+    assert "prod" in msg
+    assert "prod-rotated" in msg
+    assert "retired-secret" not in msg
+    assert "live-secret" not in msg
+
+
+def test_single_matching_profile_still_borrows_despite_ambiguity_check(tmp_xdg, fake_keyring, monkeypatch):
+    """Boundary: exactly one profile matching the target must keep lending
+    its password exactly as before — the ambiguity check must fire only
+    when there is genuinely more than one candidate."""
+    monkeypatch.delenv("REDSHIFT_PASSWORD", raising=False)
+    config.write_profile(
+        "prod", host="h.example.com", port=5439, user="u", dbname="d",
+    )
+    config.set_password("prod", "only-secret")
+
+    args = _ns(host="h.example.com", user="u", dbname="d")
+    decision = server.resolve_connection_decision(args)
+
+    assert decision.mechanism == "borrowed"
+    assert decision.password == "only-secret"
+    assert decision.profile_name == "prod"
+
+
 # ===== W0-05 defect 3: the borrow scan must not make a keychain-free path
 # depend on the keychain (or on a clean config.toml) =====
 # The scan calls cfg.list_profiles() / cfg.read_profile() / cfg.get_password()
@@ -719,25 +795,89 @@ def test_get_setup_status_inline_next_step_does_not_recommend_password_flag():
     assert "REDSHIFT_PASSWORD" in result["next_step"]
 
 
+def _mcp_tool_docstring_line_ranges(source: str) -> list[tuple[int, int]]:
+    """Line ranges (1-indexed, inclusive) of every ``@self.mcp.tool``-decorated
+    function's own docstring in ``source``.
+
+    FastMCP publishes a tool's docstring verbatim as that tool's
+    ``description`` in the MCP ``tools/list`` response — the exact text every
+    connected client receives, agent or human. A reference formatted as
+    internal documentation (double-backtick-quoted) inside one of these
+    docstrings is not internal at all once it ships this way; it reaches the
+    wire regardless of how it is spelled.
+
+    Known blind spot, spelled out rather than left implicit: this recognizes
+    only the literal decorator shape ``@self.mcp.tool`` (optionally stacked
+    with another decorator such as ``@_guarded``). A tool registered any
+    other way — e.g. ``mcp.tool()(fn)`` called programmatically, a decorator
+    aliased to a different name, or a docstring assembled by string
+    concatenation instead of a literal triple-quoted constant — would not be
+    found here and would fall through to the looser backtick-reference
+    exemption below, silently. The companion runtime test,
+    ``TestNoToolDescriptionRecommendsThePasswordFlag`` in test_tools.py,
+    checks the ACTUAL published ``t.description`` of every registered tool
+    at runtime and has no such blind spot; it is the one to trust if the two
+    ever disagree.
+    """
+    import ast
+
+    tree = ast.parse(source)
+    ranges: list[tuple[int, int]] = []
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        is_mcp_tool = False
+        for dec in node.decorator_list:
+            if (
+                isinstance(dec, ast.Attribute) and dec.attr == "tool"
+                and isinstance(dec.value, ast.Attribute) and dec.value.attr == "mcp"
+                and isinstance(dec.value.value, ast.Name) and dec.value.value.id == "self"
+            ):
+                is_mcp_tool = True
+                break
+        if not is_mcp_tool:
+            continue
+        if (
+            node.body
+            and isinstance(node.body[0], ast.Expr)
+            and isinstance(node.body[0].value, ast.Constant)
+            and isinstance(node.body[0].value.value, str)
+        ):
+            doc_node = node.body[0]
+            ranges.append((doc_node.lineno, doc_node.end_lineno))
+    return ranges
+
+
 def test_no_stray_password_flag_recommendation_in_source():
     """A5 regression guard: scan server.py's and redshift_tools.py's own
     source text for the literal substring '--password' and confirm every
-    remaining occurrence is one of the two allowed shapes:
+    remaining occurrence is one that genuinely cannot reach an MCP client:
 
       1. the argparse flag's own declaration (`"--password",` inside
-         `add_argument(...)`) — documents the flag, doesn't tell anyone to
-         use it;
-      2. an RST-style code reference inside a docstring, always spelled
-         `` ``--password`` `` (double-backtick-quoted) — internal
-         architecture documentation of what the (still-supported) inline
-         mechanism can consume, not an instruction to the reader.
+         `add_argument(...)`) — CLI-only, never published over MCP; or
+      2. an RST-style code reference inside a docstring, spelled
+         `` ``--password`` `` (double-backtick-quoted) — BUT only when that
+         docstring belongs to a function that is NOT registered as an MCP
+         tool (see `_mcp_tool_docstring_line_ranges`). A dataclass docstring,
+         a plain internal function's docstring, or a module docstring never
+         reaches a client; a `@self.mcp.tool`-decorated function's docstring
+         always does, regardless of backtick formatting.
+
+    The previous version of this test exempted shape 2 everywhere, on the
+    premise that a docstring reference is "internal architecture
+    documentation, not an instruction to the reader." That premise is false
+    for any docstring FastMCP ships over the wire — a blind run measured
+    agent-visible `--password` mentions going from one at base to two at
+    HEAD, both inside `get_setup_status`'s own docstring, exactly the shape
+    this test used to wave through. Do not re-widen the exemption back to
+    "any docstring" without re-reading that finding.
 
     Every other occurrence is imperative guidance text (e.g. "Provide
     --password ..." / "... or pass --password ..."), which is exactly what
     this task removes. Grepping the message strings rather than asserting
-    on today's two known call sites makes this durable: a future edit that
-    reintroduces the recommendation anywhere in either module — not just at
-    the two sites this task touched — fails this test.
+    on today's known call sites makes this durable: a future edit that
+    reintroduces the recommendation anywhere in either module fails this
+    test.
 
     A literal prohibition such as "Never pass the password as a tool
     argument or shell argument" or "DO NOT pass the password as a tool
@@ -755,10 +895,24 @@ def test_no_stray_password_flag_recommendation_in_source():
 
     for module in (server_module, redshift_tools_module):
         with open(module.__file__, encoding="utf-8") as f:
-            lines = f.readlines()
+            source = f.read()
+        lines = source.splitlines(keepends=True)
+        tool_doc_ranges = _mcp_tool_docstring_line_ranges(source)
+
+        def _in_wire_published_docstring(lineno: int) -> bool:
+            return any(start <= lineno <= end for start, end in tool_doc_ranges)
+
         for lineno, line in enumerate(lines, start=1):
             if "--password" not in line:
                 continue
+            assert not _in_wire_published_docstring(lineno), (
+                f"{module.__file__}:{lineno} mentions --password inside an "
+                f"@self.mcp.tool docstring. FastMCP publishes this text "
+                f"verbatim to every MCP client in tools/list, so even a "
+                f"double-backtick-quoted reference reaches the wire — "
+                f"remove it, keeping any REDSHIFT_PASSWORD guidance:\n"
+                f"{line!r}"
+            )
             allowed = bool(argparse_decl_re.match(line)) or bool(docstring_ref_re.search(line))
             assert allowed, (
                 f"{module.__file__}:{lineno} recommends the --password flag "

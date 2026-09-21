@@ -3679,6 +3679,92 @@ class TestGetSetupStatusTool:
         import json
         assert "ichef-pw" not in json.dumps(result)
 
+    def test_get_setup_status_inline_mode_profile_field_is_none(self, monkeypatch):
+        """W0-08 item 2: `profile` must not name something that does not
+        exist. Plain inline mode never consults a profile at all -- neither
+        by name nor as a lender -- so the field must be None rather than
+        echoing back the raw (irrelevant) call argument, and rather than the
+        literal 'default', which may not even be a configured profile."""
+        from redshift_comment_mcp.config import ConfigurationError
+        def provider():
+            raise ConfigurationError("doesn't matter — get_setup_status doesn't touch the provider")
+        tools = RedshiftTools(
+            provider,
+            status_provider=lambda profile: ConnectionDecision(
+                mechanism="inline",
+                host="h.example.com", port=5439, user="alice", dbname="analytics",
+                has_fields=True, has_password=True, password="env-password",
+                profile_name=None,
+            ),
+        )
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        # Pass an explicit (irrelevant, in this mode) profile argument to
+        # prove the field no longer just echoes it back either.
+        result = get_setup_status(profile="default")
+
+        assert result["profile"] is None
+
+    def test_get_setup_status_borrowed_mode_profile_field_is_none(self, monkeypatch):
+        """W0-08 item 2: borrowed mode connects to the INLINE target, never
+        to the lending profile's -- so `profile` (the obvious field an agent
+        reads for "which cluster am I on") must not name the lender. That
+        truthful answer already lives in `borrowed_from_profile`; naming the
+        lender here as well would suggest the connection targets that
+        profile, which it does not -- only its password does."""
+        from redshift_comment_mcp.config import ConfigurationError
+        def provider():
+            raise ConfigurationError("doesn't matter — get_setup_status doesn't touch the provider")
+        tools = RedshiftTools(
+            provider,
+            status_provider=lambda profile: ConnectionDecision(
+                mechanism="borrowed",
+                host="h.example.com", port=5439, user="alice", dbname="analytics",
+                has_fields=True, has_password=True, password="borrowed-pw",
+                profile_name="prod",
+            ),
+        )
+        get_setup_status = _get_tool_fn(tools, 'get_setup_status')
+
+        result = get_setup_status()
+
+        assert result["profile"] is None
+        assert result["borrowed_from_profile"] == "prod"
+
+
+class TestNoToolDescriptionRecommendsThePasswordFlag:
+    """W0-08 item 1: FastMCP publishes each tool's docstring verbatim as
+    that tool's ``description`` in the ``tools/list`` response -- the exact
+    text every MCP client, including an agent with shell access, receives.
+    A blind run measured agent-visible ``--password`` mentions going from
+    one at base to two at HEAD (both inside ``get_setup_status``'s
+    docstring), which is the wrong direction for Acceptance 5: no message
+    the server emits should recommend passing a password as a command-line
+    argument. This checks the ACTUAL published description text at
+    runtime, not the source file, so it has no blind spot for how a
+    docstring happens to be formatted."""
+
+    def test_no_tool_description_mentions_password_flag(self):
+        import asyncio
+        from redshift_comment_mcp.config import ConfigurationError
+
+        def provider():
+            raise ConfigurationError("doesn't matter — no tool call happens here")
+
+        tools = RedshiftTools(provider)
+        lister = getattr(tools.mcp, 'list_tools', None) or tools.mcp._list_tools
+        registered = asyncio.run(lister())
+
+        offending = {
+            t.name: t.description for t in registered
+            if "--password" in (t.description or "")
+        }
+        assert offending == {}, (
+            f"tool description(s) recommend/mention the --password flag: "
+            f"{sorted(offending)} -- this text is published verbatim to "
+            f"every MCP client in tools/list."
+        )
+
 
 class TestServerInstructionsEnumerateAllThreeMechanisms:
     """W0-05 defect 4 / Acceptance 3 positive: the FastMCP ``instructions``

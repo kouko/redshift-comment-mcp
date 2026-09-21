@@ -164,7 +164,12 @@ def resolve_connection_decision(
       host/port/user/dbname; a stored profile can supply a password only,
       never a connection target, and it only ever lends to a launch naming
       the exact same four-field target it was recorded for. Profile *name*
-      is ignored throughout this mode.
+      is ignored throughout this mode. When MORE THAN ONE stored profile
+      matches the same four-field target with different passwords — the
+      shape a credential rotation leaves behind — the scan refuses rather
+      than picking whichever name sorts first: the decision comes back
+      plain password-less ``"inline"`` with ``ambiguous_profiles`` naming
+      every tied candidate.
     - **Profile mode** (the default): delegated to
       ``resolve_profile_decision``, which looks up the profile name via
       ``config.resolve_active_profile(profile_override or args.profile)``
@@ -250,6 +255,11 @@ def resolve_connection_decision(
             )
             candidate_names = []
 
+        # Collect every candidate that matches AND has a password to lend —
+        # not just the first — so an ambiguous match (see below) can be
+        # detected instead of silently resolved by list_profiles()'s sort
+        # order.
+        lenders: list[tuple[str, str]] = []
         for candidate_name in candidate_names:
             try:
                 candidate = cfg.read_profile(candidate_name)
@@ -268,11 +278,35 @@ def resolve_connection_decision(
                 )
                 continue
             if borrowed_password:
-                return ConnectionDecision(
-                    mechanism="borrowed", host=host, port=port, user=user, dbname=dbname,
-                    has_fields=True, has_password=True, password=borrowed_password,
-                    profile_name=candidate_name,
-                )
+                lenders.append((candidate_name, borrowed_password))
+
+        if len(lenders) == 1:
+            candidate_name, borrowed_password = lenders[0]
+            return ConnectionDecision(
+                mechanism="borrowed", host=host, port=port, user=user, dbname=dbname,
+                has_fields=True, has_password=True, password=borrowed_password,
+                profile_name=candidate_name,
+            )
+
+        if len(lenders) > 1:
+            # A credential rotation leaves exactly this shape: the retired
+            # profile and its replacement both recorded for the same
+            # four-field target, with different passwords. Picking the
+            # first by config.list_profiles()'s sort order would silently
+            # prefer whichever name sorts first — possibly the retired
+            # secret — and could burn attempts against an account lockout
+            # policy. A loud refusal beats a quiet wrong answer, the same
+            # principle kouko chose for the port gap above (2026-09-21).
+            ambiguous_names = tuple(name for name, _ in lenders)
+            logger.debug(
+                "borrow scan: refusing to guess — %d profiles all match "
+                "this target: %s", len(ambiguous_names), ambiguous_names,
+            )
+            return ConnectionDecision(
+                mechanism="inline", host=host, port=port, user=user, dbname=dbname,
+                has_fields=True, has_password=False, password=None,
+                profile_name=None, ambiguous_profiles=ambiguous_names,
+            )
 
         return ConnectionDecision(
             mechanism="inline", host=host, port=port, user=user, dbname=dbname,
@@ -359,6 +393,28 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
                 f"substituted port never borrows a stored profile's "
                 f"password. Fix the typo and relaunch."
             )
+        if decision.ambiguous_profiles:
+            # More than one stored profile matches the inline target, each
+            # with its own password — see resolve_connection_decision for
+            # why the scan refuses rather than picking one. Name both (or
+            # all) tied candidates explicitly; never their passwords.
+            raise ConfigurationError(
+                f"Inline mode requires a password for "
+                f"host={decision.host!r} port={decision.port!r} "
+                f"user={decision.user!r} dbname={decision.dbname!r}, and "
+                f"{len(decision.ambiguous_profiles)} stored profiles all "
+                f"match that exact target with different passwords: "
+                f"{', '.join(decision.ambiguous_profiles)}. Refusing to "
+                f"guess which one to borrow — picking by sort order could "
+                f"silently prefer a retired credential over its "
+                f"replacement, the shape a credential rotation leaves "
+                f"behind.\n"
+                f"Existing profiles: {existing_desc}.\n"
+                f"Delete or rename the stale profile so only one matches "
+                f"this target, or provide the REDSHIFT_PASSWORD env var "
+                f"directly."
+            )
+
         raise ConfigurationError(
             f"Inline mode requires a password for "
             f"host={decision.host!r} port={decision.port!r} "

@@ -73,6 +73,18 @@ class ConnectionDecision:
             matched profile's name for ``"borrowed"``, the resolved active
             profile for ``"profile"`` mode, or ``None`` for plain
             ``"inline"`` (no profile is consulted at all in that case).
+        ambiguous_profiles: ``None`` in every case except one — the inline
+            borrow scan found MORE than one stored profile whose host, port,
+            user AND dbname all match the inline target, each with its own
+            keychain password. A credential rotation leaves exactly this
+            shape (the retired profile kept alongside its replacement, same
+            target, different password); picking one by
+            ``config.list_profiles()``'s sort order would silently prefer
+            whichever name sorts first, possibly the retired secret. Rather
+            than guess, the decision comes back as plain password-less
+            ``"inline"`` and this field names every tied candidate (sorted,
+            never the passwords) so the refusal message built from it can
+            name them all.
     """
 
     mechanism: str
@@ -84,6 +96,7 @@ class ConnectionDecision:
     has_password: bool
     password: Optional[str] = field(repr=False)
     profile_name: Optional[str]
+    ambiguous_profiles: Optional[Tuple[str, ...]] = None
 
 
 def resolve_profile_decision(profile_override: Optional[str] = None) -> ConnectionDecision:
@@ -1863,12 +1876,18 @@ the only chat-leak-free paths.
             Returns:
               - ``profile`` — in profile mode, the profile actually resolved
                 (which may differ from what you passed, or from the literal
-                "default", per the resolution above); in inline / borrowed
-                mode, the raw argument echoed back (irrelevant to resolution
-                there)
+                "default", per the resolution above); ``None`` in inline /
+                borrowed mode. No profile is that mode's connection target,
+                so the field never names one — echoing back the call
+                argument (or the literal "default") would tell you the
+                connection is on a profile that may not even exist. In
+                "borrowed" mode specifically, the lending profile's name is
+                reported separately in ``borrowed_from_profile``; the
+                connection itself still never targets that profile, only
+                borrows its password
               - ``source`` — the mechanism actually in force:
-                ``"inline"`` (launch-arg host/user/dbname, password from
-                ``--password``/``REDSHIFT_PASSWORD`` or none), ``"borrowed"``
+                ``"inline"`` (launch-arg host/user/dbname, password from the
+                ``REDSHIFT_PASSWORD`` env var or none), ``"borrowed"``
                 (launch-arg host/port/user/dbname, no inline password, but a
                 stored profile whose host, port, user AND dbname all match
                 lent its keychain password — the connection target is still
@@ -1881,9 +1900,9 @@ the only chat-leak-free paths.
                 True (the fields came from launch args); in profile mode,
                 False only when the resolved profile has no config.toml entry
               - ``has_password`` — whether a password is available (OS
-                keychain in profile / borrowed mode; ``REDSHIFT_PASSWORD`` /
-                ``--password`` in plain inline mode). NEVER returns the
-                password itself
+                keychain in profile / borrowed mode; the ``REDSHIFT_PASSWORD``
+                env var in plain inline mode). NEVER returns the password
+                itself
               - ``host`` / ``port`` / ``user`` / ``dbname`` — the target the
                 connection will actually use, present only when
                 has_fields=True (these are non-secret)
@@ -1910,7 +1929,7 @@ the only chat-leak-free paths.
             result: Dict[str, Any] = {
                 "profile": (
                     decision.profile_name if decision.mechanism == "profile"
-                    else (profile if profile is not None else "default")
+                    else None
                 ),
                 "source": decision.mechanism,
                 "configured": decision.has_password,
