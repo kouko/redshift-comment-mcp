@@ -53,8 +53,8 @@ charter: 1.0
 
 **W0-09 Finish W0-08: a truthful tie, an unforgeable name, a guard that covers the wire**  after: W0-08  acceptance: 3, 5
 - Files: src/redshift_comment_mcp/server.py, tests/test_server_resolution.py, tests/test_tools.py
-- Test: A3 positive: identical-password-tie-lends; negative: differing-password-tie-refuses-truthfully. A5 positive: guard-covers-the-instructions-string; boundary: newline-in-profile-name-cannot-forge-a-line.
-- Risk: all three are defects in W0-08's own new surface, not new scope; agent-decided — compare the collected secrets rather than dropping the claim, since a tie with one secret has nothing to guess between.
+- Test: A3 positive: single-match-still-borrows; negative: identical-password-tie-still-refuses. A5 positive: guard-covers-the-instructions-string; boundary: newline-in-profile-name-cannot-forge-a-line.
+- Risk: all three are defects in W0-08's own new surface, not new scope; agent-decided — every four-field tie refuses and no secret is compared, so the rule stays checkable from config.toml alone.
 
 ## Questions asked
 ① — what — 這樣對嗎？
@@ -67,4 +67,5 @@ pre-① — what — 10 項要不要切（我自行決定切分，未問使用�
 2. Task splitting was agent-decided: PR #42 needed three review rounds for four tasks, so ten accumulated items were cut to the five that share one subject.
 3. The blank-password gate still accepts whitespace-only values, so a borrowed or supplied `" "` is treated as a real password. Out of scope here, already filed.
 3b. Correction recorded 2026-09-21 — the intent's Out of scope excludes the unquoted `{profile_name}` interpolation on the stated ground that "the source is operator input, so the injection path does not reach it". That ground is false: `setup_via_dialog`'s `profile` argument is chosen by an agent, and that agent's job is reading Redshift comments it does not control. W0-09 closes the refusal-message instance because this change authored that text; the command-string instances stay out of scope but their recorded justification does not hold and must not be reused.
+3c. Correction recorded 2026-09-21 — W0-09's first prescription (lend when every tied profile holds the same password) was overruled mid-task and replaced by an unconditional refusal on any four-field tie. The overruled version made success depend on secrets the operator cannot see without opening the keychain; the shipped rule is readable from config.toml alone. The lines above were rewritten to describe what shipped.
 4. `setup_via_dialog` writes a profile whose triple matches the inline values by construction, so the borrow path turns that tool into a working recovery for inline mode — previously it wrote a profile the inline branch never read.
