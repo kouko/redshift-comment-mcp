@@ -21,7 +21,6 @@ SKILLS_DIR = REPO_ROOT / "skills"
 COMMANDS_DIR = REPO_ROOT / "commands"
 PYPROJECT = REPO_ROOT / "pyproject.toml"
 PLUGIN_JSON = REPO_ROOT / ".claude-plugin" / "plugin.json"
-REDSHIFT_TOOLS_PY = REPO_ROOT / "src" / "redshift_comment_mcp" / "redshift_tools.py"
 
 # Skills exempt from the README trilingual rule (internal-only / setup-style).
 NO_README_SKILLS = {"redshift-setup", "redshift-switch-profile"}
@@ -627,15 +626,36 @@ INSTRUCTIONS_TIE_REFUSAL_ANCHORS = [
 def test_tie_refusal_documented_in_instructions_string():
     """A8 boundary: the FastMCP `instructions` string — the one surface
     every MCP client reads before calling anything — also names the tie
-    refusal, not just the manifest and READMEs a person reads on request."""
-    text = REDSHIFT_TOOLS_PY.read_text()
+    refusal, not just the manifest and READMEs a person reads on request.
 
-    missing = [a for a in INSTRUCTIONS_TIE_REFUSAL_ANCHORS if a not in text]
+    Reads the live ``tools.mcp.instructions`` attribute the built server
+    actually carries, the same way
+    ``tests/test_tools.py::TestNoToolDescriptionRecommendsThePasswordFlag``
+    does — not ``redshift_tools.py`` as text. A text/grep scan of the whole
+    file passes as long as the anchor phrases live anywhere in the file,
+    including a comment or docstring that never reaches the built
+    ``instructions`` string; only the live attribute pins the surface this
+    test's own docstring claims to pin.
+    """
+    from redshift_comment_mcp.config import ConfigurationError
+    from redshift_comment_mcp.redshift_tools import RedshiftTools
+
+    def provider():
+        raise ConfigurationError("doesn't matter — instructions text is static")
+
+    tools = RedshiftTools(provider)
+    instructions = tools.mcp.instructions or ""
+
+    assert instructions.strip(), (
+        "FastMCP server exposes no non-empty `instructions` string; this "
+        "guard cannot pin what it does not receive."
+    )
+
+    missing = [a for a in INSTRUCTIONS_TIE_REFUSAL_ANCHORS if a not in instructions]
     assert not missing, (
-        f"redshift_tools.py does not document the tie refusal where the "
-        f"FastMCP instructions string lives. Missing: {missing}. An agent "
-        f"that was never told this rule has no way to react to it beyond "
-        f"retrying blindly."
+        f"the live FastMCP instructions string does not document the tie "
+        f"refusal. Missing: {missing}. An agent that was never told this "
+        f"rule has no way to react to it beyond retrying blindly."
     )
 
 

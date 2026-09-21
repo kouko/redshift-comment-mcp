@@ -766,9 +766,12 @@ boot without a configured profile. Two entry points:
     the error's `message` names every tied candidate — the shape a
     credential rotation leaves behind (the retired profile kept
     alongside its replacement, same target). Do not retry blindly in
-    that case: tell the user to delete or rename the stale profile via
-    `/redshift-setup`, or fill in the password field directly, then
-    retry.
+    that case: tell the user to delete the stale profile with the
+    `delete-profile` subcommand (`redshift-comment-mcp delete-profile
+    --profile <name>`) — there is no rename subcommand; renaming a
+    profile means deleting the stale one this way and creating its
+    replacement via `/redshift-setup` — or fill in the password field
+    directly, then retry.
 
 Either way, the bootstrap flow is:
 
@@ -1910,9 +1913,8 @@ the only chat-leak-free paths.
                 (launch-arg host/port/user/dbname, no inline password, but a
                 stored profile whose host, port, user AND dbname all match
                 lent its keychain password — the connection target is still
-                the INLINE values, never the matched profile's — see
-                W0-01/W0-05), or ``"profile"`` (config.toml + keychain, no
-                launch args)
+                the INLINE values, never the matched profile's), or
+                ``"profile"`` (config.toml + keychain, no launch args)
               - ``configured`` — bool, equivalent to has_fields && has_password
               - ``has_fields`` — whether the connection target (host / port /
                 user / dbname) is known; in inline / borrowed mode, always

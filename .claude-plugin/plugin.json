@@ -22,7 +22,7 @@
     "host": {
       "type": "string",
       "title": "Redshift Host",
-      "description": "Cluster endpoint hostname (e.g. my-cluster.abc123.us-east-1.redshift.amazonaws.com). This field, user and dbname are blank together or not at all: leave all three blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into user and dbname."
+      "description": "Cluster endpoint hostname (e.g. my-cluster.abc123.us-east-1.redshift.amazonaws.com). This field, user, dbname and password are blank together or not at all: leave all four blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into user, dbname and password."
     },
     "port": {
       "type": "number",
@@ -33,12 +33,12 @@
     "user": {
       "type": "string",
       "title": "Redshift User",
-      "description": "Database user to connect as. This field, host and dbname are blank together or not at all: leave all three blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into host and dbname."
+      "description": "Database user to connect as. This field, host, dbname and password are blank together or not at all: leave all four blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into host, dbname and password."
     },
     "dbname": {
       "type": "string",
       "title": "Redshift Database",
-      "description": "Database name to connect to. This field, host and user are blank together or not at all: leave all three blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into host and user."
+      "description": "Database name to connect to. This field, host, user and password are blank together or not at all: leave all four blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into host, user and password."
     },
     "password": {
       "type": "string",
