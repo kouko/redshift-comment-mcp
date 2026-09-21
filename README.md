@@ -92,13 +92,14 @@ or `settings.json`:
   `sensitive`, so it goes to the OS keychain; host / port / user /
   dbname are saved to `settings.json`. That's all you need for one
   cluster.
-- **Fill host / user / dbname, leave password blank — borrow a stored
-  profile's password.** The server looks for a profile written by
-  `/redshift-setup` whose host, user **and** dbname all match what you
-  typed here. Port is not part of the match. If none matches,
-  the connection refuses, naming the target you typed and every existing
-  profile's host, so you can create a matching profile with
-  `/redshift-setup` or fill in the password yourself.
+- **Fill host / port / user / dbname, leave password blank — borrow a
+  stored profile's password.** The server looks for a profile written by
+  `/redshift-setup` whose host, port, user **and** dbname all match what
+  you typed here, and the connection always goes to the target you
+  typed — a profile only ever lends its password, never its own host or
+  port. If none matches, the connection refuses, naming the target you
+  typed and each existing profile's target, so you can create a matching
+  profile with `/redshift-setup` or fill in the password yourself.
 - **Leave every field blank — the profile path.** The plugin falls back
   entirely to `/redshift-setup`'s profile flow. `/redshift-setup` is the
   conversational walk-through that writes a named profile (config.toml +

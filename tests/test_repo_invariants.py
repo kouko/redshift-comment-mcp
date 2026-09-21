@@ -387,7 +387,8 @@ def test_readme_documents_machine_managed_store(readme):
     )
 
 
-# ===== W0-04: manifest + READMEs must state the ACTUAL blank-password rule =====
+# ===== W0-04/W0-06: manifest + READMEs must state the ACTUAL blank-password
+# rule =====
 #
 # Acceptance line 6. The bug this pins: plugin.json's password field said a
 # blank password "use[s] a profile password configured via /redshift-setup"
@@ -398,29 +399,35 @@ def test_readme_documents_machine_managed_store(readme):
 # config.toml + keychain already held a profile for exactly that host, user
 # and dbname. That contradiction is what produced the 2026-09-17 bug report.
 #
-# After W0-01, the actual rule is an IDENTITY MATCH, not "any" profile:
-# leaving the password blank while host, user and dbname are filled borrows
-# the keychain password of the one stored profile whose host, user AND
-# dbname all equal what was typed — port is excluded from the match — and
-# the connection still targets the typed values, never the profile's. No
-# match refuses instead of silently substituting a different target.
-# Leaving every field blank remains the separate, unchanged all-profile path.
+# W0-01 first landed this as an IDENTITY MATCH on three fields (host, user,
+# dbname), with port deliberately excluded, and W0-04 documented that rule.
+# A fresh-context adversary then showed the exclusion itself was a bug: a
+# password provisioned for host:5439 could be lent to a launch naming
+# host:9999 on the same host. kouko closed it the same day (2026-09-21,
+# amendment note on Acceptance 1/2 in the intent) by widening the match to
+# the full FOUR-FIELD target — host, port, user AND dbname must all equal
+# what was typed — and W0-05 changed the code to match. The connection
+# still targets the typed values, never the profile's, and a mismatch
+# refuses, naming the typed target and each existing profile's target
+# (including its port) instead of silently substituting a different one.
+# Leaving every field blank remains the separate, unchanged all-profile
+# path. This is W0-06: restate the four-field rule in the same four files.
 #
 # Each anchor below is copied verbatim from this task's own prose in the
-# four files, and picked so it can ONLY be true of the identity-match rule:
-# a docs edit that reverts to the old "two exclusive paths" story still
-# contains words like "profile" and "blank" (a bare keyword check would miss
-# the regression) but drops "host, user and dbname all match" / the port
-# exclusion / the refusal language, so it fails here. Each language is its
-# own idiom, not a literal translation — same convention as
-# MACHINE_MANAGED_ANCHORS above. If the wording changes on purpose, update
-# these anchors to match, and check the other three files still say the same
-# thing; that's what "agree" means here, not identical text.
+# four files, and picked so it can ONLY be true of the four-field rule: a
+# docs edit that reverts to the old "two exclusive paths" story, or back to
+# the three-field/port-excluded story, still contains words like "profile"
+# and "blank" (a bare keyword check would miss the regression) but drops
+# "host, port, user and dbname all match" / the refusal language, so it
+# fails here. Each language is its own idiom, not a literal translation —
+# same convention as MACHINE_MANAGED_ANCHORS above. If the wording changes
+# on purpose, update these anchors to match, and check the other three
+# files still say the same thing; that's what "agree" means here, not
+# identical text.
 #
 # What this WOULD catch: any one of the four docs reverting to (or drifting
-# into) a rule that no longer requires all three fields to match, or that
-# stops excluding port from the match, or that stops describing a refusal
-# on no match.
+# into) a rule that no longer requires all FOUR fields to match, or that
+# stops describing a refusal on no match.
 # What this would NOT catch: a paraphrase that keeps every one of these
 # facts but uses none of the exact pinned substrings (same limitation as
 # MACHINE_MANAGED_ANCHORS — the fix is to update the anchor, not to accept
@@ -429,22 +436,19 @@ def test_readme_documents_machine_managed_store(readme):
 
 BLANK_PASSWORD_RULE_ANCHORS = {
     ".claude-plugin/plugin.json": [
-        "host, user and dbname all match",
+        "host, port, user and dbname all match",
         "leave every field blank",
     ],
     "README.md": [
-        "host, user **and** dbname all match",
-        "Port is not part of the match",
+        "host, port, user **and** dbname all match",
         "the connection refuses",
     ],
     "README.ja.md": [
-        "host・user・dbname がすべて一致",
-        "port は一致条件に含まれません",
+        "host・port・user・dbname がすべて一致",
         "接続を拒否し",
     ],
     "README.zh-TW.md": [
-        "host、user、dbname 三者都對得上",
-        "port 不算在比對條件內",
+        "host、port、user、dbname 四者都對得上",
         "連線會直接拒絕",
     ],
 }
@@ -453,16 +457,73 @@ BLANK_PASSWORD_RULE_ANCHORS = {
 @pytest.mark.parametrize("doc", sorted(BLANK_PASSWORD_RULE_ANCHORS))
 def test_blank_password_rule_stated_consistently(doc):
     """A6 positive: the manifest and all 3 READMEs state the SAME
-    blank-password rule — the identity-match borrow the code actually runs
-    (W0-01), not the old two-exclusive-paths story it never implemented."""
+    blank-password rule — the four-field identity-match borrow the code
+    actually runs (W0-05), not the old two-exclusive-paths story it never
+    implemented, and not the three-field/port-excluded story W0-01/W0-04
+    shipped before the 2026-09-21 amendment."""
     path = REPO_ROOT / doc
     text = path.read_text()
 
     missing = [a for a in BLANK_PASSWORD_RULE_ANCHORS[doc] if a not in text]
     assert not missing, (
-        f"{doc} no longer states the identity-match blank-password rule "
-        f"(host+user+dbname must all match; port excluded from the match; "
-        f"no match refuses). Missing: {missing}. If the wording changed on "
+        f"{doc} no longer states the four-field identity-match "
+        f"blank-password rule (host+port+user+dbname must all match; no "
+        f"match refuses). Missing: {missing}. If the wording changed on "
         f"purpose, update BLANK_PASSWORD_RULE_ANCHORS to match — and check "
         f"the other three docs still describe the same rule."
+    )
+
+
+# ===== W0-06 negative: no document may still claim port is excluded =====
+#
+# The positive test above only fails when a required phrase goes missing;
+# it would not notice someone re-adding a *contradicting* sentence
+# alongside a technically-still-present anchor (e.g. restoring "Port is not
+# part of the match" right next to "host, port, user and dbname all
+# match"). W0-04 put that exact exclusion claim in each of the three
+# READMEs, one idiom per language; this is the literal text that made the
+# 2026-09-19 adversary probe's attack possible, so it must never come back.
+#
+# This is a phrase blacklist, and phrase blacklists are brittle by nature:
+# a rewrite that expresses the same excluded-port claim without reusing one
+# of these exact substrings (e.g. "the listener isn't checked") would slip
+# through silently. That is the same class of limitation
+# BLANK_PASSWORD_RULE_ANCHORS already accepts for its positive claims, and
+# it is worth shipping here for the same reason — it is cheap, it fails
+# loudly on an exact revert (the most likely accident: reverting a hunk,
+# copy-pasting old prose back in, or a merge picking up a stale branch),
+# and it names the exact three sentences this task deleted, so anyone who
+# defeats it by paraphrasing has to do so on purpose.
+PORT_EXCLUDED_PHRASES = {
+    "README.md": ["Port is not part of the match"],
+    "README.ja.md": ["port は一致条件に含まれません"],
+    "README.zh-TW.md": ["port 不算在比對條件內"],
+    # plugin.json never carried an exclusion sentence (W0-04 left it silent
+    # on port rather than wrong about it), but a future edit could still
+    # introduce one while adding the four-field statement, so it is checked
+    # too rather than assumed safe by omission.
+    ".claude-plugin/plugin.json": ["port is not part of the match"],
+}
+
+
+@pytest.mark.parametrize("doc", sorted(PORT_EXCLUDED_PHRASES))
+def test_blank_password_rule_no_longer_excludes_port(doc):
+    """A6 negative: no document may claim port is excluded from the match.
+
+    Case-insensitive substring check, since the manifest's own phrasing (if
+    it were ever re-added) would likely not match the READMEs' capitalization
+    exactly.
+    """
+    path = REPO_ROOT / doc
+    lowered = path.read_text().lower()
+
+    found = [p for p in PORT_EXCLUDED_PHRASES[doc] if p.lower() in lowered]
+    assert not found, (
+        f"{doc} still contains a port-excluded-from-the-match claim: "
+        f"{found}. Since W0-05 the match is on host, port, user AND "
+        f"dbname; a profile recorded at a different port must not lend its "
+        f"password to a launch naming a different port on the same host. "
+        f"If this is a deliberate design reversal, update "
+        f"PORT_EXCLUDED_PHRASES (and BLANK_PASSWORD_RULE_ANCHORS) together, "
+        f"and re-check server.py actually excludes port again."
     )

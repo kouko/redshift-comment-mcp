@@ -91,13 +91,15 @@ claude plugin enable redshift-comment-mcp
 - **全部埋める —— 手早くひとつ接続。** password フィールドは
   `sensitive` なので OS キーチェーンへ、host / port / user / dbname は
   `settings.json` に保存されます。1 クラスタならこれで完了。
-- **host / user / dbname を埋めて password だけ空欄 —— 既存プロファイル
-  のパスワードを借用。** サーバーは `/redshift-setup` で書かれた
-  プロファイルの中から、host・user・dbname がすべて一致するものを探し
-  ます（port は一致条件に含まれません）。一致するプロファイルがなければ
-  接続を拒否し、入力した接続先と既存プロファイルそれぞれの host を挙げ
-  るので、`/redshift-setup` で一致するプロファイルを作るか、password 欄
-  自体を埋めてください。
+- **host / port / user / dbname を埋めて password だけ空欄 —— 既存
+  プロファイルのパスワードを借用。** サーバーは `/redshift-setup` で
+  書かれたプロファイルの中から、host・port・user・dbname がすべて一致
+  するものを探し、接続先は常にあなたがここで入力した値になります ——
+  プロファイルが貸すのはパスワードだけで、host や port を肩代わりする
+  ことはありません。一致するプロファイルがなければ接続を拒否し、入力
+  した接続先と既存プロファイルそれぞれの接続先を挙げるので、
+  `/redshift-setup` で一致するプロファイルを作るか、password 欄自体を
+  埋めてください。
 - **全フィールドを空欄 —— プロファイル運用のパス。** プラグインは
   `/redshift-setup` のプロファイルフローに完全にフォールバックします。
   `/redshift-setup` は名前付きプロファイル（config.toml + active-profile

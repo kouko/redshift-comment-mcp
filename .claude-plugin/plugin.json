@@ -43,7 +43,7 @@
     "password": {
       "type": "string",
       "title": "Redshift Password",
-      "description": "Database password. Stored in your OS keychain (never written to settings.json). Leave blank to borrow the keychain password of a profile (from /redshift-setup) whose host, user and dbname all match the values above; leave every field blank to use that profile directly.",
+      "description": "Database password. Stored in your OS keychain (never written to settings.json). Leave blank to borrow the keychain password of a profile (from /redshift-setup) whose host, port, user and dbname all match the values above — the connection always goes to what you typed here, never to the profile's; leave every field blank to use that profile directly.",
       "sensitive": true
     }
   },
