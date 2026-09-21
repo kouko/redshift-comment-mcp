@@ -37,10 +37,21 @@ def _render_profile_name(name: str) -> str:
       content in text an agent reads. A control character is never
       legitimate in a profile name, so refusing to render past the first
       one is honest, and it keeps this message from being the thing that
-      carries the payload. The operator still sees which entry is the
-      problem (the truncated prefix) and that the entry itself is
-      malformed (the marker) — never replaced with a generic placeholder
-      that would hide which one to go fix.
+      carries the payload. When the prefix is non-empty, it identifies
+      which entry is the problem, and the marker says that entry itself is
+      malformed — never replaced with a generic placeholder that would
+      hide which one to go fix. When the control character is the name's
+      FIRST character, the prefix is empty (``'' [truncated: ...]``) and
+      names nothing; that entry is identified instead by the
+      host/port/user/dbname printed alongside it in both message halves
+      that call this function, which is enough for the operator to act on.
+
+    Confirmed truncation points: newline, carriage return, an ANSI escape
+    (``\\x1b``), NUL and DEL all fall in ``\\x00``-``\\x1f``/``\\x7f`` and
+    truncate. U+2028 (LINE SEPARATOR) and U+2029 (PARAGRAPH SEPARATOR) do
+    NOT truncate — they fall outside this regex — but ``repr`` escapes them
+    to ``\\u2028``/``\\u2029`` in the ``!r`` output, so neither can forge an
+    extra structural line either way.
 
     This does not validate profile names or close the gap that lets one
     reach the store with a control character in it at all — that remains
@@ -211,10 +222,12 @@ def resolve_connection_decision(
       same target), among others — the scan always refuses rather than
       picking whichever name sorts first: the decision comes back plain
       password-less ``"inline"`` with ``ambiguous_profiles`` naming every
-      tied candidate. The refusal fires on the tie alone; the scan never
-      reads (and the resulting message never claims anything about) whether
-      the tied profiles' passwords happen to agree or differ — an operator
-      can see a four-field tie by reading ``config.toml`` alone, without
+      tied candidate. The refusal fires on the tie alone; the scan does
+      read one password per matching candidate (that read is what makes it
+      count as a lender at all), but never *compares* them to decide this,
+      and the resulting message never claims anything about whether the
+      tied profiles' passwords happen to agree or differ — an operator can
+      see a four-field tie by reading ``config.toml`` alone, without
       opening the keychain, and the rule stays that predictable (see W0-09).
     - **Profile mode** (the default): delegated to
       ``resolve_profile_decision``, which looks up the profile name via
@@ -346,12 +359,14 @@ def resolve_connection_decision(
             # (2026-09-21).
             #
             # The refusal fires on the tie alone (see W0-09): the scan does
-            # NOT read or compare the tied profiles' passwords to decide
-            # this, on purpose — an operator can see a four-field tie by
-            # reading config.toml alone, and making the outcome also depend
-            # on whether two keychain entries happen to agree would require
-            # opening the keychain to predict it. Nothing here says or
-            # implies the passwords differ; only that the fields tie.
+            # read each matching candidate's password above (that read is
+            # what makes it a lender), but it never COMPARES the tied
+            # profiles' passwords to decide this, on purpose — an operator
+            # can see a four-field tie by reading config.toml alone, and
+            # making the outcome also depend on whether two keychain
+            # entries happen to agree would require opening the keychain to
+            # predict it. Nothing here says or implies the passwords
+            # differ; only that the fields tie.
             ambiguous_names = tuple(name for name, _ in lenders)
             logger.debug(
                 "borrow scan: refusing to guess — %d profiles all match "
@@ -460,11 +475,13 @@ def resolve_connection_params(args: argparse.Namespace) -> tuple[str, int, str, 
             )
         if decision.ambiguous_profiles:
             # More than one stored profile matches the inline target. The
-            # scan (see resolve_connection_decision) never reads or compares
-            # what these tied profiles' passwords actually hold to reach
-            # this branch — only that their host/port/user/dbname all tie —
-            # so this message states exactly that and nothing about the
-            # passwords, which it does not know and did not check. Name
+            # scan (see resolve_connection_decision) does read each tied
+            # candidate's password to identify it as a lender, but never
+            # COMPARES what these tied profiles' passwords actually hold to
+            # reach this branch — only that their host/port/user/dbname all
+            # tie — so this message states exactly that and nothing about
+            # whether the passwords agree or differ, which it never
+            # checked. Name
             # both (or all) tied candidates explicitly (via
             # _render_profile_name — see W0-09 item 2 — never a bare
             # interpolation); never their passwords.
