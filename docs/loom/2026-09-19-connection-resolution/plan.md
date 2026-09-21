@@ -46,6 +46,11 @@ charter: 1.0
 - Test: A2 positive: refusal-names-each-profile-whole-target; boundary: two-profiles-differing-only-in-dbname-render-distinctly. A1 negative: mistyped-port-refuses-to-borrow; positive: blank-and-placeholder-port-still-borrow.
 - Risk: `_coerce_port` is an argparse `type=`, so raising aborts the boot it exists to protect; agent-decided — keep booting on a typo but mark the port substituted and refuse to borrow on it.
 
+**W0-08 Stop the status tool misreporting itself to the agent that reads it**  after: W0-07  acceptance: 3, 5
+- Files: src/redshift_comment_mcp/redshift_tools.py, src/redshift_comment_mcp/server.py, tests/test_tools.py, tests/test_server_resolution.py
+- Test: A5 positive: no-wire-published-text-names-the-password-flag; boundary: internal-only-comments-still-allowed. A3 positive: borrowed-mode-reports-no-phantom-profile; negative: profile-mode-still-reports-its-name.
+- Risk: the guard test exempts docstrings as internal, but FastMCP publishes this one verbatim; agent-decided — narrow the exemption to text that cannot reach a client, and refuse an ambiguous lender rather than picking by sort order.
+
 ## Questions asked
 ① — what — 這樣對嗎？
 ①-amend — consequence — 「密碼留空去借相符 profile 的密碼」—— 這個「相符」要比對幾個欄位？
