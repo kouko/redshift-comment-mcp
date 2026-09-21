@@ -755,9 +755,20 @@ boot without a configured profile. Two entry points:
     `borrowed_from_profile` names the lending profile. `"profile"`
     means config.toml + keychain, with no launch args. Do NOT report
     "no profile" in `"inline"` OR `"borrowed"` mode — both are already
-    working connections.
+    working connections. A `source="inline"` with `configured=false`
+    does not by itself distinguish an ordinary missing password from
+    MORE THAN ONE stored profile matching the launch target exactly —
+    that tie only surfaces through the REACTIVE path below.
   - REACTIVE: any DB tool returns `{"error": "not_configured", ...}` —
-    read the `next_step` field and follow it.
+    read the `next_step` field and follow it. When more than one stored
+    profile matches the launch target (host, port, user AND dbname all
+    equal), the server refuses to guess which one to borrow from, and
+    the error's `message` names every tied candidate — the shape a
+    credential rotation leaves behind (the retired profile kept
+    alongside its replacement, same target). Do not retry blindly in
+    that case: tell the user to delete or rename the stale profile via
+    `/redshift-setup`, or fill in the password field directly, then
+    retry.
 
 Either way, the bootstrap flow is:
 

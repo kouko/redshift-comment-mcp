@@ -22,7 +22,7 @@
     "host": {
       "type": "string",
       "title": "Redshift Host",
-      "description": "Cluster endpoint hostname (e.g. my-cluster.abc123.us-east-1.redshift.amazonaws.com). Leave blank to use a profile configured via /redshift-setup."
+      "description": "Cluster endpoint hostname (e.g. my-cluster.abc123.us-east-1.redshift.amazonaws.com). This field, user and dbname are blank together or not at all: leave all three blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into user and dbname."
     },
     "port": {
       "type": "number",
@@ -33,17 +33,17 @@
     "user": {
       "type": "string",
       "title": "Redshift User",
-      "description": "Database user to connect as. Leave blank to use a profile configured via /redshift-setup."
+      "description": "Database user to connect as. This field, host and dbname are blank together or not at all: leave all three blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into host and dbname."
     },
     "dbname": {
       "type": "string",
       "title": "Redshift Database",
-      "description": "Database name to connect to. Leave blank to use a profile configured via /redshift-setup."
+      "description": "Database name to connect to. This field, host and user are blank together or not at all: leave all three blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into host and user."
     },
     "password": {
       "type": "string",
       "title": "Redshift Password",
-      "description": "Database password. Stored in your OS keychain (never written to settings.json). Leave blank to borrow the keychain password of a profile (from /redshift-setup) whose host, port, user and dbname all match the values above — the connection always goes to what you typed here, never to the profile's; leave every field blank to use that profile directly.",
+      "description": "Database password. Stored in your OS keychain (never written to settings.json). Leave blank to borrow the keychain password of a profile (from /redshift-setup) whose host, port, user and dbname all match the values above — the connection always goes to what you typed here, never to the profile's. If more than one profile matches all four values, the connection refuses instead of guessing, naming every tied candidate so you can delete or rename the stale one — the shape a password rotation leaves behind; leave every field blank to use that profile directly.",
       "sensitive": true
     }
   },

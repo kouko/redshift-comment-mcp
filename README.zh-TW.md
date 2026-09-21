@@ -87,12 +87,14 @@ port（預設 5439）/ user / dbname / password。每個欄位都選填，留空
   cluster 這樣就夠了。
 - **填 host / port / user / dbname，password 留空 —— 借用既有 profile
   的密碼。** server 會在 `/redshift-setup` 寫出的 profile 裡找一個
-  host、port、user、dbname 四者都對得上你填的值的，借用它 keychain 裡
-  的密碼，連到你填的那個目標 —— profile 只會借出密碼，絕不會把連線
-  換去它自己的 host 或 port。沒有一個 profile 四者全對得上，
-  連線會直接拒絕，訊息同時列出你填的目標和每個既有 profile 的目標，
-  所以你可以用 `/redshift-setup` 補一個對得上的 profile，或乾脆自己
-  把 password 欄填上。
+  host、port、user、dbname 四者都對得上你填的值的 profile，借用它
+  keychain 裡的密碼，連到你填的那個目標 —— profile 只會借出密碼，
+  絕不會把連線換去它自己的 host 或 port。沒有一個 profile 四者全對得
+  上，連線會直接拒絕，訊息同時列出你填的目標和每個既有 profile 的
+  目標，所以你可以用 `/redshift-setup` 補一個對得上的 profile，或乾脆
+  自己把 password 欄填上。如果同時有不只一個 profile 四者都對得上，
+  連線一樣會拒絕，並列出每一個對得上的候選 profile —— 這通常是密碼
+  輪替時新舊兩個 profile 同時留著造成的，把舊的那個刪掉或改名即可。
 - **四個欄位全部留空 —— 走 profile 路徑。** plugin 完全 fallback 到
   `/redshift-setup` 的 profile 流程。`/redshift-setup` 是對話式逐步
   設定，寫出具名 profile（config.toml + active-profile 指標 +

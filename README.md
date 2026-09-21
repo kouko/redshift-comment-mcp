@@ -99,7 +99,11 @@ or `settings.json`:
   typed — a profile only ever lends its password, never its own host or
   port. If none matches, the connection refuses, naming the target you
   typed and each existing profile's target, so you can create a matching
-  profile with `/redshift-setup` or fill in the password yourself.
+  profile with `/redshift-setup` or fill in the password yourself. If
+  more than one matches, the connection refuses the same way, naming
+  every tied candidate — the shape a password rotation leaves behind
+  (the old and new profile, still recorded for the same target) — so you
+  can delete or rename the stale one.
 - **Leave every field blank — the profile path.** The plugin falls back
   entirely to `/redshift-setup`'s profile flow. `/redshift-setup` is the
   conversational walk-through that writes a named profile (config.toml +
