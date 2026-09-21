@@ -66,6 +66,11 @@ charter: 1.0
 - Test: A6 positive: every-surface-states-the-tie-refusal; negative: no-surface-invites-a-partially-blank-dialog. A8 positive: manifest-and-readmes-name-the-tie; boundary: instructions-string-names-it-too.
 - Risk: the manifest's host/user/dbname fields still invite leaving one blank, which silently discards the others; agent-decided — correct the text, not the resolution, since honouring partial input is a separate change.
 
+**W0-13 Make the refusal show the stored port it could not read**  after: W0-12  acceptance: 2
+- Files: src/redshift_comment_mcp/server.py, tests/test_server_resolution.py
+- Test: A2 positive: unreadable-stored-port-shown-raw-with-a-reason; negative: readable-stored-port-renders-unchanged.
+- Risk: W0-11's guard made a profile miss for a reason the message hides, printing the substituted port beside an identical typed target; agent-decided — mirror the launch side, which quotes the raw value.
+
 ## Questions asked
 ① — what — 這樣對嗎？
 ①-amend — consequence — 「密碼留空去借相符 profile 的密碼」—— 這個「相符」要比對幾個欄位？
