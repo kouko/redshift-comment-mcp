@@ -1,21 +1,25 @@
 """Probe: how far does a borrowed keychain password travel?
 
-W0-01 lets a launch that supplies host/user/dbname and no password borrow the
-keychain password of a stored profile whose ``(host, user, dbname)`` all equal
-the supplied values. The connection then targets the launch values.
+A launch that supplies host/port/user/dbname and no password borrows the
+keychain password of a stored profile whose whole ``(host, port, user,
+dbname)`` target equals the supplied values (W0-01, widened to include
+``port`` by W0-05). The connection then targets the launch values.
 
 The attack surface is the gap between "the target the password was provisioned
-for" and "the target the password is now sent to". Three of the four target
-fields are pinned by the match. The fourth — ``port`` — is not, and the
-connection uses the launch port. So the question this file makes executable is:
-can a password provisioned for one listener be delivered to a different
-listener?
+for" and "the target the password is now sent to". The four-field match is
+what closes that gap: every field the connection uses is a field the profile
+had to agree on first. So the question this file makes executable is whether
+anything can still prise the two apart — a field the match compares loosely,
+or a launch value the code rewrites after the operator typed it and before
+the match reads it.
 
-The probes below are written from the attacker's side of that gap, plus two
-near-misses that check the match is not sloppier than advertised.
+``test_borrow_portmismatch_refuses`` is the case that found the original gap,
+kept as the regression pin now that the match covers port. The rest are
+near-misses and boundaries checking the match is not sloppier than advertised.
 """
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 
@@ -32,22 +36,13 @@ def test_borrow_portmismatch_refuses(tmp_path, monkeypatch):
 
     The stored profile records the whole target the operator provisioned:
     ``redshift.internal:5439``. This launch names the same host, user and
-    dbname but port 9999. The identity match ignores ``port``, so the
-    keychain password is lent and the connection carries it to a listener the
-    password was never provisioned for.
+    dbname but port 9999. Under the original three-field match this lent the
+    keychain password and carried it to a listener the password was never
+    provisioned for; the failure was silent, which is why kouko chose to
+    widen the match to all four fields on 2026-09-21 rather than accept it.
 
-    Why that is a scoping defect and not merely an unusual launch: the launch
-    fields are not all operator-authored at runtime. On the plugin path they
-    come from the Claude Code install options, a file writable by any process
-    running as the same user. Such a process generally cannot read the
-    keychain item (macOS scopes the item's ACL to the creating application)
-    but it can (a) rewrite the stored ``port`` option and (b) bind the new
-    port. The host is protected from exactly this rewrite by the match; the
-    port is not. A profile recorded against ``localhost``/``127.0.0.1`` — the
-    ordinary shape when Redshift is reached through an SSH tunnel or bastion
-    — makes step (b) a plain unprivileged ``bind()``.
-
-    Expected: no borrow across a port the profile was not provisioned for.
+    Kept as the regression pin for that decision: a port the profile was not
+    provisioned for must refuse, not lend.
     """
     isolate_store(monkeypatch, tmp_path)
     config.write_profile(
@@ -61,10 +56,9 @@ def test_borrow_portmismatch_refuses(tmp_path, monkeypatch):
     assert decision.password != "provisioned-for-5439", (
         f"A keychain password provisioned for redshift.internal:5439 was lent to "
         f"a launch naming port {decision.port}. mechanism={decision.mechanism!r}, "
-        f"borrowed_from={decision.profile_name!r}. The identity match covers "
-        f"(host, user, dbname) only, so the one target field an attacker who can "
-        f"write the plugin's stored options may still change without breaking the "
-        f"match is the one that selects which listener receives the secret."
+        f"borrowed_from={decision.profile_name!r}. The match has dropped port "
+        f"again, so the one target field that selects which listener receives "
+        f"the secret is no longer one the profile had to agree on."
     )
 
 
@@ -173,3 +167,60 @@ def test_borrow_matchingprofilenopassword_refuses(tmp_path, monkeypatch):
     with pytest.raises(Exception) as caught:
         server.resolve_connection_params(args)
     assert "other-targets-secret" not in str(caught.value)
+
+
+def _parsed_port(raw: str) -> int:
+    """``--port raw`` as the launched server itself would parse it.
+
+    Mirrors the one line of wiring in ``server.main()`` (``type=_coerce_port``,
+    ``default=DEFAULT_PORT``) and reads the coercion off the module rather
+    than reimplementing it, so the probe cannot drift from the real launch
+    path — the point here is precisely what argparse hands the resolver.
+    """
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--port", type=server._coerce_port, default=server.DEFAULT_PORT)
+    return parser.parse_args(["--port", raw]).port
+
+
+def test_borrow_unparseableport_refuses(tmp_path, monkeypatch):
+    """A mistyped port must not silently become the port a profile matches.
+
+    ``_coerce_port`` maps any value it cannot read as an integer to 5439. It
+    was written to tolerate two specific launch artefacts — a blank optional
+    userConfig field and an unsubstituted ``${user_config.port}`` placeholder
+    — so the server boots instead of aborting. A non-empty, non-placeholder
+    value such as ``"9999x"`` is neither: it is a typo, and the operator who
+    typed it named 9999.
+
+    Before this change that leniency cost nothing on the inline path: no
+    password was available at any port, so the launch refused either way.
+    The borrow makes the same leniency load-bearing. The typo collapses to
+    5439, which is the port nearly every stored profile is recorded at, so
+    the match now succeeds against a profile provisioned for a listener the
+    operator did not name, and the keychain password is sent there — with no
+    message saying the port was rewritten.
+
+    That is the same failure the four-field match was chosen to close, and
+    the same shape: silent rather than loud. The manifest states the closed
+    version of it outright ("the connection always goes to what you typed
+    here"). Expected: a port the operator typed and the server cannot parse
+    refuses, rather than being replaced with one that borrows.
+    """
+    isolate_store(monkeypatch, tmp_path)
+    config.write_profile(
+        "prod", host="redshift.internal", port=5439, user="alice", dbname="warehouse",
+    )
+    config.set_password("prod", "provisioned-for-5439")
+
+    port = _parsed_port("9999x")
+    args = ns(host="redshift.internal", user="alice", dbname="warehouse", port=port)
+    decision = server.resolve_connection_decision(args)
+
+    assert decision.password != "provisioned-for-5439", (
+        f"the operator typed port 9999x; argparse rewrote it to {port} and the "
+        f"profile provisioned for redshift.internal:5439 lent its keychain "
+        f"password to that target (mechanism={decision.mechanism!r}, "
+        f"borrowed_from={decision.profile_name!r}). Nothing in the launch says "
+        f"the port was substituted, so the operator has no way to see that the "
+        f"connection did not go where they typed."
+    )
