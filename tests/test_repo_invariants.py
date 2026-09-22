@@ -385,3 +385,395 @@ def test_readme_documents_machine_managed_store(readme):
         f"user's config directory as soon as a profile is written or deleted, "
         f"so it has to be findable in the docs."
     )
+
+
+# ===== W0-04/W0-06: manifest + READMEs must state the ACTUAL blank-password
+# rule =====
+#
+# Acceptance line 6. The bug this pins: plugin.json's password field said a
+# blank password "use[s] a profile password configured via /redshift-setup"
+# while README.md said the opposite fifty lines away — two exclusive paths,
+# and ALL FOUR fields had to be blank for the profile path. The code
+# followed the README: filling host/user/dbname and leaving only the
+# password blank raised (server.py:116-119, pre-W0-01), even when
+# config.toml + keychain already held a profile for exactly that host, user
+# and dbname. That contradiction is what produced the 2026-09-17 bug report.
+#
+# W0-01 first landed this as an IDENTITY MATCH on three fields (host, user,
+# dbname), with port deliberately excluded, and W0-04 documented that rule.
+# A fresh-context adversary then showed the exclusion itself was a bug: a
+# password provisioned for host:5439 could be lent to a launch naming
+# host:9999 on the same host. kouko closed it the same day (2026-09-21,
+# amendment note on Acceptance 1/2 in the intent) by widening the match to
+# the full FOUR-FIELD target — host, port, user AND dbname must all equal
+# what was typed — and W0-05 changed the code to match. The connection
+# still targets the typed values, never the profile's, and a mismatch
+# refuses, naming the typed target and each existing profile's target
+# (including its port) instead of silently substituting a different one.
+# Leaving every field blank remains the separate, unchanged all-profile
+# path. This is W0-06: restate the four-field rule in the same four files.
+#
+# Each anchor below is copied verbatim from this task's own prose in the
+# four files, and picked so it can ONLY be true of the four-field rule: a
+# docs edit that reverts to the old "two exclusive paths" story, or back to
+# the three-field/port-excluded story, still contains words like "profile"
+# and "blank" (a bare keyword check would miss the regression) but drops
+# "host, port, user and dbname all match" / the refusal language, so it
+# fails here. Each language is its own idiom, not a literal translation —
+# same convention as MACHINE_MANAGED_ANCHORS above. If the wording changes
+# on purpose, update these anchors to match, and check the other three
+# files still say the same thing; that's what "agree" means here, not
+# identical text.
+#
+# What this WOULD catch: any one of the four docs reverting to (or drifting
+# into) a rule that no longer requires all FOUR fields to match, or that
+# stops describing a refusal on no match.
+# What this would NOT catch: a paraphrase that keeps every one of these
+# facts but uses none of the exact pinned substrings (same limitation as
+# MACHINE_MANAGED_ANCHORS — the fix is to update the anchor, not to accept
+# silent drift); nor would it catch the code itself changing while the docs
+# (and these anchors) stay put, since this test never imports server.py.
+
+BLANK_PASSWORD_RULE_ANCHORS = {
+    ".claude-plugin/plugin.json": [
+        "host, port, user and dbname all match",
+        "leave every field blank",
+    ],
+    "README.md": [
+        "host, port, user **and** dbname all match",
+        "the connection refuses",
+    ],
+    "README.ja.md": [
+        "host・port・user・dbname がすべて一致",
+        "接続を拒否し",
+    ],
+    "README.zh-TW.md": [
+        "host、port、user、dbname 四者都對得上",
+        "連線會直接拒絕",
+    ],
+}
+
+
+@pytest.mark.parametrize("doc", sorted(BLANK_PASSWORD_RULE_ANCHORS))
+def test_blank_password_rule_stated_consistently(doc):
+    """A6 positive: the manifest and all 3 READMEs state the SAME
+    blank-password rule — the four-field identity-match borrow the code
+    actually runs (W0-05), not the old two-exclusive-paths story it never
+    implemented, and not the three-field/port-excluded story W0-01/W0-04
+    shipped before the 2026-09-21 amendment."""
+    path = REPO_ROOT / doc
+    text = path.read_text()
+
+    missing = [a for a in BLANK_PASSWORD_RULE_ANCHORS[doc] if a not in text]
+    assert not missing, (
+        f"{doc} no longer states the four-field identity-match "
+        f"blank-password rule (host+port+user+dbname must all match; no "
+        f"match refuses). Missing: {missing}. If the wording changed on "
+        f"purpose, update BLANK_PASSWORD_RULE_ANCHORS to match — and check "
+        f"the other three docs still describe the same rule."
+    )
+
+
+# ===== W0-06 negative: no document may still claim port is excluded =====
+#
+# The positive test above only fails when a required phrase goes missing;
+# it would not notice someone re-adding a *contradicting* sentence
+# alongside a technically-still-present anchor (e.g. restoring "Port is not
+# part of the match" right next to "host, port, user and dbname all
+# match"). W0-04 put that exact exclusion claim in each of the three
+# READMEs, one idiom per language; this is the literal text that made the
+# 2026-09-19 adversary probe's attack possible, so it must never come back.
+#
+# This is a phrase blacklist, and phrase blacklists are brittle by nature:
+# a rewrite that expresses the same excluded-port claim without reusing one
+# of these exact substrings (e.g. "the listener isn't checked") would slip
+# through silently. That is the same class of limitation
+# BLANK_PASSWORD_RULE_ANCHORS already accepts for its positive claims, and
+# it is worth shipping here for the same reason — it is cheap, it fails
+# loudly on an exact revert (the most likely accident: reverting a hunk,
+# copy-pasting old prose back in, or a merge picking up a stale branch),
+# and it names the exact three sentences this task deleted, so anyone who
+# defeats it by paraphrasing has to do so on purpose.
+PORT_EXCLUDED_PHRASES = {
+    "README.md": ["Port is not part of the match"],
+    "README.ja.md": ["port は一致条件に含まれません"],
+    "README.zh-TW.md": ["port 不算在比對條件內"],
+    # plugin.json never carried an exclusion sentence (W0-04 left it silent
+    # on port rather than wrong about it), but a future edit could still
+    # introduce one while adding the four-field statement, so it is checked
+    # too rather than assumed safe by omission.
+    ".claude-plugin/plugin.json": ["port is not part of the match"],
+}
+
+
+@pytest.mark.parametrize("doc", sorted(PORT_EXCLUDED_PHRASES))
+def test_blank_password_rule_no_longer_excludes_port(doc):
+    """A6 negative: no document may claim port is excluded from the match.
+
+    Case-insensitive substring check, since the manifest's own phrasing (if
+    it were ever re-added) would likely not match the READMEs' capitalization
+    exactly.
+    """
+    path = REPO_ROOT / doc
+    lowered = path.read_text().lower()
+
+    found = [p for p in PORT_EXCLUDED_PHRASES[doc] if p.lower() in lowered]
+    assert not found, (
+        f"{doc} still contains a port-excluded-from-the-match claim: "
+        f"{found}. Since W0-05 the match is on host, port, user AND "
+        f"dbname; a profile recorded at a different port must not lend its "
+        f"password to a launch naming a different port on the same host. "
+        f"If this is a deliberate design reversal, update "
+        f"PORT_EXCLUDED_PHRASES (and BLANK_PASSWORD_RULE_ANCHORS) together, "
+        f"and re-check server.py actually excludes port again."
+    )
+
+
+# ===== W0-12: the tie refusal (Acceptance 8) must be documented too, and
+# the manifest must stop inviting a partially-blank dialog =====
+#
+# W0-08/W0-09 gave the borrow rule a SECOND refusal, after W0-06 above had
+# already closed the docs task for the first one: when MORE THAN ONE stored
+# profile matches the whole four-field launch target, the server refuses
+# and names every tied candidate instead of picking one — the shape a
+# credential rotation leaves behind (the retired profile kept alongside its
+# replacement, same target). Every surface a person or an agent reads
+# before anything happens said nothing about it: the manifest's password
+# field, all three READMEs, and the FastMCP `instructions` string every MCP
+# client receives before it can call a tool. TIE_REFUSAL_ANCHORS plus
+# test_tie_refusal_documented_in_instructions_string pin one clause per
+# surface, the same convention as BLANK_PASSWORD_RULE_ANCHORS above — each
+# language is its own idiom, not a literal translation of the other two.
+#
+# A second, independent defect lived in the same manifest file:
+# plugin.json's `host`, `user` and `dbname` field descriptions still read
+# "Leave blank to use a profile configured via /redshift-setup" — true only
+# when ALL FOUR fields are blank. Reproduced against the running server on
+# 2026-09-21: typing user + dbname and leaving only host blank connects to
+# the ACTIVE PROFILE's host, user AND dbname, silently discarding both
+# typed values, not just the blank one.
+# test_manifest_connection_fields_no_longer_invite_partial_blank pins that
+# the old, incomplete phrasing is gone from those three fields. The fix is
+# textual only — the resolver itself is unchanged; honouring partial input
+# is a separate change with its own intent, not this task.
+#
+# Deferred on purpose, for the second round in a row: both the
+# fresh-context docs reviewer and this task independently concluded the
+# durable fix is to derive what these docs SHOULD say from the running
+# code rather than pin more prose by hand — the pattern already exists in
+# this repo as probe_status_shape_consumers.py's
+# `_fields_the_code_matches_on` (varies one target field at a time against
+# a provisioned profile to recover the borrow rule's field set by
+# experiment) composed with `fields_named_in_borrow_rule` (extracts what a
+# piece of prose actually claims, so the two can be compared instead of
+# eyeballed). Promoting that pattern into tests/ — so this anchor dict,
+# BLANK_PASSWORD_RULE_ANCHORS, and PORT_EXCLUDED_PHRASES all derive their
+# expectation instead of hand-pinning it — is real new test
+# infrastructure, not a fix to this task's own defects, and this review is
+# round 2 of a bounded 3-round budget: spending it on infrastructure risks
+# a third rejection over scope rather than over the defects themselves. It
+# is recorded here, not merely decided, so a future reader does not have to
+# re-derive why these anchors are still hand-pinned after two rounds of the
+# same reviewer note.
+
+TIE_REFUSAL_ANCHORS = {
+    ".claude-plugin/plugin.json": [
+        "more than one profile matches",
+        "naming every tied candidate",
+    ],
+    "README.md": [
+        "more than one matches",
+        "every tied candidate",
+    ],
+    "README.ja.md": [
+        "プロファイルが 2 つ以上あった場合",
+        "候補をすべて挙げます",
+    ],
+    "README.zh-TW.md": [
+        "不只一個 profile 四者都對得上",
+        "列出每一個對得上的候選",
+    ],
+}
+
+
+@pytest.mark.parametrize("doc", sorted(TIE_REFUSAL_ANCHORS))
+def test_tie_refusal_documented(doc):
+    """A6/A8 positive: the manifest and all 3 READMEs document the SECOND
+    refusal — more than one stored profile matching the four-field target
+    also refuses, naming every tied candidate — gained in W0-08/W0-09 after
+    W0-06 had already closed the docs task for the first (no-match)
+    refusal."""
+    path = REPO_ROOT / doc
+    text = path.read_text()
+
+    missing = [a for a in TIE_REFUSAL_ANCHORS[doc] if a not in text]
+    assert not missing, (
+        f"{doc} does not document the tie refusal (more than one stored "
+        f"profile matching the four-field target also refuses, naming "
+        f"every tied candidate). Missing: {missing}. If the wording "
+        f"changed on purpose, update TIE_REFUSAL_ANCHORS to match — and "
+        f"check the other three docs plus the FastMCP instructions string "
+        f"still describe the same rule."
+    )
+
+
+INSTRUCTIONS_TIE_REFUSAL_ANCHORS = [
+    "MORE THAN ONE",
+    "names every tied candidate",
+]
+
+
+def test_tie_refusal_documented_in_instructions_string():
+    """A8 boundary: the FastMCP `instructions` string — the one surface
+    every MCP client reads before calling anything — also names the tie
+    refusal, not just the manifest and READMEs a person reads on request.
+
+    Reads the live ``tools.mcp.instructions`` attribute the built server
+    actually carries, the same way
+    ``tests/test_tools.py::TestNoToolDescriptionRecommendsThePasswordFlag``
+    does — not ``redshift_tools.py`` as text. A text/grep scan of the whole
+    file passes as long as the anchor phrases live anywhere in the file,
+    including a comment or docstring that never reaches the built
+    ``instructions`` string; only the live attribute pins the surface this
+    test's own docstring claims to pin.
+    """
+    from redshift_comment_mcp.config import ConfigurationError
+    from redshift_comment_mcp.redshift_tools import RedshiftTools
+
+    def provider():
+        raise ConfigurationError("doesn't matter — instructions text is static")
+
+    tools = RedshiftTools(provider)
+    instructions = tools.mcp.instructions or ""
+
+    assert instructions.strip(), (
+        "FastMCP server exposes no non-empty `instructions` string; this "
+        "guard cannot pin what it does not receive."
+    )
+
+    missing = [a for a in INSTRUCTIONS_TIE_REFUSAL_ANCHORS if a not in instructions]
+    assert not missing, (
+        f"the live FastMCP instructions string does not document the tie "
+        f"refusal. Missing: {missing}. An agent that was never told this "
+        f"rule has no way to react to it beyond retrying blindly."
+    )
+
+
+PARTIAL_BLANK_INVITATION_FIELDS = ("host", "user", "dbname")
+PARTIAL_BLANK_INVITATION_PHRASE = (
+    "Leave blank to use a profile configured via /redshift-setup"
+)
+
+
+def test_manifest_connection_fields_no_longer_invite_partial_blank():
+    """A6 negative: plugin.json's host/user/dbname descriptions must not
+    still read the old, incomplete "Leave blank to use a profile..." line.
+
+    That phrasing is true only when ALL FOUR fields are blank; filling two
+    of the three and leaving the third blank falls back to the active
+    profile's host, user AND dbname wholesale, silently discarding what was
+    typed in the other two (reproduced against the running server,
+    2026-09-21). This is a docs-only fix — the resolver is unchanged; each
+    of the three descriptions must instead state the whole-set rule.
+    """
+    plugin = json.loads(PLUGIN_JSON.read_text())
+    user_config = plugin["userConfig"]
+
+    offenders = [
+        field for field in PARTIAL_BLANK_INVITATION_FIELDS
+        if PARTIAL_BLANK_INVITATION_PHRASE in user_config[field]["description"]
+    ]
+    assert not offenders, (
+        f"plugin.json userConfig field(s) {offenders} still invite leaving "
+        f"just one of host/user/dbname blank, which silently discards "
+        f"whatever was typed into the other two. Rewrite to state that the "
+        f"three fields are blank together or not at all."
+    )
+
+
+# ===== W0-15 defect 2: the fix above must not itself contradict the
+# password field's own description in the same file. =====
+#
+# The task that produced test_manifest_connection_fields_no_longer_invite_
+# partial_blank above rewrote host/user/dbname's descriptions to say "This
+# field, user, dbname AND PASSWORD are blank together or not at all" —
+# widening the three-field blank-together set to four. But the password
+# field's own description says a blank password alone borrows a matching
+# profile's stored password (the headline feature of this whole change),
+# which is only possible if password can be blank while host/user/dbname
+# are NOT. Two fields of the same manifest then stated opposite rules —
+# precisely the contradiction this change exists to close, reintroduced by
+# its own docs fix.
+#
+# This test isolates the field-list ENUMERATION that immediately precedes
+# the phrase "are blank together or not at all" — e.g. "This field, user
+# and dbname " — and asserts it does not name `password`. It deliberately
+# does NOT forbid `password` from appearing anywhere later in the same
+# description: the consequence clause ("...falls back to that profile
+# wholesale and ignores whatever you typed into ... password") is correct
+# and required (defect 2's own fix bullets), and a whole-sentence check
+# would false-positive on it since the enumeration and the consequence
+# clause share one run-on sentence separated only by a colon, not a
+# period. Isolating on the nearest preceding sentence boundary (". ", or
+# start of string) keeps the check narrow to the actual claim being made:
+# which fields form the "blank together" SET, not which fields a partial
+# blank discards.
+#
+# It does not touch the password description (correct, and out of scope),
+# and it does not re-check the partial-blank warning itself (the test
+# above already pins that).
+#
+# What this WOULD catch: `password` reappearing in the field-list
+# enumeration for any of the three fields, in this or a differently-worded
+# future edit that still uses the phrase "are blank together or not at
+# all". What this can still miss: a rewrite that drops that exact phrase
+# while still, in different words, claiming password belongs to the same
+# all-or-nothing set (e.g. "leave host, user, dbname and password blank as
+# one group") — the isolation is keyed on the exact phrase, so a
+# paraphrase that avoids it slips through, the same class of gap
+# MACHINE_MANAGED_ANCHORS and BLANK_PASSWORD_RULE_ANCHORS above already
+# accept. It also would not catch the reverse contradiction (the password
+# description itself claiming it cannot be blank alone) since that
+# description is deliberately not scanned here.
+
+BLANK_TOGETHER_PHRASE = "are blank together or not at all"
+
+
+def _enumeration_before_blank_together(desc: str) -> str:
+    """Return the field-list clause immediately preceding
+    ``BLANK_TOGETHER_PHRASE``, from the nearest preceding sentence
+    boundary (". ") or the start of the description — never crossing into
+    an earlier sentence (e.g. a host description's own "e.g. ..." example
+    clause)."""
+    idx = desc.find(BLANK_TOGETHER_PHRASE)
+    assert idx != -1, f"{BLANK_TOGETHER_PHRASE!r} not found in {desc!r}"
+    prefix = desc[:idx]
+    boundary = prefix.rfind(". ")
+    start = boundary + 2 if boundary != -1 else 0
+    return prefix[start:]
+
+
+@pytest.mark.parametrize("field", PARTIAL_BLANK_INVITATION_FIELDS)
+def test_manifest_blank_together_set_excludes_password(field):
+    """host/user/dbname's 'are blank together or not at all' claim must
+    enumerate only the OTHER TWO of host/user/dbname — never password,
+    which the password field's own description says CAN be left blank on
+    its own (the borrow path, the headline feature of this whole change).
+    Naming password in this set contradicts that description in the same
+    file."""
+    plugin = json.loads(PLUGIN_JSON.read_text())
+    desc = plugin["userConfig"][field]["description"]
+
+    assert BLANK_TOGETHER_PHRASE in desc, (
+        f"{field}: description no longer states the 'blank together or "
+        f"not at all' rule at all — expected it to name the other two of "
+        f"host/user/dbname as the set that must be blank together."
+    )
+    enumeration = _enumeration_before_blank_together(desc)
+    assert "password" not in enumeration.lower(), (
+        f"{field}: the field-list enumeration right before 'are blank "
+        f"together or not at all' still names `password`: {enumeration!r}. "
+        f"host, user and dbname are that set; password can be left blank "
+        f"on its own, so including it here contradicts the password "
+        f"field's own description."
+    )

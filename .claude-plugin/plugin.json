@@ -1,6 +1,6 @@
 {
   "name": "redshift-comment-mcp",
-  "version": "0.11.0",
+  "version": "0.12.0",
   "defaultEnabled": false,
   "description": "Redshift MCP server with comment-first exploration. 11 tools for schema/table/column listing, hit-count keyword search, and SELECT-only SQL. Comments are authoritative — names are unreliable. Zero-config install: run `/redshift-comment-mcp:redshift-setup` in chat after install — host / user / database via Q&A, password via system dialog (never enters chat), connection verified. Multi-cluster via `/redshift-setup <name>` then `/redshift-switch-profile`.",
   "author": {
@@ -22,7 +22,7 @@
     "host": {
       "type": "string",
       "title": "Redshift Host",
-      "description": "Cluster endpoint hostname (e.g. my-cluster.abc123.us-east-1.redshift.amazonaws.com). Leave blank to use a profile configured via /redshift-setup."
+      "description": "Cluster endpoint hostname (e.g. my-cluster.abc123.us-east-1.redshift.amazonaws.com). This field, user and dbname are blank together or not at all: leave all three blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into user, dbname and even password. Leave all four fields blank, password included, for the plain profile path; password alone may still be blank while host, user and dbname are filled in — see the password field below."
     },
     "port": {
       "type": "number",
@@ -33,17 +33,17 @@
     "user": {
       "type": "string",
       "title": "Redshift User",
-      "description": "Database user to connect as. Leave blank to use a profile configured via /redshift-setup."
+      "description": "Database user to connect as. This field, host and dbname are blank together or not at all: leave all three blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into host, dbname and even password. Leave all four fields blank, password included, for the plain profile path; password alone may still be blank while host, user and dbname are filled in — see the password field below."
     },
     "dbname": {
       "type": "string",
       "title": "Redshift Database",
-      "description": "Database name to connect to. Leave blank to use a profile configured via /redshift-setup."
+      "description": "Database name to connect to. This field, host and user are blank together or not at all: leave all three blank to use a profile configured via /redshift-setup, but leaving only this one blank still falls back to that profile wholesale and ignores whatever you typed into host, user and even password. Leave all four fields blank, password included, for the plain profile path; password alone may still be blank while host, user and dbname are filled in — see the password field below."
     },
     "password": {
       "type": "string",
       "title": "Redshift Password",
-      "description": "Database password. Stored in your OS keychain (never written to settings.json). Leave blank to use a profile password configured via /redshift-setup.",
+      "description": "Database password. Stored in your OS keychain (never written to settings.json). Leave blank to borrow the keychain password of a profile (from /redshift-setup) whose host, port, user and dbname all match the values above — the connection always goes to what you typed here, never to the profile's. If more than one profile matches all four values, the connection refuses instead of guessing, naming every tied candidate so you can delete or rename the stale one — the shape a password rotation leaves behind; leave every field blank to use that profile directly.",
       "sensitive": true
     }
   },

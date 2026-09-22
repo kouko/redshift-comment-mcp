@@ -1,0 +1,69 @@
+{
+  "schema": "loom-attestation/v2",
+  "change_id": "2026-09-19-connection-resolution",
+  "content_digest": "a28c3f301d8981ae296d0f056701470a692d3f7c",
+  "executions": [
+    {
+      "kind": "package-tests",
+      "command": "uv run --extra dev pytest tests/ --ignore=tests/integration --ignore=tests/e2e",
+      "artifact": "",
+      "result": "pass",
+      "command_digest": "c129b320ba001a481050c8325e67ffc68a89155656950ff0fcafc8002d704d99"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-19-connection-resolution/evidence/probes/probe_borrow_scope.py -q",
+      "artifact": "docs/loom/2026-09-19-connection-resolution/evidence/probes/probe_borrow_scope.py",
+      "result": "pass",
+      "command_digest": "cbe09864758c06c167cabacac613854fbd57f8b4829ccb90a574d15dfbdf99d0"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-19-connection-resolution/evidence/probes/probe_secret_containment.py -q",
+      "artifact": "docs/loom/2026-09-19-connection-resolution/evidence/probes/probe_secret_containment.py",
+      "result": "pass",
+      "command_digest": "32bae7e1672011a562d738072e26ea1139391f566df4d4dc11df5cee062df859"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-19-connection-resolution/evidence/probes/probe_borrow_dependency_failure.py -q",
+      "artifact": "docs/loom/2026-09-19-connection-resolution/evidence/probes/probe_borrow_dependency_failure.py",
+      "result": "pass",
+      "command_digest": "6cf8bc82a52b980cc0b4b505c7f424aa14fbe6fcf07f9b159d938821b8f49b58"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-19-connection-resolution/evidence/probes/probe_status_shape_consumers.py -q",
+      "artifact": "docs/loom/2026-09-19-connection-resolution/evidence/probes/probe_status_shape_consumers.py",
+      "result": "pass",
+      "command_digest": "18519a17726f3aaadc05a39eca125a9f85d68283cc70508dd36e858ef6edee42"
+    },
+    {
+      "kind": "adversarial",
+      "command": ".venv/bin/python -m pytest docs/loom/2026-09-19-connection-resolution/evidence/probes/probe_password_channel_boundaries.py -q",
+      "artifact": "docs/loom/2026-09-19-connection-resolution/evidence/probes/probe_password_channel_boundaries.py",
+      "result": "pass",
+      "command_digest": "c7e15de8e029c8696a52f9253943167acd65d60502ea3e96bcee132285a3ee30"
+    }
+  ],
+  "verdicts": [
+    {
+      "reviewer": "a3f2af0",
+      "vendor": "anthropic",
+      "model": "opus",
+      "lens": "code",
+      "verdict": "PASS",
+      "findings": []
+    },
+    {
+      "reviewer": "a3bbb66",
+      "vendor": "anthropic",
+      "model": "opus",
+      "lens": "docs",
+      "verdict": "PASS",
+      "findings": []
+    }
+  ],
+  "findings": [],
+  "selection": null
+}
